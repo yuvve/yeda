@@ -1,0 +1,15 @@
+[package]
+name = "yeda-secrets"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0.104"
+keyring-core = "1.0.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1.0.0"
+
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }

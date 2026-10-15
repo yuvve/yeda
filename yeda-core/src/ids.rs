@@ -63,6 +63,21 @@ pub fn parse_id(input: &str) -> Option<Id> {
     valid.then_some(Id::Isbn(isbn))
 }
 
+/// An 8-character key in Zotero's format, so a Zotero export can keep it. Derived from `seed`
+/// rather than random, so extracting again gives the same ids; FNV-1a because std's hasher may
+/// change between Rust versions.
+pub fn zotero_key(seed: &str) -> String {
+    const ALPHABET: &[u8] = b"23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
+    let mut h = seed.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    (0..8)
+        .map(|_| {
+            let c = ALPHABET[(h % ALPHABET.len() as u64) as usize] as char;
+            h /= ALPHABET.len() as u64;
+            c
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

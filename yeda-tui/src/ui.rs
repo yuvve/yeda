@@ -225,6 +225,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         },
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
         Mode::Prompt(Prompt::Add) => format!("add DOI / arXiv / ISBN: {}", app.input),
+        Mode::Prompt(Prompt::Secret) => format!(
+            "secret for {} (Enter on empty cancels): {}",
+            app.asking.as_ref().map_or("", |p| p.label.as_str()),
+            "•".repeat(app.input.chars().count())
+        ),
         _ if !app.status.is_empty() => app.status.clone(),
         _ if !app.query.is_empty() => format!("/{}", app.query),
         _ => String::new(),

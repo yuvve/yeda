@@ -42,10 +42,32 @@ pub struct Ref {
     pub tables: BTreeMap<String, BTreeMap<String, String>>,
 }
 
+/// A WebDAV server holding PDFs in Zotero's layout (`<key>.zip` and `<key>.prop`). The password
+/// is never part of the library: clients keep it in the system secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Dav {
+    pub url: String,
+    pub user: String,
+}
+
+impl Dav {
+    pub fn file_url(&self, name: &str) -> String {
+        format!("{}/{name}", self.url.trim_end_matches('/'))
+    }
+}
+
+/// A `[locations]` entry: a local folder, or a table describing a WebDAV server.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Location {
+    Folder(String),
+    Dav(Dav),
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Config {
-    locations: BTreeMap<String, String>,
+    locations: BTreeMap<String, Location>,
     tag_colors: BTreeMap<String, String>,
     searches: BTreeMap<String, String>,
     reader: Option<String>,
@@ -58,7 +80,12 @@ pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not R
 
 #[derive(Debug, Default)]
 pub struct Library {
+    /// Local folders, by location name.
     pub locations: BTreeMap<String, PathBuf>,
+    /// WebDAV locations, by name.
+    pub remotes: BTreeMap<String, Dav>,
+    /// Where the client keeps downloaded copies of remote PDFs: `<cache>/<location>/<key>/<file>`.
+    pub cache: Option<PathBuf>,
     pub tag_colors: BTreeMap<String, String>,
     pub searches: BTreeMap<String, String>,
     /// Command that opens PDFs as `<reader> <pdf> --annotations <dir>`; clients default to yeda-reader.
@@ -69,6 +96,13 @@ pub struct Library {
     pub refs: Vec<Ref>,
     /// `yeda.toml` as loaded, so config edits keep keys this version doesn't know.
     shared: toml::Table,
+}
+
+pub struct RemotePdf<'a> {
+    pub location: &'a str,
+    pub dav: &'a Dav,
+    pub key: String,
+    pub file: String,
 }
 
 pub fn ref_path(key: &str) -> String {
@@ -102,8 +136,18 @@ impl Library {
         for (name, text) in [(CONFIG, shared), ("machine config", machine)] {
             let Some(text) = text else { continue };
             let cfg: Config = toml::from_str(text).context(name)?;
-            for (name, p) in cfg.locations {
-                lib.locations.insert(name, expand_home(&p, home));
+            // A machine config may turn a shared WebDAV location into a local folder, or back.
+            for (name, location) in cfg.locations {
+                match location {
+                    Location::Folder(p) => {
+                        lib.remotes.remove(&name);
+                        lib.locations.insert(name, expand_home(&p, home));
+                    }
+                    Location::Dav(dav) => {
+                        lib.locations.remove(&name);
+                        lib.remotes.insert(name, dav);
+                    }
+                }
             }
             lib.tag_colors.extend(cfg.tag_colors);
             lib.searches.extend(cfg.searches);
@@ -171,13 +215,37 @@ impl Library {
         vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key))]
     }
 
+    /// Where the PDF is on this machine; for a WebDAV location, its place in `cache`, which may not
+    /// have been downloaded yet.
     pub fn pdf_path(&self, r: &Ref) -> Result<PathBuf> {
         let pdf = r.pdf.as_ref().context("no pdf")?;
-        let base = self
-            .locations
-            .get(&pdf.location)
-            .with_context(|| format!("unknown pdf location '{}'", pdf.location))?;
-        Ok(base.join(&pdf.path))
+        if let Some(base) = self.locations.get(&pdf.location) {
+            return Ok(base.join(&pdf.path));
+        }
+        anyhow::ensure!(self.remotes.contains_key(&pdf.location), "unknown pdf location '{}'", pdf.location);
+        let cache = self.cache.as_ref().context("no cache folder for WebDAV PDFs")?;
+        Ok(cache.join(&pdf.location).join(&pdf.path))
+    }
+
+    /// The WebDAV server holding `r`'s PDF, with its attachment key and file name.
+    pub fn remote_pdf(&self, r: &Ref) -> Option<RemotePdf<'_>> {
+        let pdf = r.pdf.as_ref()?;
+        let (name, dav) = self.remotes.get_key_value(&pdf.location)?;
+        let (key, file) = pdf.path.split_once('/')?;
+        Some(RemotePdf { location: name, dav, key: key.into(), file: file.into() })
+    }
+
+    /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<key>/<file name>`,
+    /// as Zotero lays out its storage, with a new Zotero-style attachment key.
+    pub fn attach(&self, r: &Ref, location: &str, file_name: &str) -> Result<Pdf> {
+        anyhow::ensure!(
+            self.locations.contains_key(location) || self.remotes.contains_key(location),
+            "no location named '{location}' (locations: {})",
+            self.locations.keys().chain(self.remotes.keys()).cloned().collect::<Vec<_>>().join(", ")
+        );
+        let file = Path::new(file_name).file_name().and_then(|f| f.to_str()).context("not a file name")?;
+        let key = crate::ids::zotero_key(&format!("{}|{location}|{file}", r.key));
+        Ok(Pdf { location: location.into(), path: format!("{key}/{file}") })
     }
 }
 
@@ -274,5 +342,27 @@ mod tests {
         assert_eq!(r.status.as_deref(), Some("Not Reading"));
         cycle_status(&mut r, true);
         assert_eq!(r.status, None);
+    }
+
+    #[test]
+    fn webdav_locations_and_attachments() {
+        let shared = "[locations]\npapers = \"/p\"\n\n[locations.dav]\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
+        let refs = [("a2020".to_string(), "[pdf]\nlocation = \"dav\"\npath = \"ABCD2345/a.pdf\"\n".to_string())];
+        let mut lib = Library::parse(Some(shared), None, refs, None).unwrap();
+        assert!(lib.pdf_path(&lib.refs[0]).is_err());
+        lib.cache = Some("/c".into());
+        assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/c/dav/ABCD2345/a.pdf"));
+        let remote = lib.remote_pdf(&lib.refs[0]).unwrap();
+        assert_eq!((remote.key.as_str(), remote.file.as_str()), ("ABCD2345", "a.pdf"));
+        assert_eq!(remote.dav.file_url("ABCD2345.zip"), "https://dav.example/zotero/ABCD2345.zip");
+
+        let pdf = lib.attach(&lib.refs[0], "papers", "/tmp/x/Paper.pdf").unwrap();
+        assert_eq!(pdf.location, "papers");
+        assert!(pdf.path.ends_with("/Paper.pdf") && pdf.path.len() == "ABCD2345/Paper.pdf".len(), "{}", pdf.path);
+        assert!(lib.attach(&lib.refs[0], "nowhere", "x.pdf").is_err());
+
+        let local = Library::parse(Some(shared), Some("[locations]\ndav = \"/mirror\"\n"), [], None).unwrap();
+        assert!(local.remotes.is_empty());
+        assert_eq!(local.locations["dav"], Path::new("/mirror"));
     }
 }

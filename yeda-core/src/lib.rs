@@ -8,6 +8,7 @@ pub mod library;
 pub mod llm;
 pub mod search;
 pub mod tables;
+pub mod webdav;
 #[cfg(feature = "zotero")]
 pub mod zotero;
 

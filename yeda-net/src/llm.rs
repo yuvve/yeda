@@ -28,8 +28,7 @@ const ANTHROPIC_PDF_LIMIT: usize = 32 * 1024 * 1024;
 /// `key` is the value of the profile's `key_env()` variable, if set.
 pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let key = key.filter(|k| !k.is_empty());
-    let required = p.provider == Provider::Anthropic || p.base_url.is_none();
-    if key.is_none() && required {
+    if key.is_none() && p.needs_key() {
         bail!("set {} to your API key (or api_key_env in the llm profile)", p.key_env());
     }
     match p.provider {

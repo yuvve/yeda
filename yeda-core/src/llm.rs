@@ -27,6 +27,11 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// Anthropic always needs a key; an OpenAI-compatible server only when it is OpenAI's own.
+    pub fn needs_key(&self) -> bool {
+        self.provider == Provider::Anthropic || self.base_url.is_none()
+    }
+
     /// The environment variable holding this profile's API key.
     pub fn key_env(&self) -> &str {
         self.api_key_env.as_deref().unwrap_or(match self.provider {

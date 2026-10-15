@@ -24,7 +24,9 @@ const USAGE: &str = "usage: yeda [library dir]
 
 pub fn load_library(dir: &Path) -> Result<Library> {
     let machine = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
-    yeda_fs::load_library(dir, machine.as_deref(), dirs::home_dir().as_deref())
+    let mut lib = yeda_fs::load_library(dir, machine.as_deref(), dirs::home_dir().as_deref())?;
+    lib.cache = dirs::cache_dir().map(|d| d.join("yeda"));
+    Ok(lib)
 }
 
 fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {

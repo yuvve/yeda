@@ -184,7 +184,7 @@ fn extract(dir: &str, pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) ->
             } else {
                 rect_box.into_iter().collect()
             };
-            let id = zotero_key(&format!("{dir}|{kind}|{num}|{boxes:?}"));
+            let id = crate::ids::zotero_key(&format!("{dir}|{kind}|{num}|{boxes:?}"));
             let mut first_word = 0;
             if matches!(kind, "highlight" | "underline") {
                 let (text, first) = words_in(page, &boxes);
@@ -205,21 +205,6 @@ fn extract(dir: &str, pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) ->
         }
     }
     Ok((out, images))
-}
-
-/// An 8-character key in Zotero's format, so a Zotero export can keep it. Derived from `seed`
-/// rather than random, so extracting again gives the same ids; FNV-1a because std's hasher may
-/// change between Rust versions.
-fn zotero_key(seed: &str) -> String {
-    const ALPHABET: &[u8] = b"23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
-    let mut h = seed.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
-    (0..8)
-        .map(|_| {
-            let c = ALPHABET[(h % ALPHABET.len() as u64) as usize] as char;
-            h /= ALPHABET.len() as u64;
-            c
-        })
-        .collect()
 }
 
 /// Zotero's `annotationSortIndex`: page index, character offset on the page, distance from the page top.

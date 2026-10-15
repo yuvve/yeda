@@ -25,6 +25,8 @@ pub enum Mode {
     Pick,
     Prompt(Prompt),
     ConfirmDelete,
+    /// Asks whether to keep the secret just entered in the system secret store.
+    ConfirmSaveSecret,
     Filter,
     Sort,
     Help(HelpPage),
@@ -66,6 +68,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":summarize-all[!] [table] [profile]", "the same for every visible reference"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
+    (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
     (":q", "quit"),
@@ -84,6 +87,22 @@ pub enum Prompt {
     Command,
     Add,
     TagColor,
+    /// A password or API key for `App::asking`; shown masked.
+    Secret,
+}
+
+/// What to run again once a missing secret has been entered.
+#[derive(Clone)]
+pub enum Retry {
+    OpenPdf,
+    Command(String),
+}
+
+/// A secret the user is being asked for.
+pub struct PendingSecret {
+    pub account: String,
+    pub label: String,
+    retry: Retry,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -103,6 +122,9 @@ pub enum RightView {
 pub enum Job {
     Fetch(String),
     ExtractAnnotations,
+    /// Download the selected reference's PDF from WebDAV with this password, then open it.
+    Download(String),
+    Attach { file: PathBuf, location: String, password: Option<String> },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,6 +175,11 @@ struct Summarizer {
 
 pub struct App {
     pub dir: PathBuf,
+    /// Secrets entered or read this session, by secret-store account.
+    secrets: std::collections::HashMap<String, String>,
+    /// Accounts whose stored secret the server rejected, so the store is skipped until a new one is entered.
+    rejected: std::collections::HashSet<String>,
+    pub asking: Option<PendingSecret>,
     pub lib: Library,
     searcher: Searcher,
     pub query: String,
@@ -230,6 +257,9 @@ impl App {
             sort_sel: 0,
             form: None,
             help_scroll: 0,
+            secrets: Default::default(),
+            rejected: Default::default(),
+            asking: None,
         };
         app.refilter_sidebar(false);
         app
@@ -311,6 +341,19 @@ impl App {
         self.status.clear();
         match self.mode {
             Mode::Normal => self.normal_key(k),
+            Mode::ConfirmSaveSecret => {
+                self.mode = Mode::Normal;
+                let Some(p) = self.asking.take() else { return };
+                if k.code == KeyCode::Char('y')
+                    && let Some(secret) = self.secrets.get(&p.account)
+                {
+                    self.status = match yeda_secrets::set(&p.account, secret) {
+                        Ok(()) => format!("saved {} in the secret store", p.label),
+                        Err(e) => format!("{e:#}"),
+                    };
+                }
+                self.retry(p.retry);
+            }
             Mode::ConfirmDelete => {
                 self.mode = Mode::Normal;
                 if k.code == KeyCode::Char('y') {
@@ -689,7 +732,7 @@ impl App {
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
                 (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) => {
-                    if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!')) {
+                    if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!'), text) {
                         self.status = format!("{e:#}");
                     }
                 }
@@ -703,6 +746,7 @@ impl App {
                     None => self.status = "nothing to cancel".into(),
                 },
                 ("export", args) => self.export(args),
+                ("attach", args) => self.attach(args, text),
                 ("", _) => {}
                 _ => self.status = format!("unknown command: {text}"),
             },
@@ -722,6 +766,18 @@ impl App {
                     Ok(())
                 });
                 self.after_config_change(result);
+            }
+            Prompt::Secret => {
+                let Some(p) = &self.asking else { return };
+                if text.is_empty() {
+                    self.asking = None;
+                    self.status = "cancelled".into();
+                    return;
+                }
+                self.secrets.insert(p.account.clone(), text.into());
+                self.rejected.remove(&p.account);
+                self.status = format!("save {} in the secret store? (y/n)", p.label);
+                self.mode = Mode::ConfirmSaveSecret;
             }
             Prompt::Add if !text.is_empty() => {
                 self.status = format!("fetching {text}…");
@@ -782,7 +838,8 @@ impl App {
     }
 
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
-    fn summarize(&mut self, args: &str, all: bool, overwrite: bool) -> anyhow::Result<()> {
+    /// `command` is the whole command line, run again once a missing API key is entered.
+    fn summarize(&mut self, args: &str, all: bool, overwrite: bool, command: &str) -> anyhow::Result<()> {
         if self.summarizer.is_some() {
             anyhow::bail!("a summarization is already running (:cancel stops it)");
         }
@@ -802,10 +859,21 @@ impl App {
                 tables::plan(&self.lib, &table_name, &table, r, &self.load_annotations(&r.key), overwrite)
             })
             .collect();
-        let key = std::env::var(profile.key_env()).ok();
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
+        let env = profile.key_env().to_string();
+        let key = std::env::var(&env).ok().filter(|k| !k.is_empty());
+        let key = match key {
+            Some(k) => Some(k),
+            None if profile.needs_key() => {
+                let Some(k) = self.secret(&yeda_secrets::llm_account(&env), &env, Retry::Command(command.into())) else {
+                    return Ok(());
+                };
+                Some(k)
+            }
+            None => yeda_secrets::get(&yeda_secrets::llm_account(&env)).ok().flatten(),
+        };
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
@@ -897,6 +965,131 @@ impl App {
         match job {
             Job::Fetch(input) => self.add_from(&input),
             Job::ExtractAnnotations => self.extract_annotations(),
+            Job::Download(password) => self.download(&password),
+            Job::Attach { file, location, password } => self.finish_attach(&file, &location, password.as_deref()),
+        }
+    }
+
+    /// The secret for `account`: from this session, else the secret store, else a prompt, after which
+    /// `retry` runs again. `None` while prompting.
+    fn secret(&mut self, account: &str, label: &str, retry: Retry) -> Option<String> {
+        if let Some(s) = self.secrets.get(account) {
+            return Some(s.clone());
+        }
+        if !self.rejected.contains(account) {
+            match yeda_secrets::get(account) {
+                Ok(Some(s)) => {
+                    self.secrets.insert(account.into(), s.clone());
+                    return Some(s);
+                }
+                Ok(None) => {}
+                Err(e) => self.status = format!("{e:#}; "),
+            }
+        }
+        self.asking = Some(PendingSecret { account: account.into(), label: label.into(), retry });
+        self.input.clear();
+        self.mode = Mode::Prompt(Prompt::Secret);
+        None
+    }
+
+    /// Forgets a secret the server turned down, so the next attempt asks again.
+    fn reject(&mut self, account: &str) {
+        self.secrets.remove(account);
+        self.rejected.insert(account.into());
+    }
+
+    fn retry(&mut self, retry: Retry) {
+        match retry {
+            Retry::OpenPdf => self.open_pdf(),
+            Retry::Command(text) => self.submit(Prompt::Command, &text),
+        }
+    }
+
+    fn download(&mut self, password: &str) {
+        let Some(r) = self.selected() else { return };
+        let (Some(remote), Ok(path)) = (self.lib.remote_pdf(r), self.lib.pdf_path(r)) else { return };
+        let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
+        let saved = yeda_net::webdav::download(remote.dav, password, &remote.key, &remote.file)
+            .and_then(|pdf| Ok(yeda_fs::write_atomic(&path, &pdf)?));
+        match saved {
+            Ok(()) => self.open_pdf(),
+            Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
+                self.reject(&account);
+                self.open_pdf();
+            }
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    /// `:attach <file.pdf> [location]`; `command` is the whole line, run again once a password is entered.
+    fn attach(&mut self, args: &str, command: &str) {
+        let args = args.trim();
+        let (file, location) = match args.rsplit_once(' ') {
+            Some((f, l)) if self.lib.locations.contains_key(l) || self.lib.remotes.contains_key(l) => (f.trim(), Some(l)),
+            _ => (args, None),
+        };
+        if file.is_empty() || self.selected().is_none() {
+            self.status = "usage: :attach <file.pdf> [location], with a reference selected".into();
+            return;
+        }
+        let names: Vec<&String> = self.lib.locations.keys().chain(self.lib.remotes.keys()).collect();
+        let location = match (location, names.as_slice()) {
+            (Some(l), _) => l.to_string(),
+            (None, [only]) => only.to_string(),
+            (None, _) => {
+                let names: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                self.status = format!("name a location: {}", names.join(", "));
+                return;
+            }
+        };
+        let file = match (file.strip_prefix("~/"), dirs::home_dir()) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(file),
+        };
+        let password = match self.lib.remotes.get(&location) {
+            Some(dav) => {
+                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+                let label = format!("{}@{}", dav.user, dav.url);
+                match self.secret(&account, &label, Retry::Command(command.into())) {
+                    Some(p) => Some(p),
+                    None => return,
+                }
+            }
+            None => None,
+        };
+        self.status = format!("attaching {}…", file.display());
+        self.job = Some(Job::Attach { file, location, password });
+    }
+
+    fn finish_attach(&mut self, file: &std::path::Path, location: &str, password: Option<&str>) {
+        let Some(&i) = self.visible.get(self.sel) else { return };
+        let result = (|| -> anyhow::Result<Ref> {
+            let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+            let mut r = self.lib.refs[i].clone();
+            r.pdf = Some(self.lib.attach(&r, location, &file.to_string_lossy())?);
+            if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&r), password) {
+                let mtime = fs::metadata(file)?.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis() as i64;
+                yeda_net::webdav::upload(remote.dav, password, &remote.key, &remote.file, &bytes, mtime)?;
+            }
+            yeda_fs::write_atomic(&self.lib.pdf_path(&r)?, &bytes)?;
+            Ok(r)
+        })();
+        match result {
+            Ok(r) => {
+                let path = r.pdf.as_ref().map(|p| format!("{}:{}", p.location, p.path)).unwrap_or_default();
+                if self.apply(self.lib.save(&r).map(|e| vec![e])) {
+                    self.status = format!("attached {path}");
+                    self.reload();
+                }
+            }
+            Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
+                if let Some(dav) = self.lib.remotes.get(location) {
+                    let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+                    self.reject(&account);
+                }
+                self.status = format!("{e:#}; run :attach again to enter the password");
+            }
+            Err(e) => self.status = format!("{e:#}"),
         }
     }
 
@@ -1035,7 +1228,19 @@ impl App {
     fn open_pdf(&mut self) {
         let Some(r) = self.selected() else { return };
         match self.lib.pdf_path(r) {
-            Ok(p) if !p.exists() => self.status = format!("missing: {}", p.display()),
+            Ok(p) if !p.exists() => {
+                let Some(remote) = self.lib.remote_pdf(r) else {
+                    self.status = format!("missing: {}", p.display());
+                    return;
+                };
+                let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
+                let label = format!("{}@{}", remote.dav.user, remote.dav.url);
+                let file = remote.file.clone();
+                if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
+                    self.status = format!("downloading {file}…");
+                    self.job = Some(Job::Download(password));
+                }
+            }
             Ok(p) => {
                 let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
                 let mut command = match words.next() {
