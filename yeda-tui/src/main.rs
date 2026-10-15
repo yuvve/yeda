@@ -18,6 +18,7 @@ use yeda_core::library::Library;
 use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
+       yeda read <file.pdf> [--annotations <dir>] [--page N]
        yeda import-zotero <zotero data dir> [library dir]
        yeda import-table <table name> <file.csv> [library dir]";
 
@@ -54,6 +55,10 @@ fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("read") {
+        yeda_reader_lib::run_with(args.into_iter().skip(1));
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("import-zotero") {
         let zotero = args.get(1).context(USAGE)?;
         let lib = args.get(2).map_or(".", String::as_str);

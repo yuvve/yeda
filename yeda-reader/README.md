@@ -11,11 +11,10 @@ Annotations are stored in `<dir>/annotations.toml`, merged by `id`. Image and in
 ## Building
 
 ```sh
-npm ci                                  # at the repository root
-npm run build:reader -w yeda-reader     # builds zotero/reader once
-npm run build -w yeda-reader            # bundles the frontend into dist/
 cargo run -p yeda-reader -- <file.pdf>
 ```
+
+`build.rs` builds the web frontend into `dist/`, which the binary embeds. If needed it first runs `npm ci` at the repository root and builds zotero/reader. yeda-tui links this crate, so `yeda read` is the same reader.
 
 `src/` holds the TypeScript glue: creating the reader (`reader.ts`), annotation storage (`annotations.ts`) and the vim keymap (`vim.ts`). `src-tauri/` holds the Tauri commands, which yeda-android also registers.
 

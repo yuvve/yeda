@@ -50,7 +50,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("s", "sort"),
     ("Esc", "clear the search"),
     ("a", "add by DOI, arXiv ID or ISBN"),
-    ("o", "open the PDF in yeda-reader"),
+    ("o", "open the PDF in the reader (yeda read)"),
     ("e  n", "edit the reference file / its note in $EDITOR"),
     ("t  m", "edit tags / move to a collection"),
     ("r  R", "next / previous reading status"),
@@ -1038,8 +1038,15 @@ impl App {
             Ok(p) if !p.exists() => self.status = format!("missing: {}", p.display()),
             Ok(p) => {
                 let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
-                let program = words.next().map_or_else(default_reader, PathBuf::from);
-                let result = Command::new(&program)
+                let mut command = match words.next() {
+                    Some(program) => Command::new(program),
+                    None => {
+                        let mut c = Command::new(std::env::current_exe().unwrap_or_else(|_| "yeda".into()));
+                        c.arg("read");
+                        c
+                    }
+                };
+                let result = command
                     .args(words)
                     .arg(&p)
                     .arg("--annotations")
@@ -1049,10 +1056,7 @@ impl App {
                     .stderr(Stdio::null())
                     .spawn();
                 if let Err(e) = result {
-                    self.status = format!(
-                        "{}: {e} (install it with `cargo install --path yeda-reader/src-tauri`, or set reader in yeda.toml)",
-                        program.display()
-                    );
+                    self.status = format!("{}: {e}", command.get_program().to_string_lossy());
                 }
             }
             Err(e) => self.status = e.to_string(),
@@ -1064,10 +1068,4 @@ impl App {
         self.apply(Ok(self.lib.delete(&key)));
         self.reload();
     }
-}
-
-/// yeda-reader next to this binary (as cargo builds them), else the one on `PATH`.
-fn default_reader() -> PathBuf {
-    let sibling = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("yeda-reader")));
-    sibling.filter(|p| p.is_file()).unwrap_or_else(|| "yeda-reader".into())
 }

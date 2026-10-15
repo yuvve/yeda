@@ -8,6 +8,7 @@ license = "AGPL-3.0-only"
 yeda-core = { path = "../yeda-core", features = ["zotero"] }
 yeda-fs = { path = "../yeda-fs" }
 yeda-net = { path = "../yeda-net" }
+yeda-reader = { path = "../yeda-reader/src-tauri" }
 anyhow = "1.0.104"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }

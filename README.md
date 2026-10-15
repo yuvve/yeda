@@ -25,7 +25,7 @@ A reference manager whose library is plain TOML and Markdown files, kept in git.
 `yeda.toml`:
 
 ```toml
-reader = "yeda-reader"           # opens PDFs as <reader> <pdf> --annotations <dir>; the default
+reader = "zathura"               # opens PDFs as <reader> <pdf> --annotations <dir>; default: yeda read
 default_llm = "claude"
 
 [locations]                      # pdf.location in a reference names one of these
@@ -56,7 +56,9 @@ API keys are never stored in the library. Clients read the key from the environm
 git clone --recursive <this repo>
 cargo build --workspace
 cargo test --workspace
-npm ci && npm run build:reader -w yeda-reader   # needed by yeda-reader and yeda-android
+cargo install --path yeda-tui      # the `yeda` binary, with the reader built in
 ```
+
+Building yeda-reader (and so yeda-tui and yeda-android, which link it) runs npm to build its web frontend. The first time, this installs packages and builds zotero/reader, so it needs Node.js and network access.
 
 The repository is AGPL-3.0, as required by the zotero/reader fork it embeds.

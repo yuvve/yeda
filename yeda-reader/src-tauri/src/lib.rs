@@ -136,7 +136,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Doc, String> {
 }
 
 pub fn run() {
-    let doc = parse_args(std::env::args().skip(1)).unwrap_or_else(|e| {
+    run_with(std::env::args().skip(1))
+}
+
+/// Runs the reader with these command-line arguments (without the program name).
+pub fn run_with(args: impl Iterator<Item = String>) {
+    let doc = parse_args(args).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2);
     });

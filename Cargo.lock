@@ -6714,6 +6714,7 @@ dependencies = [
  "yeda-core",
  "yeda-fs",
  "yeda-net",
+ "yeda-reader",
 ]
 
 [[package]]

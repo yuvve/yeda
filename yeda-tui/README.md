@@ -4,13 +4,14 @@ The terminal interface. The binary is `yeda`.
 
 ```sh
 yeda [library dir]
+yeda read <file.pdf> [--annotations <dir>] [--page N]
 yeda import-zotero <zotero data dir> [library dir]
 yeda import-table <table name> <file.csv> [library dir]
 ```
 
 `import-zotero` imports the items, annotations, child notes (as `notes/<key>.md`), tag colours and saved searches that aren't in the library yet. It reads a copy of the database, so Zotero can stay open.
 
-PDFs open in yeda-reader: the one next to the `yeda` binary, else the one on `PATH`, unless `reader` in `yeda.toml` names another command. Annotation extraction and image rendering use poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs with it unless `reader` in `yeda.toml` names another command. Building yeda-tui builds the reader too. Annotation extraction and image rendering use poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
 
 ## Keys
 
@@ -24,7 +25,7 @@ PDFs open in yeda-reader: the one next to the `yeda` binary, else the one on `PA
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
 | `a` | Add by DOI, arXiv ID or ISBN |
-| `o` | Open the PDF in yeda-reader |
+| `o` | Open the PDF in the reader |
 | `e` / `n` | Edit the reference file / its Markdown note in `$EDITOR` |
 | `t` / `m` | Edit tags / move to a collection |
 | `r` / `R` | Next / previous reading status |
