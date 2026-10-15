@@ -15,9 +15,7 @@ The app reads the library through all-files access, and the library folder is ch
 
 Settings live in the app's data folder (`settings.toml`): the library folder, per-device `[locations]` and LLM API keys. They act as the library's machine config.
 
-Without poppler on the device, some features do less than on the desktop:
-- Extracted highlights carry no text, and extracted image annotations get no PNG.
-- LLM tables need an Anthropic profile, which reads the PDF itself.
+Where yeda-tui uses poppler, the app uses the pdf.js that ships with the reader. It supplies the highlight text and image PNGs for extracted annotations, and the paper text for LLM providers that take text.
 
 ## Building
 

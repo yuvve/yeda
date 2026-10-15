@@ -136,7 +136,7 @@ pub fn sync_from_pdf(dir: &str, existing: Option<&str>, pdf: &[u8], word_boxes: 
         .collect();
     kept.retain(|a| a.source != "pdf");
     let pages = word_boxes.map(parse_bbox).unwrap_or_default();
-    let (extracted, images) = extract(pdf, &pages, render_png)?;
+    let (extracted, images) = extract(dir, pdf, &pages, render_png)?;
     let n = extracted.len();
     kept.extend(extracted);
     effects.extend(images.into_iter().map(|(name, png)| Effect::Write { path: format!("{dir}/{name}"), bytes: png }));
@@ -147,7 +147,7 @@ pub fn sync_from_pdf(dir: &str, existing: Option<&str>, pdf: &[u8], word_boxes: 
 /// Image file names (relative to the annotations folder) with their PNG bytes.
 type Images = Vec<(String, Vec<u8>)>;
 
-fn extract(pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) -> Result<(Vec<Annotation>, Images)> {
+fn extract(dir: &str, pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) -> Result<(Vec<Annotation>, Images)> {
     let doc = Document::load_mem(pdf).context("reading pdf")?;
     let (mut out, mut images) = (Vec::new(), Vec::new());
     for (num, page_id) in doc.get_pages() {
@@ -166,7 +166,6 @@ fn extract(pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) -> Result<(Ve
             let get = |key: &[u8]| annot.get(key).ok().and_then(|o| doc.dereference(o).ok()).map(|(_, o)| o);
             let rect = numbers(&doc, get(b"Rect"));
             let rect_box = (rect.len() == 4).then(|| bbox(&[rect[0], rect[2]], &[rect[1], rect[3]]));
-            let id = format!("pdf-p{num}-{}", out.len());
             let mut a = Annotation {
                 kind: kind.into(),
                 page: num.to_string(),
@@ -185,8 +184,12 @@ fn extract(pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) -> Result<(Ve
             } else {
                 rect_box.into_iter().collect()
             };
+            let id = zotero_key(&format!("{dir}|{kind}|{num}|{boxes:?}"));
+            let mut first_word = 0;
             if matches!(kind, "highlight" | "underline") {
-                a.text = Some(words_in(page, &boxes)).filter(|s| !s.is_empty());
+                let (text, first) = words_in(page, &boxes);
+                a.text = Some(text).filter(|s| !s.is_empty());
+                first_word = first;
             } else if let ("image" | "ink", Some(b)) = (kind, rect_box)
                 && let Some(png) = render_png(num, page.height, b)
             {
@@ -194,12 +197,34 @@ fn extract(pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) -> Result<(Ve
                 images.push((name.clone(), png));
                 a.image = Some(name);
             }
+            let top = boxes.iter().map(|b| b[3]).fold(f32::NEG_INFINITY, f32::max);
+            a.sort_index = Some(sort_index(num - 1, first_word, (page.height - top).max(0.0)));
             a.position = Some(position(num - 1, &boxes));
             a.id = id;
             out.push(a);
         }
     }
     Ok((out, images))
+}
+
+/// An 8-character key in Zotero's format, so a Zotero export can keep it. Derived from `seed`
+/// rather than random, so extracting again gives the same ids; FNV-1a because std's hasher may
+/// change between Rust versions.
+fn zotero_key(seed: &str) -> String {
+    const ALPHABET: &[u8] = b"23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
+    let mut h = seed.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    (0..8)
+        .map(|_| {
+            let c = ALPHABET[(h % ALPHABET.len() as u64) as usize] as char;
+            h /= ALPHABET.len() as u64;
+            c
+        })
+        .collect()
+}
+
+/// Zotero's `annotationSortIndex`: page index, character offset on the page, distance from the page top.
+fn sort_index(page_index: u32, offset: usize, top: f32) -> String {
+    format!("{page_index:05}|{offset:06}|{:05}", top as u32)
 }
 
 fn media_height(doc: &Document, page: lopdf::ObjectId) -> f32 {
@@ -291,16 +316,19 @@ fn parse_bbox(html: &str) -> Vec<Page> {
 }
 
 // ponytail: assumes an unrotated page whose CropBox starts at the origin; rotated or offset pages pick the wrong words.
-fn words_in(page: &Page, boxes: &[[f32; 4]]) -> String {
-    page.words
+/// The words under `boxes`, and the index on the page of the first one (0 if none).
+fn words_in(page: &Page, boxes: &[[f32; 4]]) -> (String, usize) {
+    let hits: Vec<(usize, &Word)> = page
+        .words
         .iter()
-        .filter(|w| {
+        .enumerate()
+        .filter(|(_, w)| {
             let (cx, cy) = ((w.x0 + w.x1) / 2.0, page.height - (w.y0 + w.y1) / 2.0);
             boxes.iter().any(|b| (b[0]..=b[2]).contains(&cx) && (b[1]..=b[3]).contains(&cy))
         })
-        .map(|w| w.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect();
+    let text = hits.iter().map(|(_, w)| w.text.as_str()).collect::<Vec<_>>().join(" ");
+    (text, hits.first().map_or(0, |(i, _)| *i))
 }
 
 pub fn unescape_html(s: &str) -> String {
@@ -329,7 +357,7 @@ mod tests {
         assert_eq!(pages.len(), 1);
         // Line one spans y 70..82 from the top, i.e. 710..722 in PDF coordinates.
         let quad = bbox(&[70.0, 145.0], &[708.0, 724.0]);
-        assert_eq!(words_in(&pages[0], &[quad]), "Hello &world");
+        assert_eq!(words_in(&pages[0], &[quad]), ("Hello &world".to_string(), 0));
     }
 
     #[test]
@@ -455,11 +483,22 @@ rects = [[49.5, 41.1, 568.2, 210.3]]
         assert_eq!(n, 2);
         assert_eq!(heights, [792.0]);
         assert_eq!(effects[0], Effect::remove("annotations/k/img/old.png"));
-        assert_eq!(effects[1], Effect::write("annotations/k/img/pdf-p1-1.png", "png"));
         let Effect::Write { path, bytes } = &effects[2] else { panic!() };
         assert_eq!(path, "annotations/k/annotations.toml");
         let all = parse(std::str::from_utf8(bytes).unwrap()).unwrap();
-        let ids: Vec<_> = all.iter().map(|a| (a.id.as_str(), a.text.as_deref(), a.color.as_deref())).collect();
-        assert_eq!(ids, [("mine", None, None), ("pdf-p1-0", Some("Hello"), Some("#ff0000")), ("pdf-p1-1", None, Some("#ff0000"))]);
+        let fields: Vec<_> = all.iter().map(|a| (a.text.as_deref(), a.color.as_deref(), a.sort_index.as_deref())).collect();
+        assert_eq!(fields, [
+            (None, None, None),
+            (Some("Hello"), Some("#ff0000"), Some("00000|000000|00068")),
+            (None, Some("#ff0000"), Some("00000|000000|00742")),
+        ]);
+        let zotero_key = |id: &str| id.len() == 8 && id.bytes().all(|b| b"23456789ABCDEFGHIJKLMNPQRSTUVWXYZ".contains(&b));
+        assert!(all[1..].iter().all(|a| zotero_key(&a.id)), "{all:?}");
+        assert_ne!(all[1].id, all[2].id);
+        assert_eq!(effects[1], Effect::write(format!("annotations/k/img/{}.png", all[2].id), "png"));
+        let (_, again) = sync_from_pdf("annotations/k", Some(existing), &pdf, Some(words), &mut |_, _, _| None).unwrap();
+        let Effect::Write { bytes: again, .. } = again.last().unwrap() else { panic!() };
+        let again = parse(std::str::from_utf8(again).unwrap()).unwrap();
+        assert_eq!(again.iter().map(|a| &a.id).collect::<Vec<_>>(), all.iter().map(|a| &a.id).collect::<Vec<_>>());
     }
 }

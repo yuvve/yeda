@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { hasFileAccess, pickFolder, requestFileAccess } from './bridge';
+import { inspect, plainText, Region } from './pdftext';
 
 type Filter =
 	| { kind: 'all' }
@@ -262,7 +263,11 @@ export function showBrowser(openReader: () => void) {
 			h('p', {}, statusSelect), tags, h('p', {}, collection), table,
 			h('div', { className: 'actions' },
 				r.pdf && button('Extract annotations from PDF', () => run(async () => {
-					const n = await invoke<number>('extract_annotations', { key });
+					say('reading the PDF…');
+					const pdf = new Uint8Array(await invoke<ArrayBuffer>('ref_pdf', { key }));
+					const regions = await invoke<Region[]>('pdf_image_regions', { key });
+					const { words, images } = await inspect(pdf, regions);
+					const n = await invoke<number>('extract_annotations', { key, words, images });
 					say(`${n} annotations extracted from the PDF`);
 					await showDetails(key);
 				})),
@@ -325,7 +330,9 @@ export function showBrowser(openReader: () => void) {
 			const row = d.ref.tables?.[name] ?? {};
 			const summarize = (overwrite: boolean) => run(async () => {
 				say(`summarizing ${d.key} into '${name}'…`);
-				say(await invoke<string>('summarize', { key: d.key, table: name, overwrite }));
+				const pdf = d.ref.pdf && await invoke<ArrayBuffer>('ref_pdf', { key: d.key }).catch(() => null);
+				const text = pdf ? await plainText(new Uint8Array(pdf)).catch(() => null) : null;
+				say(await invoke<string>('summarize', { key: d.key, table: name, overwrite, text }));
 				const fresh = await invoke<Details>('details', { key: d.key });
 				showTables(fresh);
 			});

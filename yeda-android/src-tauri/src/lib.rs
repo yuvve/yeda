@@ -89,6 +89,17 @@ impl Browser {
         self.apply(vec![self.lib.save(&self.lib.refs[i])?])
     }
 
+    fn pdf(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        let pdf = self.lib.pdf_path(self.get(key)?)?;
+        std::fs::read(&pdf).with_context(|| pdf.display().to_string())
+    }
+
+    /// Runs `sync_from_pdf` for `key` with `words` (`pdftotext -bbox` format) and `render_png`.
+    fn sync_from_pdf(&self, key: &str, words: Option<&str>, render_png: &mut annotations::RenderPng) -> anyhow::Result<(usize, Vec<Effect>)> {
+        let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(key))?)?;
+        annotations::sync_from_pdf(&library::annotations_dir(key), existing.as_deref(), &self.pdf(key)?, words, render_png)
+    }
+
     fn annotations(&self, key: &str) -> anyhow::Result<Vec<Annotation>> {
         let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key))?)?;
         Ok(text.as_deref().map(annotations::parse).transpose()?.unwrap_or_default())
@@ -348,24 +359,50 @@ fn save_note(app: AppHandle, state: State<Shared>, key: String, text: String) ->
     })
 }
 
-/// Without poppler, highlights come without their text and image annotations without a PNG.
-// ponytail: pdf.js could supply word boxes and region renders from the WebView if that matters.
+/// The PDF of reference `key`, for pdf.js in the WebView, which stands in for poppler on Android.
 #[tauri::command]
-fn extract_annotations(app: AppHandle, state: State<Shared>, key: String) -> Res<usize> {
+fn ref_pdf(app: AppHandle, state: State<Shared>, key: String) -> Res<Response> {
+    state.with(&app, |b| Ok(Response::new(b.pdf(&key)?)))
+}
+
+#[derive(Serialize)]
+struct Region {
+    /// 1-based.
+    page: u32,
+    height: f32,
+    /// PDF coordinates: `[x0, y0, x1, y1]`, origin bottom-left.
+    rect: [f32; 4],
+}
+
+/// The regions `extract_annotations` needs rendered, in the order it asks for them.
+#[tauri::command]
+fn pdf_image_regions(app: AppHandle, state: State<Shared>, key: String) -> Res<Vec<Region>> {
     state.with(&app, |b| {
-        let pdf = b.lib.pdf_path(b.get(&key)?)?;
-        let bytes = std::fs::read(&pdf).with_context(|| pdf.display().to_string())?;
-        let existing = yeda_fs::read_optional(&b.path(&annotations::file_path(&key))?)?;
-        let dir = library::annotations_dir(&key);
-        let (n, effects) = annotations::sync_from_pdf(&dir, existing.as_deref(), &bytes, None, &mut |_, _, _| None)?;
+        let mut regions = Vec::new();
+        b.sync_from_pdf(&key, None, &mut |page, height, rect| {
+            regions.push(Region { page, height, rect });
+            None
+        })?;
+        Ok(regions)
+    })
+}
+
+/// `words` and `images` come from pdf.js: the page words in `pdftotext -bbox` format, and a PNG
+/// (or null) for each of `pdf_image_regions` in order.
+#[tauri::command]
+fn extract_annotations(app: AppHandle, state: State<Shared>, key: String, words: Option<String>, images: Vec<Option<Vec<u8>>>) -> Res<usize> {
+    state.with(&app, |b| {
+        let mut images = images.into_iter();
+        let (n, effects) = b.sync_from_pdf(&key, words.as_deref(), &mut |_, _, _| images.next().flatten())?;
         b.apply(effects)?;
         Ok(n)
     })
 }
 
-/// Fills `key`'s row of `table` with the default LLM profile; returns a note on how it went.
+/// Fills `key`'s row of `table` with the default LLM profile; `text` is the paper's text from pdf.js,
+/// for providers that take text rather than the PDF. Returns a note on how it went.
 #[tauri::command]
-async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table: String, overwrite: bool) -> Res<String> {
+async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table: String, overwrite: bool, text: Option<String>) -> Res<String> {
     let keys = load_settings(&app).map_err(err)?.keys;
     let (job, profile) = state.with(&app, |b| {
         let def = b.lib.tables.get(&table).with_context(|| format!("no table named '{table}'"))?;
@@ -377,7 +414,7 @@ async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table:
     let api_key = keys.get(profile.key_env()).cloned();
     let reply = tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<_> {
         let bytes = job.pdf.as_ref().and_then(|p| std::fs::read(p).ok());
-        let text = || anyhow::bail!("PDF text extraction isn't available on Android; use an Anthropic profile, which reads the PDF directly");
+        let text = || text.clone().context("the PDF's text could not be extracted");
         let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
         let prompt = Prompt { system: job.system, text: job.text, paper, schema: job.schema };
         let reply = llm::complete(&profile, &prompt, api_key.as_deref())?;
@@ -451,6 +488,8 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         delete_ref,
         save_raw,
         save_note,
+        ref_pdf,
+        pdf_image_regions,
         extract_annotations,
         summarize,
         export_table,
