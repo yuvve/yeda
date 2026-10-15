@@ -1,11 +1,12 @@
-use crate::annotations;
+use crate::Effect;
+use crate::annotations::Annotation;
 use crate::library::{Library, Ref, config_section};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Columns every table has, filled from the reference itself rather than by the LLM.
 pub const BUILTIN: [&str; 4] = ["key", "title", "authors", "year"];
@@ -22,7 +23,7 @@ pub struct Table {
 
 pub type Row = BTreeMap<String, String>;
 
-/// One paper's summarization request, prepared on the main thread so a worker only does I/O.
+/// One paper's summarization request; the caller sends it with the PDF at `pdf`, if that exists.
 pub struct Job {
     pub key: String,
     pub columns: Vec<String>,
@@ -42,8 +43,8 @@ Where the paper does not say something, write \"Not stated.\" \
 Follow each column's guidance when given; it takes precedence over the example rows. \
 Otherwise match the style, depth and length of the example rows when there are any. Write plain text, not Markdown.";
 
-/// `None` when the row has nothing left to fill (and `overwrite` is off).
-pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, overwrite: bool) -> Option<Job> {
+/// `annotations` are the paper's own; `None` when the row has nothing left to fill (and `overwrite` is off).
+pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, annotations: &[Annotation], overwrite: bool) -> Option<Job> {
     let existing = r.tables.get(name);
     let columns: Vec<String> = table
         .columns
@@ -57,14 +58,14 @@ pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, overwrite: bool) 
     Some(Job {
         key: r.key.clone(),
         system: SYSTEM.into(),
-        text: prompt_text(lib, name, table, r, &columns),
+        text: prompt_text(lib, name, table, r, annotations, &columns),
         schema: schema(&columns),
-        pdf: lib.pdf_path(r).ok().filter(|p| p.exists()),
+        pdf: lib.pdf_path(r).ok(),
         columns,
     })
 }
 
-fn prompt_text(lib: &Library, name: &str, table: &Table, r: &Ref, columns: &[String]) -> String {
+fn prompt_text(lib: &Library, name: &str, table: &Table, r: &Ref, annots: &[Annotation], columns: &[String]) -> String {
     let mut s = String::from("Paper metadata:\n");
     let _ = writeln!(s, "title: {}\nauthors: {}", r.title, r.authors.join("; "));
     if let Some(y) = r.year {
@@ -100,7 +101,6 @@ fn prompt_text(lib: &Library, name: &str, table: &Table, r: &Ref, columns: &[Str
         }
     }
 
-    let annots = annotations::load(&lib.annotations_dir(&r.key)).unwrap_or_default();
     if !annots.is_empty() {
         s += "\nThe reader's highlights and notes on this paper:\n";
         for a in annots {
@@ -182,9 +182,10 @@ pub fn merge(r: &mut Ref, name: &str, row: Row, overwrite: bool) {
     }
 }
 
-pub fn export_csv(lib: &Library, name: &str, path: &Path) -> Result<usize> {
+/// The table as CSV, with the number of rows.
+pub fn export_csv(lib: &Library, name: &str) -> Result<(String, usize)> {
     let table = lib.tables.get(name).with_context(|| format!("no table named '{name}'"))?;
-    let mut w = csv::Writer::from_path(path).with_context(|| path.display().to_string())?;
+    let mut w = csv::Writer::from_writer(Vec::new());
     w.write_record(BUILTIN.iter().copied().chain(table.columns.iter().map(String::as_str)))?;
     let mut n = 0;
     for r in &lib.refs {
@@ -194,8 +195,7 @@ pub fn export_csv(lib: &Library, name: &str, path: &Path) -> Result<usize> {
         w.write_record(builtin.into_iter().chain(cells))?;
         n += 1;
     }
-    w.flush()?;
-    Ok(n)
+    Ok((String::from_utf8(w.into_inner()?)?, n))
 }
 
 fn normalize(title: &str) -> String {
@@ -203,20 +203,22 @@ fn normalize(title: &str) -> String {
 }
 
 /// Imports rows from a CSV, matching references by key, then by title. Creates or extends the table.
-pub fn import_csv(lib: &mut Library, name: &str, path: &Path) -> Result<String> {
-    let mut rd = csv::Reader::from_path(path).with_context(|| path.display().to_string())?;
+/// Returns a report and the changes to apply.
+pub fn import_csv(lib: &mut Library, name: &str, csv: &str) -> Result<(String, Vec<Effect>)> {
+    let mut rd = csv::Reader::from_reader(csv.as_bytes());
+    let mut effects = Vec::new();
     let headers: Vec<String> = rd.headers()?.iter().map(String::from).collect();
     let columns: Vec<String> = headers.iter().filter(|h| !BUILTIN.contains(&h.as_str())).cloned().collect();
     let known = lib.tables.get(name).map(|t| t.columns.clone()).unwrap_or_default();
     let added: Vec<String> = columns.iter().filter(|c| !known.contains(c)).cloned().collect();
     if !added.is_empty() {
-        lib.update_config(|t| {
+        effects.push(lib.update_config(|t| {
             let def = config_section(config_section(t, "tables")?, name)?;
             let cols = def.entry("columns").or_insert_with(|| toml::Value::Array(vec![]));
             let cols = cols.as_array_mut().context("tables.<name>.columns is not an array")?;
             cols.extend(added.iter().map(|c| toml::Value::String(c.clone())));
             Ok(())
-        })?;
+        })?);
     }
 
     let by_key: HashMap<String, usize> = lib.refs.iter().enumerate().map(|(i, r)| (r.key.clone(), i)).collect();
@@ -239,14 +241,14 @@ pub fn import_csv(lib: &mut Library, name: &str, path: &Path) -> Result<String> 
             .map(|(h, v)| (h.clone(), v.to_string()))
             .collect();
         merge(&mut lib.refs[i], name, row, true);
-        lib.save(&lib.refs[i])?;
+        effects.push(lib.save(&lib.refs[i])?);
         imported += 1;
     }
     let mut report = format!("imported {imported} rows into table '{name}'");
     if !unmatched.is_empty() {
         let _ = write!(report, "; no matching reference for: {}", unmatched.join(", "));
     }
-    Ok(report)
+    Ok((report, effects))
 }
 
 #[cfg(test)]
@@ -272,18 +274,9 @@ mod tests {
 
     #[test]
     fn prompt_carries_column_guidance() {
-        let dir = std::env::temp_dir().join(format!("yeda-tables-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("refs")).unwrap();
-        std::fs::write(
-            dir.join("yeda.toml"),
-            "[tables.lit]\ncolumns = [\"contribution\", \"method\"]\n\n[tables.lit.describe]\ncontribution = \"Most important. No jargon.\"\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("refs/a2020.toml"), "title = \"A\"\n").unwrap();
-        let lib = Library::load(&dir).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-        let job = plan(&lib, "lit", &lib.tables["lit"], &lib.refs[0], false).unwrap();
+        let cfg = "[tables.lit]\ncolumns = [\"contribution\", \"method\"]\n\n[tables.lit.describe]\ncontribution = \"Most important. No jargon.\"\n";
+        let lib = Library::parse(Some(cfg), None, [("a2020".into(), "title = \"A\"\n".into())], None).unwrap();
+        let job = plan(&lib, "lit", &lib.tables["lit"], &lib.refs[0], &[], false).unwrap();
         assert!(job.text.contains("- contribution: Most important. No jargon.\n- method\n"));
         assert!(job.system.contains("objectively"));
         assert!(job.system.contains("never compare"));
@@ -294,5 +287,22 @@ mod tests {
         let s = schema(&["a b".to_string()]);
         assert_eq!(s["required"][0], "a b");
         assert_eq!(s["additionalProperties"], false);
+    }
+
+    #[test]
+    fn csv_round_trip() {
+        let cfg = "[tables.lit]\ncolumns = [\"method\"]\n";
+        let refs = [("a2020".to_string(), "title = \"Alpha\"\n".to_string()), ("b2021".into(), "title = \"Beta\"\n".into())];
+        let mut lib = Library::parse(Some(cfg), None, refs, None).unwrap();
+        let (report, effects) = import_csv(&mut lib, "lit", "key,title,method,venue\n,ALPHA,CBBA,ICRA\nzzz,,x,y\n").unwrap();
+        assert!(report.contains("imported 1 rows") && report.contains("zzz"), "{report}");
+        assert_eq!(effects.len(), 2);
+        assert_eq!(lib.refs[0].tables["lit"]["venue"], "ICRA");
+        let Effect::Write { path, .. } = &effects[0] else { panic!() };
+        assert_eq!(path, "yeda.toml");
+        lib.tables.get_mut("lit").unwrap().columns.push("venue".into());
+        let (csv, n) = export_csv(&lib, "lit").unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(csv, "key,title,authors,year,method,venue\na2020,Alpha,,,CBBA,ICRA\n");
     }
 }

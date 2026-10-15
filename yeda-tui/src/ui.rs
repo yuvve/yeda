@@ -1,6 +1,7 @@
-use crate::app::{App, Filter, Mode, Pane, PickKind, Prompt, RightView};
-use crate::annotations::Annotation;
-use crate::library::{Library, Ref};
+use crate::app::{App, Mode, Pane, PickKind, Prompt, RightView};
+use yeda_core::annotations::Annotation;
+use yeda_core::browse::Filter;
+use yeda_core::library::{Library, Ref};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui_image::StatefulImage;

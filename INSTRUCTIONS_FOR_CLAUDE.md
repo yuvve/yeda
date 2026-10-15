@@ -27,6 +27,7 @@ Decisions made with the user:
 
 - **yeda-core** holds the business logic: the on-disk format, querying, search, tables, Zotero conversion and annotation merging. It takes text or bytes and returns values or a list of `Effect`s (write, remove, copy, all with library-relative paths). It never touches `std::fs`, the network, environment variables or subprocesses. `grep -rn "std::fs\|ureq\|Command::\|env::var" yeda-core/src` must find nothing.
 - **yeda-net** holds all networking: magic-wand metadata lookup (DOI, arXiv, ISBN) and LLM requests. It never touches the disk; PDFs and API keys come in as arguments.
+- **yeda-fs** is client-side: it loads a library from a local folder and applies `Effect`s with `std::fs`. All three clients use it. It is not part of core.
 - **Clients** (yeda-tui, yeda-reader, yeda-android) do all disk I/O, apply `Effect`s atomically (write a temp file, then rename), read environment variables and run subprocesses.
 - yeda-android reuses yeda-reader's Tauri commands and frontend for the PDF view.
 - The library stays plain text and works in git. TOML holds data, Markdown holds notes.

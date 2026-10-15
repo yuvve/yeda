@@ -6668,14 +6668,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
+name = "yeda-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "lopdf",
+ "nucleo-matcher",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
+name = "yeda-fs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "yeda-core",
+]
+
+[[package]]
+name = "yeda-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "serde_json",
+ "toml 1.1.8+spec-1.1.0",
+ "ureq",
+ "yeda-core",
+]
+
+[[package]]
 name = "yeda-reader"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
- "toml 1.1.8+spec-1.1.0",
+ "yeda-core",
+ "yeda-fs",
 ]
 
 [[package]]
@@ -6683,20 +6719,15 @@ name = "yeda-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
- "csv",
  "dirs",
  "image",
- "lopdf",
- "nucleo-matcher",
  "open",
  "ratatui",
  "ratatui-image",
  "rusqlite",
- "serde",
- "serde_json",
- "toml 1.1.8+spec-1.1.0",
- "ureq",
+ "yeda-core",
+ "yeda-fs",
+ "yeda-net",
 ]
 
 [[package]]

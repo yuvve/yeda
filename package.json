@@ -1,0 +1,6 @@
+{
+	"name": "yeda",
+	"private": true,
+	"license": "AGPL-3.0",
+	"workspaces": ["yeda-reader", "yeda-android"]
+}

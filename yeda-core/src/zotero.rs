@@ -1,9 +1,9 @@
+use crate::Effect;
 use crate::annotations::{self, Annotation};
-use crate::library::{Library, Pdf, Ref, config_section};
-use anyhow::{Context, Result};
+use crate::library::{self, Library, Pdf, Ref, config_section};
+use anyhow::Result;
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const NOT_DELETED: &str = "NOT IN (SELECT itemID FROM deletedItems)";
@@ -22,26 +22,20 @@ struct Summary {
     tag_colors: usize,
 }
 
-pub fn import(zotero: &Path, lib_dir: &Path) -> Result<String> {
-    // Zotero holds an exclusive lock on its database while running, so read a copy.
-    let tmp = std::env::temp_dir().join(format!("yeda-zotero-{}", std::process::id()));
-    fs::create_dir_all(&tmp)?;
-    let result = (|| {
-        for name in ["zotero.sqlite", "zotero.sqlite-wal"] {
-            let src = zotero.join(name);
-            if src.exists() {
-                fs::copy(&src, tmp.join(name)).with_context(|| src.display().to_string())?;
-            }
-        }
-        let db = Connection::open(tmp.join("zotero.sqlite"))?;
-        import_db(&db, zotero, lib_dir)
-    })();
-    let _ = fs::remove_dir_all(&tmp);
-    result
+/// Where an image or ink annotation's PNG can come from: Zotero's render cache, else the region
+/// `rect` (PDF coordinates) of 1-based `page` of `pdf`.
+pub struct ImageSource<'a> {
+    pub cached: PathBuf,
+    pub pdf: Option<&'a Path>,
+    pub area: Option<(u32, [f32; 4])>,
 }
 
-fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
-    let mut lib = Library::load(lib_dir)?;
+pub type LoadImage<'a> = dyn FnMut(&ImageSource) -> Option<Vec<u8>> + 'a;
+
+/// Imports every item of Zotero's database `db` not yet in `lib`. `zotero` is the Zotero data
+/// folder, used to build attachment paths. Returns a report and the changes to apply.
+pub fn import(db: &Connection, zotero: &Path, mut lib: Library, home: Option<&Path>, image: &mut LoadImage) -> Result<(String, Vec<Effect>)> {
+    let mut effects = Vec::new();
     let mut new_locations = Vec::new();
     ensure_location(&mut lib, &mut new_locations, "zotero", &zotero.join("storage"));
 
@@ -134,8 +128,8 @@ fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
         let attachments = attachments(db, id, zotero)?;
         let pdf_file = attachments.iter().find_map(|(_, path)| path.clone());
         if let Some(file) = &pdf_file {
-            if file.starts_with(dirs::home_dir().unwrap_or_default()) {
-                ensure_location(&mut lib, &mut new_locations, "home", &dirs::home_dir().unwrap());
+            if let Some(home) = home.filter(|h| file.starts_with(h)) {
+                ensure_location(&mut lib, &mut new_locations, "home", home);
             }
             r.pdf = locate(&lib, file);
         }
@@ -145,30 +139,25 @@ fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
 
         r.key = citation_key
             .map(|k| k.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:.".contains(*c)).collect::<String>())
-            .filter(|k| !k.is_empty() && !lib.refs.iter().any(|x| &x.key == k) && !lib.ref_path(k).exists())
+            .filter(|k| !k.is_empty() && lib.get(k).is_none())
             .unwrap_or_else(|| lib.unique_key(&r));
-        lib.save(&r)?;
+        effects.push(lib.save(&r)?);
 
-        let dir = lib.annotations_dir(&r.key);
+        let dir = library::annotations_dir(&r.key);
         let mut annots = Vec::new();
         for (att_id, file) in &attachments {
-            import_annotations(db, *att_id, file.as_deref(), zotero, &dir, &mut annots, &mut sum)?;
+            import_annotations(db, *att_id, file.as_deref(), zotero, &dir, &mut annots, &mut effects, &mut sum, image)?;
         }
         let notes = format!(
             "SELECT i.key, n.note FROM itemNotes n JOIN items i USING(itemID) WHERE n.parentItemID = ?1 AND n.itemID {NOT_DELETED}"
         );
-        for (key, note) in query_pairs(db, &notes, id)? {
-            sum.notes += 1;
-            annots.push(Annotation {
-                id: key,
-                kind: "note".into(),
-                comment: Some(html_to_text(&note)),
-                source: "zotero".into(),
-                ..Default::default()
-            });
+        let notes: Vec<String> = query_pairs(db, &notes, id)?.iter().map(|(_, note)| html_to_text(note)).collect();
+        if !notes.is_empty() {
+            sum.notes += notes.len();
+            effects.push(Effect::write(library::note_path(&r.key), notes.join("\n\n---\n\n") + "\n"));
         }
         if !annots.is_empty() {
-            annotations::save(&dir, annots)?;
+            effects.push(Effect::write(annotations::file_path(&r.key), annotations::render(annots)?));
         }
         lib.refs.push(r);
         sum.refs += 1;
@@ -183,12 +172,11 @@ fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
             None => sum.searches_skipped.push(name),
         }
     }
-    let home = dirs::home_dir().unwrap_or_default();
-    lib.update_config(|t| {
+    effects.push(lib.update_config(|t| {
         let locations = config_section(t, "locations")?;
         for (name, base) in &new_locations {
-            let shown = match base.strip_prefix(&home) {
-                Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
+            let shown = match home.map(|h| base.strip_prefix(h)) {
+                Some(Ok(rest)) => format!("~/{}", rest.display()),
                 _ => base.display().to_string(),
             };
             locations.insert(name.clone(), shown.trim_end_matches('/').into());
@@ -208,7 +196,7 @@ fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
             }
         }
         Ok(())
-    })?;
+    })?);
 
     let mut report = format!(
         "imported {} refs ({} already imported, skipped), {} annotations, {} notes, {} images ({} could not be rendered), {} items whose pdf could not be located, {} tag colors, {} saved searches",
@@ -217,7 +205,7 @@ fn import_db(db: &Connection, zotero: &Path, lib_dir: &Path) -> Result<String> {
     if !sum.searches_skipped.is_empty() {
         report += &format!("\nsaved searches with conditions yeda cannot express (not imported): {}", sum.searches_skipped.join(", "));
     }
-    Ok(report)
+    Ok((report, effects))
 }
 
 fn tag_colors(db: &Connection) -> Result<Vec<(String, String)>> {
@@ -303,14 +291,17 @@ fn convert_search(conditions: &[Condition], collections: &HashMap<String, String
     Some(terms.join(" "))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_annotations(
     db: &Connection,
     attachment: i64,
     pdf: Option<&Path>,
     zotero: &Path,
-    dir: &Path,
+    dir: &str,
     out: &mut Vec<Annotation>,
+    effects: &mut Vec<Effect>,
     sum: &mut Summary,
+    image: &mut LoadImage,
 ) -> Result<()> {
     let mut stmt = db.prepare_cached(&format!(
         "SELECT i.key, a.type, a.text, a.comment, a.color, a.pageLabel, a.position, a.sortIndex FROM itemAnnotations a
@@ -351,20 +342,14 @@ fn import_annotations(
             ..Default::default()
         };
         if matches!(kind, "image" | "ink") {
-            let name = format!("img/{key}.png");
-            let png = dir.join(&name);
-            fs::create_dir_all(png.parent().unwrap())?;
-            let cached = zotero.join("cache/library").join(format!("{key}.png"));
-            let ok = if cached.exists() {
-                fs::copy(&cached, &png).is_ok()
-            } else {
-                pdf.zip(image_rect(&position)).is_some_and(|(pdf, (page, rect))| annotations::render_area(pdf, page, rect, &png).is_ok())
-            };
-            if ok {
-                a.image = Some(name);
-                sum.images += 1;
-            } else {
-                sum.images_missing += 1;
+            let source = ImageSource { cached: zotero.join("cache/library").join(format!("{key}.png")), pdf, area: image_rect(&position) };
+            match (annotations::image_name(&key), image(&source)) {
+                (Ok(name), Some(png)) => {
+                    effects.push(Effect::Write { path: format!("{dir}/{name}"), bytes: png });
+                    a.image = Some(name);
+                    sum.images += 1;
+                }
+                _ => sum.images_missing += 1,
             }
         }
         a.id = key;

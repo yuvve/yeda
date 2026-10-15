@@ -1,18 +1,21 @@
-use crate::annotations::{self, Annotation};
-use crate::library::{Library, Ref, STATUSES, config_section};
-use crate::llm::{self, Prompt as LlmPrompt};
-use crate::search::{self, Searcher};
-use crate::tables::{self, Row};
-use crate::wand;
+use crate::poppler;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
-use std::collections::BTreeSet;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::process::{Command, Stdio};
+use yeda_core::Effect;
+use yeda_core::annotations::{self, Annotation};
+use yeda_core::browse::{self, Filter};
+use yeda_core::library::{self, Library, Ref, config_section};
+use yeda_core::search::Searcher;
+use yeda_core::tables::{self, Row};
+use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
+use yeda_net::wand;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -48,60 +51,6 @@ pub enum RightView {
 pub enum Job {
     Fetch(String),
     ExtractAnnotations,
-}
-
-#[derive(Clone, PartialEq)]
-pub enum Filter {
-    All,
-    Search(String, String),
-    Collection(String),
-    Tag(String),
-}
-
-impl Filter {
-    pub fn name(&self) -> &str {
-        match self {
-            Filter::All => "All",
-            Filter::Search(name, _) => name,
-            Filter::Collection(c) => c,
-            Filter::Tag(t) => t,
-        }
-    }
-
-    fn accepts(&self, r: &Ref) -> bool {
-        match self {
-            Filter::All | Filter::Search(..) => true,
-            Filter::Collection(c) => r
-                .collections
-                .iter()
-                .any(|x| x == c || x.starts_with(&format!("{c}/"))),
-            Filter::Tag(t) => r.tags.contains(t),
-        }
-    }
-}
-
-fn sidebar(lib: &Library) -> Vec<Filter> {
-    let mut colls = BTreeSet::new();
-    let mut tags = BTreeSet::new();
-    for r in &lib.refs {
-        for c in &r.collections {
-            let mut prefix = String::new();
-            for part in c.split('/') {
-                if !prefix.is_empty() {
-                    prefix.push('/');
-                }
-                prefix.push_str(part);
-                colls.insert(prefix.clone());
-            }
-        }
-        tags.extend(r.tags.iter().cloned());
-    }
-    let (colored, plain): (Vec<_>, Vec<_>) = tags.into_iter().partition(|t| lib.tag_colors.contains_key(t));
-    std::iter::once(Filter::All)
-        .chain(lib.searches.iter().map(|(n, q)| Filter::Search(n.clone(), q.clone())))
-        .chain(colls.into_iter().map(Filter::Collection))
-        .chain(colored.into_iter().chain(plain).map(Filter::Tag))
-        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -151,6 +100,7 @@ struct Summarizer {
 }
 
 pub struct App {
+    pub dir: PathBuf,
     pub lib: Library,
     searcher: Searcher,
     pub query: String,
@@ -184,9 +134,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(lib: Library, picker: Picker) -> Self {
+    pub fn new(dir: PathBuf, lib: Library, picker: Picker) -> Self {
         let mut app = Self {
-            sidebar: sidebar(&lib),
+            dir,
+            sidebar: browse::sidebar(&lib),
             side_query: String::new(),
             side_visible: Vec::new(),
             lib,
@@ -230,25 +181,8 @@ impl App {
     }
 
     fn refilter(&mut self) {
-        let q = search::parse(&self.query);
         let filter = self.current_filter().clone();
-        let saved = match &filter {
-            Filter::Search(_, query) => Some(search::parse(query)),
-            _ => None,
-        };
-        let visible = self
-            .lib
-            .refs
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| {
-                filter.accepts(r)
-                    && saved.as_ref().is_none_or(|s| self.searcher.matches(s, r))
-                    && self.searcher.matches(&q, r)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        self.visible = visible;
+        self.visible = browse::visible(&mut self.searcher, &self.lib, &filter, &self.query);
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
     }
 
@@ -267,7 +201,7 @@ impl App {
 
     fn rebuild_sidebar(&mut self) {
         let current = self.current_filter().clone();
-        self.sidebar = sidebar(&self.lib);
+        self.sidebar = browse::sidebar(&self.lib);
         self.side_visible = (0..self.sidebar.len()).collect();
         self.side_sel = self.sidebar.iter().position(|f| *f == current).unwrap_or(0);
         self.refilter_sidebar(false);
@@ -280,8 +214,23 @@ impl App {
         }
     }
 
+    /// Applies `effects` to the library on disk; on failure, says so in the status line.
+    fn apply(&mut self, effects: anyhow::Result<Vec<Effect>>) -> bool {
+        match effects.and_then(|e| yeda_fs::apply(&self.dir, e)) {
+            Ok(()) => true,
+            Err(e) => {
+                self.status = format!("{e:#}");
+                false
+            }
+        }
+    }
+
+    fn path(&self, rel: &str) -> PathBuf {
+        self.dir.join(rel)
+    }
+
     pub fn reload(&mut self) {
-        match Library::load(&self.lib.dir) {
+        match crate::load_library(&self.dir) {
             Ok(lib) => {
                 self.lib = lib;
                 self.rebuild_sidebar();
@@ -384,7 +333,8 @@ impl App {
                 _ => self.status = "select a tag in the library pane to color it".into(),
             },
             (KeyCode::Char('o'), _) => self.open_pdf(),
-            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| self.lib.ref_path(&r.key)),
+            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| self.path(&library::ref_path(&r.key))),
+            (KeyCode::Char('n'), _) => self.edit = self.selected().map(|r| self.path(&library::note_path(&r.key))),
             (KeyCode::Char('t'), _) => self.open_chooser(PickKind::Tags),
             (KeyCode::Char('m'), _) => self.open_chooser(PickKind::Move),
             (KeyCode::Char(':'), _) => self.mode = Mode::Prompt(Prompt::Command),
@@ -561,15 +511,10 @@ impl App {
         let Some(&i) = self.visible.get(self.sel) else { return };
         change(&mut self.lib.refs[i]);
         let r = &self.lib.refs[i];
-        self.status = match self.lib.save(r) {
-            Ok(()) => format!(
-                "{}: tags [{}], collection {}",
-                r.key,
-                r.tags.join(", "),
-                r.collections.first().map_or("none", String::as_str)
-            ),
-            Err(e) => format!("{e:#}"),
-        };
+        let status = format!("{}: tags [{}], collection {}", r.key, r.tags.join(", "), r.collections.first().map_or("none", String::as_str));
+        if self.apply(self.lib.save(r).map(|e| vec![e])) {
+            self.status = status;
+        }
         self.rebuild_sidebar();
     }
 
@@ -620,10 +565,9 @@ impl App {
         }
     }
 
-    fn after_config_change(&mut self, result: anyhow::Result<()>) {
-        match result {
-            Ok(()) => self.reload(),
-            Err(e) => self.status = format!("{e:#}"),
+    fn after_config_change(&mut self, result: anyhow::Result<Effect>) {
+        if self.apply(result.map(|e| vec![e])) {
+            self.reload();
         }
     }
 
@@ -654,17 +598,9 @@ impl App {
 
     fn cycle_status(&mut self, forward: bool) {
         let Some(&i) = self.visible.get(self.sel) else { return };
-        let r = &mut self.lib.refs[i];
-        let n = STATUSES.len() + 1;
-        let cur = r.status.as_deref().and_then(|s| STATUSES.iter().position(|x| *x == s)).map_or(0, |p| p + 1);
-        let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
-        r.status = next.checked_sub(1).map(|p| STATUSES[p].to_string());
-        // The date belongs to the status it was imported with.
-        r.extra.remove("status_date");
-        self.status = format!("status: {}", r.status.as_deref().unwrap_or("none"));
-        if let Err(e) = self.lib.save(&self.lib.refs[i]) {
-            self.status = format!("{e:#}");
-        }
+        library::cycle_status(&mut self.lib.refs[i], forward);
+        self.status = format!("status: {}", self.lib.refs[i].status.as_deref().unwrap_or("none"));
+        self.apply(self.lib.save(&self.lib.refs[i]).map(|e| vec![e]));
         self.refilter();
     }
 
@@ -695,8 +631,12 @@ impl App {
         }
         let jobs: Vec<tables::Job> = targets
             .iter()
-            .filter_map(|&i| tables::plan(&self.lib, &table_name, &table, &self.lib.refs[i], overwrite))
+            .filter_map(|&i| {
+                let r = &self.lib.refs[i];
+                tables::plan(&self.lib, &table_name, &table, r, &self.load_annotations(&r.key), overwrite)
+            })
             .collect();
+        let key = std::env::var(profile.key_env()).ok();
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
@@ -710,8 +650,12 @@ impl App {
                     break;
                 }
                 let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name}…", job.key, i + 1)));
-                let prompt = LlmPrompt { system: job.system, text: job.text, pdf: job.pdf.as_deref(), schema: job.schema };
-                let result = llm::complete(&profile, &prompt)
+                let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
+                let path = job.pdf.clone().unwrap_or_default();
+                let text = || poppler::pdf_text(&path);
+                let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
+                let prompt = LlmPrompt { system: job.system, text: job.text, paper, schema: job.schema };
+                let result = llm::complete(&profile, &prompt, key.as_deref())
                     .and_then(|reply| Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note)))
                     .map_err(|e| format!("{e:#}"));
                 let _ = tx.send(WorkerMsg::Finished { key: job.key, result });
@@ -739,7 +683,8 @@ impl App {
                 Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
                     if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
                         tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
-                        if let Err(e) = self.lib.save(&self.lib.refs[i]) {
+                        let saved = self.lib.save(&self.lib.refs[i]).and_then(|e| yeda_fs::apply(&self.dir, [e]));
+                        if let Err(e) = saved {
                             s.failed.push(format!("{key}: {e:#}"));
                         }
                     }
@@ -774,7 +719,9 @@ impl App {
             (Some(rest), Some(home)) => home.join(rest),
             _ => PathBuf::from(path),
         };
-        self.status = match tables::export_csv(&self.lib, table, &path) {
+        let written = tables::export_csv(&self.lib, table)
+            .and_then(|(csv, n)| fs::write(&path, csv).map(|()| n).map_err(|e| anyhow::anyhow!("{}: {e}", path.display())));
+        self.status = match written {
             Ok(n) => format!("exported {n} rows of '{table}' to {}", path.display()),
             Err(e) => format!("{e:#}"),
         };
@@ -789,32 +736,44 @@ impl App {
 
     fn extract_annotations(&mut self) {
         let Some(r) = self.selected() else { return };
-        let result = self
-            .lib
-            .pdf_path(r)
-            .and_then(|pdf| annotations::sync_from_pdf(&pdf, &self.lib.annotations_dir(&r.key)));
-        self.status = match result {
-            Ok(n) => format!("{n} annotations extracted from pdf"),
-            Err(e) => format!("{e:#}"),
-        };
+        let key = r.key.clone();
+        let result = self.lib.pdf_path(r).and_then(|pdf| {
+            let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
+            let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&key)))?;
+            let words = poppler::word_boxes(&pdf)?;
+            let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
+            annotations::sync_from_pdf(&library::annotations_dir(&key), existing.as_deref(), &bytes, Some(&words), &mut render)
+        });
+        let n = result.as_ref().map_or(0, |(n, _)| *n);
+        if self.apply(result.map(|(_, effects)| effects)) {
+            self.status = format!("{n} annotations extracted from pdf");
+        }
         self.annots_key = None;
         self.image_for = None;
         self.right = RightView::Annotations;
         self.pane = Pane::Right;
     }
 
+    fn load_annotations(&self, key: &str) -> Vec<Annotation> {
+        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key))).ok().flatten();
+        text.and_then(|t| annotations::parse(&t).ok()).unwrap_or_default()
+    }
+
     /// Loads the selected ref's annotations and the selected annotation's image, if they changed.
     pub fn sync_annots(&mut self) {
         let key = self.selected().map(|r| r.key.clone());
-        let modified = key.as_ref().and_then(|k| annotations::modified(&self.lib.annotations_dir(k)));
+        let modified = key.as_ref().and_then(|k| fs::metadata(self.path(&annotations::file_path(k))).ok()?.modified().ok());
         if key != self.annots_key || modified != self.annots_modified {
             self.annots_modified = modified;
             let same_paper = key == self.annots_key;
             self.annots = match &key {
-                Some(k) => annotations::load(&self.lib.annotations_dir(k)).unwrap_or_else(|e| {
-                    self.status = format!("{e:#}");
-                    vec![]
-                }),
+                Some(k) => {
+                    let text = yeda_fs::read_optional(&self.path(&annotations::file_path(k)));
+                    text.and_then(|t| t.as_deref().map(annotations::parse).transpose()).map(Option::unwrap_or_default).unwrap_or_else(|e| {
+                        self.status = format!("{e:#}");
+                        vec![]
+                    })
+                }
                 None => vec![],
             };
             self.annots_key = key;
@@ -827,7 +786,7 @@ impl App {
             }
         }
         let want = match (&self.annots_key, self.annots.get(self.annot_sel)) {
-            (Some(k), Some(Annotation { image: Some(img), .. })) => Some(self.lib.annotations_dir(k).join(img)),
+            (Some(k), Some(Annotation { image: Some(img), .. })) => Some(self.path(&library::annotations_dir(k)).join(img)),
             _ => None,
         };
         if want != self.image_for {
@@ -850,14 +809,12 @@ impl App {
                 return;
             }
         };
-        let existing = r.doi.as_ref().and_then(|d| self.lib.refs.iter().find(|x| x.doi.as_ref() == Some(d)));
-        if let Some(x) = existing {
+        if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) {
             self.status = format!("already in library as {}", x.key);
             r.key = x.key.clone();
         } else {
             r.key = self.lib.unique_key(&r);
-            if let Err(e) = self.lib.save(&r) {
-                self.status = format!("{e:#}");
+            if !self.apply(self.lib.save(&r).map(|e| vec![e])) {
                 return;
             }
             self.status = format!("added {}", r.key);
@@ -919,7 +876,7 @@ impl App {
                         .args(words)
                         .arg(&p)
                         .arg("--annotations")
-                        .arg(self.lib.annotations_dir(&r.key))
+                        .arg(self.path(&library::annotations_dir(&r.key)))
                         .stdin(Stdio::null())
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
@@ -937,16 +894,7 @@ impl App {
 
     fn delete_selected(&mut self) {
         let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
-        if let Err(e) = std::fs::remove_file(self.lib.ref_path(&key)) {
-            self.status = e.to_string();
-            return;
-        }
-        let dir = self.lib.annotations_dir(&key);
-        if dir.exists()
-            && let Err(e) = std::fs::remove_dir_all(&dir)
-        {
-            self.status = format!("{}: {e}", dir.display());
-        }
+        self.apply(Ok(self.lib.delete(&key)));
         self.reload();
     }
 }

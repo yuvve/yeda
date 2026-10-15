@@ -1,0 +1,13 @@
+[package]
+name = "yeda-net"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+serde_json = "1.0.154"
+toml = { version = "1.1.8", features = ["preserve_order"] }
+ureq = "3.4.2"
+yeda-core = { path = "../yeda-core" }

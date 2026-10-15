@@ -1,0 +1,18 @@
+[package]
+name = "yeda-core"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+
+[features]
+zotero = ["dep:rusqlite"]
+
+[dependencies]
+anyhow = "1.0.104"
+csv = "1.4.0"
+lopdf = "0.45.0"
+nucleo-matcher = "0.3.1"
+rusqlite = { version = "0.40.2", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+toml = { version = "1.1.8", features = ["preserve_order"] }

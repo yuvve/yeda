@@ -2,23 +2,19 @@
 name = "yeda-tui"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-only"
 
 [dependencies]
+yeda-core = { path = "../yeda-core", features = ["zotero"] }
+yeda-fs = { path = "../yeda-fs" }
+yeda-net = { path = "../yeda-net" }
 anyhow = "1.0.104"
-base64 = "0.23.1"
-csv = "1.4.0"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-lopdf = "0.45.0"
-nucleo-matcher = "0.3.1"
 open = "5.4.4"
 ratatui = "0.30.2"
 ratatui-image = { version = "11", default-features = false, features = ["crossterm", "image-defaults"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
-toml = "1.1.8"
-ureq = "3.4.2"
 
 [[bin]]
 name = "yeda"

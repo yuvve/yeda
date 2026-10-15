@@ -1,50 +1,81 @@
-mod annotations;
 mod app;
-mod library;
-mod llm;
-mod search;
-mod tables;
+mod poppler;
 mod ui;
-mod wand;
-mod zotero;
 
 use anyhow::{Context, Result};
 use app::App;
-use library::Library;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::Picker;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use std::io::Write;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::{execute, terminal};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+use yeda_core::library::Library;
+use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
        yeda import-zotero <zotero data dir> [library dir]
        yeda import-table <table name> <file.csv> [library dir]";
+
+pub fn load_library(dir: &Path) -> Result<Library> {
+    let machine = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
+    yeda_fs::load_library(dir, machine.as_deref(), dirs::home_dir().as_deref())
+}
+
+fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {
+    // Zotero holds an exclusive lock on its database while running, so read a copy.
+    let tmp = std::env::temp_dir().join(format!("yeda-zotero-{}", std::process::id()));
+    fs::create_dir_all(&tmp)?;
+    let result = (|| {
+        for name in ["zotero.sqlite", "zotero.sqlite-wal"] {
+            let src = zotero.join(name);
+            if src.exists() {
+                fs::copy(&src, tmp.join(name)).with_context(|| src.display().to_string())?;
+            }
+        }
+        let db = rusqlite::Connection::open(tmp.join("zotero.sqlite"))?;
+        let mut image = |src: &zotero::ImageSource| {
+            fs::read(&src.cached).ok().or_else(|| {
+                let (page, rect) = src.area?;
+                poppler::render_area(src.pdf?, page, rect).ok()
+            })
+        };
+        let (report, effects) = zotero::import(&db, zotero, load_library(dir)?, dirs::home_dir().as_deref(), &mut image)?;
+        yeda_fs::apply(dir, effects)?;
+        Ok(report)
+    })();
+    let _ = fs::remove_dir_all(&tmp);
+    result
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("import-zotero") {
         let zotero = args.get(1).context(USAGE)?;
         let lib = args.get(2).map_or(".", String::as_str);
-        println!("{}", zotero::import(Path::new(zotero), Path::new(lib))?);
+        println!("{}", import_zotero(Path::new(zotero), Path::new(lib))?);
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("import-table") {
         let (Some(name), Some(csv)) = (args.get(1), args.get(2)) else { anyhow::bail!(USAGE) };
-        let mut lib = Library::load(Path::new(args.get(3).map_or(".", String::as_str)))?;
-        println!("{}", tables::import_csv(&mut lib, name, Path::new(csv))?);
+        let dir = Path::new(args.get(3).map_or(".", String::as_str));
+        let mut lib = load_library(dir)?;
+        let csv = fs::read_to_string(csv).with_context(|| csv.clone())?;
+        let (report, effects) = tables::import_csv(&mut lib, name, &csv)?;
+        yeda_fs::apply(dir, effects)?;
+        println!("{report}");
         return Ok(());
     }
     let dir = args.first().map(PathBuf::from).unwrap_or_else(|| ".".into());
     let dir = dir.canonicalize().unwrap_or(dir);
-    let lib = Library::load(&dir)?;
+    let lib = load_library(&dir)?;
     let mut term = ratatui::init();
     let picker = detect_picker();
-    let mut app = App::new(lib, picker);
+    let mut app = App::new(dir, lib, picker);
     let res = run(&mut term, &mut app);
     ratatui::restore();
     res
@@ -80,6 +111,9 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
         if let Some(path) = app.edit.take() {
             ratatui::restore();
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
             let result = Command::new(editor).arg(&path).status();
             terminal::enable_raw_mode()?;
