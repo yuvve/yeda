@@ -6668,6 +6668,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
+name = "yeda-android"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "toml 1.1.8+spec-1.1.0",
+ "yeda-core",
+ "yeda-fs",
+ "yeda-net",
+ "yeda-reader",
+]
+
+[[package]]
 name = "yeda-core"
 version = "0.1.0"
 dependencies = [

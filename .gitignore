@@ -2,3 +2,4 @@
 node_modules
 /yeda-reader/dist/
 /yeda-*/src-tauri/gen/schemas/
+/yeda-android/dist/

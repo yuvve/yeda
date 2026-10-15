@@ -113,9 +113,7 @@ impl Library {
             lib.default_llm = cfg.default_llm.or(lib.default_llm);
         }
         for (key, text) in refs {
-            let mut r: Ref = toml::from_str(&text).with_context(|| ref_path(&key))?;
-            r.key = key;
-            lib.refs.push(r);
+            lib.refs.push(parse_ref(key, &text)?);
         }
         lib.refs.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(lib)
@@ -183,13 +181,24 @@ impl Library {
     }
 }
 
-/// Steps through `STATUSES` and "no status"; the import date belongs to the old status, so it goes.
+pub fn parse_ref(key: String, text: &str) -> Result<Ref> {
+    let mut r: Ref = toml::from_str(text).with_context(|| ref_path(&key))?;
+    r.key = key;
+    Ok(r)
+}
+
+/// The import date belongs to the old status, so it goes.
+pub fn set_status(r: &mut Ref, status: Option<String>) {
+    r.status = status;
+    r.extra.remove("status_date");
+}
+
+/// Steps through `STATUSES` and "no status".
 pub fn cycle_status(r: &mut Ref, forward: bool) {
     let n = STATUSES.len() + 1;
     let cur = r.status.as_deref().and_then(|s| STATUSES.iter().position(|x| *x == s)).map_or(0, |p| p + 1);
     let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
-    r.status = next.checked_sub(1).map(|p| STATUSES[p].to_string());
-    r.extra.remove("status_date");
+    set_status(r, next.checked_sub(1).map(|p| STATUSES[p].to_string()));
 }
 
 pub fn config_section<'a>(table: &'a mut toml::Table, name: &str) -> Result<&'a mut toml::Table> {

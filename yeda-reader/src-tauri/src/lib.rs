@@ -64,7 +64,7 @@ fn launch(current: State<Current>) -> Option<Launch> {
 
 #[tauri::command]
 fn read_pdf(current: State<Current>) -> Result<Response, String> {
-    current.with(|doc| Ok(std::fs::read(&doc.pdf).map(Response::new).map_err(|e| anyhow::anyhow!("{}: {e}", doc.pdf.display()))?))
+    current.with(|doc| std::fs::read(&doc.pdf).map(Response::new).map_err(|e| anyhow::anyhow!("{}: {e}", doc.pdf.display())))
 }
 
 fn annotations_file(doc: &Doc) -> PathBuf {

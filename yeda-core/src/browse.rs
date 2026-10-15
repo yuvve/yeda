@@ -1,9 +1,11 @@
 use crate::library::{Library, Ref};
 use crate::search::{self, Searcher};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// An entry in the library sidebar.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "lowercase")]
 pub enum Filter {
     All,
     /// A saved search: name and query.
