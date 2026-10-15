@@ -7058,6 +7058,7 @@ dependencies = [
  "yeda-fs",
  "yeda-net",
  "yeda-reader",
+ "yeda-secrets",
 ]
 
 [[package]]

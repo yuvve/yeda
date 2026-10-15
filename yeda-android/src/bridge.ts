@@ -3,6 +3,7 @@ interface AndroidBridge {
 	hasFileAccess(): boolean;
 	requestFileAccess(callback: string): void;
 	pickFolder(callback: string): void;
+	pickPdf(callback: string): void;
 	takeOpenWithPath(): string | null;
 }
 
@@ -18,6 +19,7 @@ const desktop: AndroidBridge = {
 	hasFileAccess: () => true,
 	requestFileAccess: callback => window[callback as `yedaCallback${number}`]!(true),
 	pickFolder: callback => window[callback as `yedaCallback${number}`]!(window.prompt('Folder path')),
+	pickPdf: callback => window[callback as `yedaCallback${number}`]!(window.prompt('PDF path')),
 	takeOpenWithPath: () => null,
 };
 
@@ -39,5 +41,7 @@ export const hasFileAccess = () => android.hasFileAccess();
 export const requestFileAccess = () => bridgeCall<boolean>(cb => android.requestFileAccess(cb));
 /** The chosen folder as a file path; null if cancelled or not on local storage. */
 export const pickFolder = () => bridgeCall<string | null>(cb => android.pickFolder(cb));
+/** A PDF chosen with the file picker, as a path; null if cancelled. */
+export const pickPdf = () => bridgeCall<string | null>(cb => android.pickPdf(cb));
 /** The PDF passed through "Open with", consumed by the call. */
 export const takeOpenWithPath = () => android.takeOpenWithPath();

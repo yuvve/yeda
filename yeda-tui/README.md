@@ -9,6 +9,8 @@ yeda import-zotero <zotero data dir> [library dir]
 yeda import-table <table name> <file.csv> [library dir]
 ```
 
+When a WebDAV password or LLM API key is needed and not in the Secret Service, yeda asks for it in a masked prompt and offers to save it there. If the server rejects a saved password, it asks again.
+
 `import-zotero` imports the items, annotations, child notes (as `notes/<key>.md`), tag colours and saved searches that aren't in the library yet. It reads a copy of the database, so Zotero can stay open.
 
 yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs with it unless `reader` in `yeda.toml` names another command. Building yeda-tui builds the reader too. Annotation extraction and image rendering use poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
@@ -46,5 +48,6 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `:summarize-all[!] [table] [profile]` | The same for every visible reference |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
+| `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
 | `:keys` | List every key and command |
 | `:help` | Guide to search syntax (AND, OR, NOT, fields), filtering, sorting and saved searches |

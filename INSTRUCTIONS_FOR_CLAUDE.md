@@ -111,7 +111,7 @@ yeda-android must reach parity with yeda-tui. The exception is Zotero import, wh
    - An E-ink mode removes animations, turns scrolling into page jumps, and uses a high-contrast theme with larger touch targets.
    - Log the pressure values the WebView reports.
 2. **Low-latency ink (stretch).** A Tauri Android plugin that draws ink with androidx.graphics front-buffered rendering. Keep it only if the lag measured on the device improves.
-3. **Remote attachment storage.** WebDAV in Zotero's layout (`<key>.zip` + `<key>.prop`), then other services through `opendal`. Opening a remote PDF downloads it to a local cache. The networking goes in yeda-net; the format and location resolution go in yeda-core.
+3. **Remote attachment storage.** WebDAV in Zotero's layout is done: download on open, `:attach` uploads. Secrets are kept in the system secret store via yeda-secrets, never in files; the URL and user name go in `yeda.toml`. Other services through `opendal` are still to do.
 4. **Git sync.** A Sync button that commits, pulls and pushes over HTTPS with a token, merging `annotations.toml` by `id`.
 
 ## Verification

@@ -344,15 +344,15 @@ impl App {
             Mode::ConfirmSaveSecret => {
                 self.mode = Mode::Normal;
                 let Some(p) = self.asking.take() else { return };
-                if k.code == KeyCode::Char('y')
-                    && let Some(secret) = self.secrets.get(&p.account)
-                {
-                    self.status = match yeda_secrets::set(&p.account, secret) {
-                        Ok(()) => format!("saved {} in the secret store", p.label),
-                        Err(e) => format!("{e:#}"),
-                    };
-                }
+                let saved = match self.secrets.get(&p.account) {
+                    Some(secret) if k.code == KeyCode::Char('y') => yeda_secrets::set(&p.account, secret).err(),
+                    _ => None,
+                };
                 self.retry(p.retry);
+                // After the retry, so its own status doesn't hide that the secret wasn't saved.
+                if let Some(e) = saved {
+                    self.status = format!("not saved: {e:#}; {}", self.status);
+                }
             }
             Mode::ConfirmDelete => {
                 self.mode = Mode::Normal;

@@ -21,3 +21,4 @@ yeda-core = { path = "../../yeda-core" }
 yeda-fs = { path = "../../yeda-fs" }
 yeda-net = { path = "../../yeda-net" }
 yeda-reader = { path = "../../yeda-reader/src-tauri" }
+yeda-secrets = { path = "../../yeda-secrets" }

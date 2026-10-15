@@ -69,6 +69,15 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    /** Replies with a PDF chosen with the system file picker, as a path, or null if cancelled. */
+    @JavascriptInterface
+    fun pickPdf(callback: String) = runOnUiThread {
+      val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/pdf")
+      launchActivityForResult(pick) { result ->
+        reply(callback, result?.data?.data?.let { filePath(it) ?: copyToAppStorage(it) })
+      }
+    }
+
     /** The PDF passed through "Open with", as a path; consumed by the call. */
     @JavascriptInterface
     fun takeOpenWithPath(): String? {

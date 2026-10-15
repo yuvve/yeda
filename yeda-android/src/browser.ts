@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { hasFileAccess, pickFolder, requestFileAccess } from './bridge';
+import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
 import { inspect, plainText, Region } from './pdftext';
 
 type Filter =
@@ -14,6 +14,7 @@ interface Overview {
 	tables: string[];
 	filter_fields: [string, string][];
 	sort_fields: [string, string][];
+	locations: string[];
 }
 
 interface Sort {
@@ -64,7 +65,10 @@ interface Details {
 	tables: Record<string, string[]>;
 }
 
-type OpenRef = { status: 'opened' } | { status: 'missingLocation'; location: string };
+type OpenRef =
+	| { status: 'opened' }
+	| { status: 'missingLocation'; location: string }
+	| { status: 'needsPassword'; account: string; label: string; rejected: boolean };
 
 const STYLE = `
 .yeda { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; background: #fff; color: #000;
@@ -130,7 +134,7 @@ export function showBrowser(openReader: () => void) {
 		main, status);
 	document.body.append(style, root);
 
-	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [] };
+	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [], locations: [] };
 	let filter: Filter = { kind: 'all' };
 	let sort: Sort = { field: 'key', descending: false };
 
@@ -300,6 +304,7 @@ export function showBrowser(openReader: () => void) {
 		show(back, h('h2', {}, r.title || key),
 			h('div', { className: 'actions' },
 				r.pdf && button('Open PDF', () => run(() => openPdf(key))),
+				button(r.pdf ? 'Replace PDF' : 'Attach PDF', () => run(() => attachPdf(key))),
 				button(`Annotations (${d.annotations.length})`, () => showAnnotations(d)),
 				button(d.note ? 'Note' : 'Add note', () => showText(d, 'note')),
 				overview.tables.length > 0 && button('Tables', () => showTables(d)),
@@ -323,8 +328,61 @@ export function showBrowser(openReader: () => void) {
 				}))));
 	}
 
+	/** Asks for a password in a masked field and saves it in the Keystore; false if cancelled. */
+	function askPassword(account: string, label: string, rejected: boolean): Promise<boolean> {
+		return new Promise((resolve) => {
+			const input = h('input', { type: 'password', autocomplete: 'off' });
+			const done = async (ok: boolean) => {
+				const saved = ok && !!input.value && await run(async () => {
+					await invoke('set_secret', { account, secret: input.value });
+					return true;
+				});
+				resolve(!!saved);
+			};
+			show(h('h2', {}, 'WebDAV password'),
+				h('p', {}, rejected ? `The server rejected the password for ${label}.` : `Password for ${label}:`), input,
+				h('p', { className: 'meta' }, 'It is kept in the Android Keystore, never in the library.'),
+				h('div', { className: 'actions' }, button('OK', () => done(true)), button('Cancel', () => done(false))));
+			input.focus();
+		});
+	}
+
+	/** Runs a command that may need a WebDAV password, asking for it until it succeeds or is cancelled. */
+	async function withPassword(call: () => Promise<OpenRef>): Promise<OpenRef | null> {
+		for (;;) {
+			const result = await call();
+			if (result.status !== 'needsPassword') return result;
+			if (!(await askPassword(result.account, result.label, result.rejected))) return null;
+		}
+	}
+
+	async function attachPdf(key: string) {
+		if (overview.locations.length === 0) {
+			say('no locations in yeda.toml to attach to');
+			return;
+		}
+		const select = h('select', {}, ...overview.locations.map(l => h('option', { value: l }, l)));
+		show(h('h2', {}, 'Attach PDF'), h('p', {}, 'Location: ', select),
+			h('div', { className: 'actions' },
+				button('Choose PDF', () => run(async () => {
+					const path = await pickPdf();
+					if (!path) return;
+					say('attaching…');
+					const result = await withPassword(() => invoke<OpenRef>('attach_pdf', { key, path, location: select.value }));
+					if (result) say('attached');
+					await refresh();
+					await showDetails(key);
+				})),
+				button('Cancel', () => run(() => showDetails(key)))));
+	}
+
 	async function openPdf(key: string) {
-		const result = await invoke<OpenRef>('open_ref', { key });
+		say('opening…');
+		const result = await withPassword(() => invoke<OpenRef>('open_ref', { key }));
+		if (!result || result.status === 'needsPassword') {
+			await showDetails(key);
+			return;
+		}
 		if (result.status === 'opened') {
 			root.remove();
 			style.remove();
@@ -426,7 +484,22 @@ export function showBrowser(openReader: () => void) {
 				await refresh();
 				await showList();
 			})),
-			keyRows.length > 0 && h('h2', {}, 'LLM API keys'), ...keyRows);
+			keyRows.length > 0 && h('h2', {}, 'LLM API keys'), ...keyRows,
+			keyRows.length > 0 && h('p', { className: 'meta' }, 'Keys are kept in the Android Keystore, never in a file.'),
+			h('h2', {}, 'Settings file'),
+			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
+			button('Edit settings.toml', () => run(showSettingsFile)));
+	}
+
+	async function showSettingsFile() {
+		const area = h('textarea', { value: await invoke<string>('settings_text'), className: 'mono' });
+		show(button('← Back', () => run(showSettings)), h('h2', {}, 'settings.toml'), area,
+			h('div', { className: 'actions' }, button('Save', () => run(async () => {
+				await invoke('save_settings_text', { text: area.value });
+				say('settings saved');
+				await refresh();
+				await showSettings();
+			}))));
 	}
 
 	search.addEventListener('input', () => run(showList));

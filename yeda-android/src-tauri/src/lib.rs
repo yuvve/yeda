@@ -22,15 +22,15 @@ fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
-/// Per-device settings in the app's data folder; also the library's machine config, so its
-/// `[locations]` override `yeda.toml` for folders that live elsewhere on this device.
+/// Per-device settings in the app's data folder (`settings.toml`): the library folder, and
+/// everything else the library's machine config takes, e.g. `[locations]` overriding `yeda.toml`
+/// for folders that live elsewhere on this device. Secrets go in the Keystore, never here.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
     library: Option<PathBuf>,
-    locations: BTreeMap<String, PathBuf>,
-    /// LLM API keys by the environment variable name a profile's `api_key_env` gives.
-    keys: BTreeMap<String, String>,
+    #[serde(flatten)]
+    machine: toml::Table,
 }
 
 fn settings_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
@@ -60,10 +60,11 @@ struct Shared(Mutex<Option<Browser>>);
 impl Browser {
     fn load(app: &AppHandle) -> anyhow::Result<Browser> {
         let dir = load_settings(app)?.library;
-        let lib = match &dir {
+        let mut lib = match &dir {
             Some(d) => yeda_fs::load_library(d, Some(&settings_path(app)?), None)?,
             None => Library::default(),
         };
+        lib.cache = Some(app.path().app_cache_dir()?.join("webdav"));
         Ok(Browser { dir, lib, searcher: Searcher::new() })
     }
 
@@ -137,7 +138,26 @@ fn set_library(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<()> {
 
 #[tauri::command]
 fn set_location(app: AppHandle, state: State<Shared>, name: String, path: PathBuf) -> Res<()> {
-    update_settings(&app, |s| drop(s.locations.insert(name, path))).map_err(err)?;
+    let path = path.to_string_lossy().into_owned();
+    let mut edit = Ok(());
+    update_settings(&app, |s| edit = config_section(&mut s.machine, "locations").map(|l| drop(l.insert(name, path.into()))))
+        .map_err(err)?;
+    edit.map_err(err)?;
+    state.change(&app, |_| Ok(()))
+}
+
+/// `settings.toml` as text, for editing.
+#[tauri::command]
+fn settings_text(app: AppHandle) -> Res<String> {
+    Ok(yeda_fs::read_optional(&settings_path(&app).map_err(err)?).map_err(err)?.unwrap_or_default())
+}
+
+/// Replaces `settings.toml`, once it parses both as settings and as a machine config.
+#[tauri::command]
+fn save_settings_text(app: AppHandle, state: State<Shared>, text: String) -> Res<()> {
+    toml::from_str::<Settings>(&text).map_err(|e| e.to_string())?;
+    Library::parse(None, Some(&text), [], None).map_err(err)?;
+    yeda_fs::write_atomic(&settings_path(&app).map_err(err)?, text.as_bytes()).map_err(|e| e.to_string())?;
     state.change(&app, |_| Ok(()))
 }
 
@@ -150,21 +170,30 @@ struct KeyStatus {
 /// The API key each LLM profile needs, and whether this device has it.
 #[tauri::command]
 fn llm_keys(app: AppHandle, state: State<Shared>) -> Res<Vec<KeyStatus>> {
-    let keys = load_settings(&app).map_err(err)?.keys;
     state.with(&app, |b| {
         let mut envs: Vec<String> = b.lib.llm.values().map(|p| p.key_env().to_string()).collect();
         envs.dedup();
-        Ok(envs.into_iter().map(|env| KeyStatus { set: keys.contains_key(&env), env }).collect())
+        envs.into_iter()
+            .map(|env| Ok(KeyStatus { set: yeda_secrets::get(&yeda_secrets::llm_account(&env))?.is_some(), env }))
+            .collect()
     })
 }
 
+/// Saves an LLM API key in the Keystore; an empty key removes it.
 #[tauri::command]
-fn set_key(app: AppHandle, env: String, key: String) -> Res<()> {
-    update_settings(&app, |s| match key.trim() {
-        "" => drop(s.keys.remove(&env)),
-        k => drop(s.keys.insert(env, k.into())),
-    })
+fn set_key(env: String, key: String) -> Res<()> {
+    let account = yeda_secrets::llm_account(&env);
+    match key.trim() {
+        "" => yeda_secrets::delete(&account),
+        k => yeda_secrets::set(&account, k),
+    }
     .map_err(err)
+}
+
+/// Saves a WebDAV password in the Keystore.
+#[tauri::command]
+fn set_secret(account: String, secret: String) -> Res<()> {
+    yeda_secrets::set(&account, &secret).map_err(err)
 }
 
 #[derive(Serialize)]
@@ -182,6 +211,8 @@ struct Overview {
     filter_fields: &'static [(&'static str, &'static str)],
     /// `(field, label)` for sorting.
     sort_fields: Vec<(SortField, &'static str)>,
+    /// Every location a PDF can be attached to, local and WebDAV.
+    locations: Vec<String>,
 }
 
 /// Re-reads the library from disk, since Syncthing or another client may have changed it.
@@ -205,6 +236,7 @@ fn refresh(app: AppHandle, state: State<Shared>) -> Res<Overview> {
             tables: b.lib.tables.keys().cloned().collect(),
             filter_fields: &FILTER_FIELDS,
             sort_fields: SortField::ALL.iter().map(|f| (*f, f.name())).collect(),
+            locations: b.lib.locations.keys().chain(b.lib.remotes.keys()).cloned().collect(),
         })
     })
 }
@@ -432,7 +464,6 @@ fn extract_annotations(app: AppHandle, state: State<Shared>, key: String, words:
 /// for providers that take text rather than the PDF. Returns a note on how it went.
 #[tauri::command]
 async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table: String, overwrite: bool, text: Option<String>) -> Res<String> {
-    let keys = load_settings(&app).map_err(err)?.keys;
     let (job, profile) = state.with(&app, |b| {
         let def = b.lib.tables.get(&table).with_context(|| format!("no table named '{table}'"))?;
         let r = b.get(&key)?;
@@ -440,7 +471,7 @@ async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table:
             .with_context(|| format!("nothing to fill in '{table}'"))?;
         Ok((job, b.lib.llm_profile(None)?.1))
     })?;
-    let api_key = keys.get(profile.key_env()).cloned();
+    let api_key = yeda_secrets::get(&yeda_secrets::llm_account(profile.key_env())).map_err(err)?;
     let reply = tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<_> {
         let bytes = job.pdf.as_ref().and_then(|p| std::fs::read(p).ok());
         let text = || text.clone().context("the PDF's text could not be extracted");
@@ -472,22 +503,104 @@ fn export_table(app: AppHandle, state: State<Shared>, table: String) -> Res<Stri
 enum OpenRef {
     Opened,
     MissingLocation { location: String },
+    /// The WebDAV password for `account` isn't in the Keystore, or the server rejected it.
+    NeedsPassword { account: String, label: String, rejected: bool },
 }
 
-/// Opens the PDF of reference `key`, with its annotations in `<library>/annotations/<key>`.
+/// The password for `dav` from the Keystore, else what `open_ref` and `attach_pdf` answer.
+fn dav_password(dav: &library::Dav, rejected: bool) -> Result<String, OpenRef> {
+    let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+    let label = format!("{}@{}", dav.user, dav.url);
+    match yeda_secrets::get(&account) {
+        Ok(Some(p)) if !rejected => Ok(p),
+        _ => Err(OpenRef::NeedsPassword { account, label, rejected }),
+    }
+}
+
+/// Runs a WebDAV transfer off the main thread; a rejected password becomes `NeedsPassword`.
+async fn transfer(
+    dav: library::Dav,
+    run: impl FnOnce(&library::Dav, &str) -> anyhow::Result<()> + Send + 'static,
+) -> Res<Option<OpenRef>> {
+    let password = match dav_password(&dav, false) {
+        Ok(p) => p,
+        Err(ask) => return Ok(Some(ask)),
+    };
+    let (dav, result) = tauri::async_runtime::spawn_blocking(move || {
+        let result = run(&dav, &password);
+        (dav, result)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match result {
+        Ok(()) => Ok(None),
+        Err(e) if yeda_net::webdav::is_unauthorized(&e) => Ok(dav_password(&dav, true).err()),
+        Err(e) => Err(err(e)),
+    }
+}
+
+/// Opens the PDF of reference `key`, with its annotations in `<library>/annotations/<key>`;
+/// a PDF on WebDAV is downloaded into the cache first.
 #[tauri::command]
-fn open_ref(app: AppHandle, state: State<Shared>, current: State<Current>, key: String) -> Res<OpenRef> {
+async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, Current>, key: String) -> Res<OpenRef> {
+    let (pdf, remote) = state.with(&app, |b| {
+        let r = b.get(&key)?;
+        let remote = b.lib.remote_pdf(r).map(|rp| (rp.dav.clone(), rp.key, rp.file));
+        Ok((b.lib.pdf_path(r).ok(), remote))
+    })?;
+    if let (Some(path), Some((dav, attachment, file))) = (&pdf, remote)
+        && !path.is_file()
+    {
+        let path = path.clone();
+        let download = move |dav: &library::Dav, password: &str| {
+            let bytes = yeda_net::webdav::download(dav, password, &attachment, &file)?;
+            Ok(yeda_fs::write_atomic(&path, &bytes)?)
+        };
+        if let Some(ask) = transfer(dav, download).await? {
+            return Ok(ask);
+        }
+    }
     state.with(&app, |b| {
         let r = b.get(&key)?;
         let location = r.pdf.as_ref().map(|p| p.location.clone()).with_context(|| format!("{key} has no PDF"))?;
-        match b.lib.pdf_path(r) {
-            Ok(pdf) if pdf.is_file() => {
+        match pdf {
+            Some(pdf) if pdf.is_file() => {
                 current.open(Doc { pdf, annotations: b.path(&library::annotations_dir(&key))?, page: None });
                 Ok(OpenRef::Opened)
             }
             _ => Ok(OpenRef::MissingLocation { location }),
         }
     })
+}
+
+/// Attaches the PDF at `path` to reference `key`, copying it to `location` or uploading it there.
+#[tauri::command]
+async fn attach_pdf(app: AppHandle, state: State<'_, Shared>, key: String, path: PathBuf, location: String) -> Res<OpenRef> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as i64);
+    let (r, dest, remote) = state.with(&app, |b| {
+        let mut r = b.get(&key)?.clone();
+        r.pdf = Some(b.lib.attach(&r, &location, &path.to_string_lossy())?);
+        let remote = b.lib.remote_pdf(&r).map(|rp| (rp.dav.clone(), rp.key, rp.file));
+        let dest = b.lib.pdf_path(&r)?;
+        Ok((r, dest, remote))
+    })?;
+    if let Some((dav, attachment, file)) = remote {
+        let upload_bytes = bytes.clone();
+        let upload = move |dav: &library::Dav, password: &str| {
+            yeda_net::webdav::upload(dav, password, &attachment, &file, &upload_bytes, mtime)
+        };
+        if let Some(ask) = transfer(dav, upload).await? {
+            return Ok(ask);
+        }
+    }
+    yeda_fs::write_atomic(&dest, &bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
+    state.change(&app, |b| b.apply(vec![b.lib.save(&r)?]))?;
+    Ok(OpenRef::Opened)
 }
 
 /// Opens a PDF passed through "Open with", with a sidecar annotations folder.
@@ -525,6 +638,10 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         summarize,
         export_table,
         open_ref,
+        attach_pdf,
+        set_secret,
+        settings_text,
+        save_settings_text,
         open_pdf
     ]
 }

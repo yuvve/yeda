@@ -5,8 +5,9 @@ A reference manager whose library is plain TOML and Markdown files, kept in git.
 | Component | What it is |
 |---|---|
 | [yeda-core](yeda-core) | Library format and business logic; does no I/O |
-| [yeda-net](yeda-net) | Metadata lookup (DOI, arXiv, ISBN) and LLM requests |
+| [yeda-net](yeda-net) | Metadata lookup (DOI, arXiv, ISBN), LLM requests and WebDAV transfers |
 | [yeda-fs](yeda-fs) | Loads a library from a local folder and applies changes to it |
+| [yeda-secrets](yeda-secrets) | Passwords and API keys in the system secret store (Secret Service, Android Keystore) |
 | [yeda-tui](yeda-tui) | Terminal interface with vim keybindings |
 | [yeda-reader](yeda-reader) | Desktop PDF reader and annotator |
 | [yeda-android](yeda-android) | Android app: library browser with the reader built in |
@@ -31,6 +32,10 @@ default_llm = "claude"
 [locations]                      # pdf.location in a reference names one of these
 zotero = "~/Zotero/storage"
 
+[locations.dav]                  # a WebDAV server in Zotero's layout (<key>.zip + <key>.prop)
+url = "https://dav.example.com/zotero/"
+user = "yuvve"
+
 [tag_colors]
 "priority 1" = "#ff6666"
 
@@ -48,7 +53,9 @@ model = "claude-opus-5-5"
 
 Settings for one machine go in `~/.config/yeda/config.toml`, which uses the same keys as `yeda.toml` and overrides it. On Android, the app's settings play this role.
 
-API keys are never stored in the library. Clients read the key from the environment variable named by `api_key_env`, which defaults to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+Secrets are never stored in a file. WebDAV passwords and LLM API keys are kept in the system secret store (see [yeda-secrets](yeda-secrets)), and clients ask for them when missing. On the desktop, an LLM key can also come from the environment variable named by `api_key_env`, which defaults to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+
+PDFs on a WebDAV location are downloaded on first open into a cache (`~/.cache/yeda/<location>/<key>/<file>` on the desktop).
 
 ## Building
 
