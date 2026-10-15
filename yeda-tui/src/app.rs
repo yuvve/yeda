@@ -1,0 +1,952 @@
+use crate::annotations::{self, Annotation};
+use crate::library::{Library, Ref, STATUSES, config_section};
+use crate::llm::{self, Prompt as LlmPrompt};
+use crate::search::{self, Searcher};
+use crate::tables::{self, Row};
+use crate::wand;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::process::{Command, Stdio};
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Mode {
+    Normal,
+    Search,
+    SideSearch,
+    Pick,
+    Prompt(Prompt),
+    ConfirmDelete,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Prompt {
+    Command,
+    Add,
+    TagColor,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pane {
+    Sidebar,
+    List,
+    Right,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum RightView {
+    Details,
+    Annotations,
+    Tables,
+}
+
+pub enum Job {
+    Fetch(String),
+    ExtractAnnotations,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum Filter {
+    All,
+    Search(String, String),
+    Collection(String),
+    Tag(String),
+}
+
+impl Filter {
+    pub fn name(&self) -> &str {
+        match self {
+            Filter::All => "All",
+            Filter::Search(name, _) => name,
+            Filter::Collection(c) => c,
+            Filter::Tag(t) => t,
+        }
+    }
+
+    fn accepts(&self, r: &Ref) -> bool {
+        match self {
+            Filter::All | Filter::Search(..) => true,
+            Filter::Collection(c) => r
+                .collections
+                .iter()
+                .any(|x| x == c || x.starts_with(&format!("{c}/"))),
+            Filter::Tag(t) => r.tags.contains(t),
+        }
+    }
+}
+
+fn sidebar(lib: &Library) -> Vec<Filter> {
+    let mut colls = BTreeSet::new();
+    let mut tags = BTreeSet::new();
+    for r in &lib.refs {
+        for c in &r.collections {
+            let mut prefix = String::new();
+            for part in c.split('/') {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+                colls.insert(prefix.clone());
+            }
+        }
+        tags.extend(r.tags.iter().cloned());
+    }
+    let (colored, plain): (Vec<_>, Vec<_>) = tags.into_iter().partition(|t| lib.tag_colors.contains_key(t));
+    std::iter::once(Filter::All)
+        .chain(lib.searches.iter().map(|(n, q)| Filter::Search(n.clone(), q.clone())))
+        .chain(colls.into_iter().map(Filter::Collection))
+        .chain(colored.into_iter().chain(plain).map(Filter::Tag))
+        .collect()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum PickKind {
+    Tags,
+    Move,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum Pick {
+    Existing(String),
+    Create(String),
+    Unfile,
+}
+
+/// Dropdown for editing the selected reference's tags or moving it to a collection.
+pub struct Chooser {
+    pub kind: PickKind,
+    /// The tags being edited; written back when the chooser closes.
+    pub tags: Vec<String>,
+    pub options: Vec<(String, Pick)>,
+    pub sel: usize,
+    /// Whether the user has moved the highlight, which makes Enter act even on an empty input.
+    pub moved: bool,
+}
+
+impl Chooser {
+    pub fn active(&self, input: &str) -> bool {
+        self.moved || !input.trim().is_empty()
+    }
+}
+
+enum WorkerMsg {
+    Started(String),
+    Finished { key: String, result: Result<(Row, Option<String>), String> },
+}
+
+struct Summarizer {
+    rx: Receiver<WorkerMsg>,
+    cancel: Arc<AtomicBool>,
+    table: String,
+    overwrite: bool,
+    total: usize,
+    done: usize,
+    failed: Vec<String>,
+    notes: Vec<String>,
+}
+
+pub struct App {
+    pub lib: Library,
+    searcher: Searcher,
+    pub query: String,
+    pub mode: Mode,
+    pub input: String,
+    pub pane: Pane,
+    pub sidebar: Vec<Filter>,
+    pub side_query: String,
+    pub side_visible: Vec<usize>,
+    pub side_sel: usize,
+    pub visible: Vec<usize>,
+    pub sel: usize,
+    pub page: usize,
+    pending: Option<char>,
+    pub status: String,
+    pub quit: bool,
+    pub edit: Option<PathBuf>,
+    pub job: Option<Job>,
+    picker: Picker,
+    summarizer: Option<Summarizer>,
+    pub chooser: Option<Chooser>,
+    pub right: RightView,
+    pub table_scroll: u16,
+    table_scroll_key: Option<String>,
+    pub annots: Vec<Annotation>,
+    annots_key: Option<String>,
+    annots_modified: Option<std::time::SystemTime>,
+    pub annot_sel: usize,
+    pub image: Option<StatefulProtocol>,
+    image_for: Option<PathBuf>,
+}
+
+impl App {
+    pub fn new(lib: Library, picker: Picker) -> Self {
+        let mut app = Self {
+            sidebar: sidebar(&lib),
+            side_query: String::new(),
+            side_visible: Vec::new(),
+            lib,
+            searcher: Searcher::new(),
+            query: String::new(),
+            mode: Mode::Normal,
+            input: String::new(),
+            pane: Pane::List,
+            side_sel: 0,
+            visible: Vec::new(),
+            sel: 0,
+            page: 10,
+            pending: None,
+            status: String::new(),
+            quit: false,
+            edit: None,
+            job: None,
+            picker,
+            summarizer: None,
+            chooser: None,
+            right: RightView::Details,
+            table_scroll: 0,
+            table_scroll_key: None,
+            annots: Vec::new(),
+            annots_key: None,
+            annots_modified: None,
+            annot_sel: 0,
+            image: None,
+            image_for: None,
+        };
+        app.refilter_sidebar(false);
+        app
+    }
+
+    pub fn selected(&self) -> Option<&Ref> {
+        self.visible.get(self.sel).map(|&i| &self.lib.refs[i])
+    }
+
+    pub fn current_filter(&self) -> &Filter {
+        self.side_visible.get(self.side_sel).map_or(&Filter::All, |&i| &self.sidebar[i])
+    }
+
+    fn refilter(&mut self) {
+        let q = search::parse(&self.query);
+        let filter = self.current_filter().clone();
+        let saved = match &filter {
+            Filter::Search(_, query) => Some(search::parse(query)),
+            _ => None,
+        };
+        let visible = self
+            .lib
+            .refs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                filter.accepts(r)
+                    && saved.as_ref().is_none_or(|s| self.searcher.matches(s, r))
+                    && self.searcher.matches(&q, r)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.visible = visible;
+        self.sel = self.sel.min(self.visible.len().saturating_sub(1));
+    }
+
+    /// Selects the first match when `jump_to_first`, else keeps the current entry if it still matches.
+    fn refilter_sidebar(&mut self, jump_to_first: bool) {
+        let current = self.current_filter().clone();
+        let visible: Vec<usize> = (0..self.sidebar.len())
+            .filter(|&i| i == 0 || self.side_query.is_empty() || self.searcher.fuzzy(&self.side_query, self.sidebar[i].name()))
+            .collect();
+        self.side_visible = visible;
+        let first_match = if self.side_query.is_empty() { 0 } else { 1.min(self.side_visible.len() - 1) };
+        let pos = self.side_visible.iter().position(|&i| self.sidebar[i] == current);
+        self.side_sel = if jump_to_first { first_match } else { pos.unwrap_or(first_match) };
+        self.refilter();
+    }
+
+    fn rebuild_sidebar(&mut self) {
+        let current = self.current_filter().clone();
+        self.sidebar = sidebar(&self.lib);
+        self.side_visible = (0..self.sidebar.len()).collect();
+        self.side_sel = self.sidebar.iter().position(|f| *f == current).unwrap_or(0);
+        self.refilter_sidebar(false);
+    }
+
+    fn select_filter(&mut self, f: &Filter) {
+        if let Some(pos) = self.side_visible.iter().position(|&i| self.sidebar[i] == *f) {
+            self.side_sel = pos;
+            self.refilter();
+        }
+    }
+
+    pub fn reload(&mut self) {
+        match Library::load(&self.lib.dir) {
+            Ok(lib) => {
+                self.lib = lib;
+                self.rebuild_sidebar();
+            }
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    pub fn on_key(&mut self, k: KeyEvent) {
+        if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+        self.status.clear();
+        match self.mode {
+            Mode::Normal => self.normal_key(k),
+            Mode::ConfirmDelete => {
+                self.mode = Mode::Normal;
+                if k.code == KeyCode::Char('y') {
+                    match self.current_filter().clone() {
+                        Filter::Search(name, _) if self.pane == Pane::Sidebar => self.delete_search(&name),
+                        _ => self.delete_selected(),
+                    }
+                }
+            }
+            Mode::Pick => self.pick_key(k),
+            Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
+        }
+    }
+
+    fn normal_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let half = (self.page / 2).max(1) as isize;
+        match (k.code, self.pending.take()) {
+            (KeyCode::Char('d'), _) if ctrl => self.step(half),
+            (KeyCode::Char('u'), _) if ctrl => self.step(-half),
+            (KeyCode::Char('g'), Some('g')) => self.move_to(0),
+            (KeyCode::Char('d'), Some('d')) => match (self.pane, self.current_filter()) {
+                (Pane::Sidebar, Filter::Search(name, _)) => {
+                    self.status = format!("delete saved search '{name}'? (y/n)");
+                    self.mode = Mode::ConfirmDelete;
+                }
+                (Pane::List, _) => {
+                    if let Some(r) = self.selected() {
+                        self.status = format!("delete {}? (y/n)", r.key);
+                        self.mode = Mode::ConfirmDelete;
+                    }
+                }
+                _ => {}
+            },
+            (KeyCode::Char(c @ ('g' | 'd')), None) => self.pending = Some(c),
+            (KeyCode::Char('q'), _) => self.quit = true,
+            (KeyCode::Char('j') | KeyCode::Down, _) => self.step(1),
+            (KeyCode::Char('k') | KeyCode::Up, _) => self.step(-1),
+            (KeyCode::Char('G'), _) => self.move_to(usize::MAX),
+            (KeyCode::Char('h') | KeyCode::Left, _) => {
+                self.pane = if self.pane == Pane::Right { Pane::List } else { Pane::Sidebar }
+            }
+            (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
+                let right_focusable = self.right != RightView::Details;
+                self.pane = if self.pane == Pane::Sidebar || !right_focusable { Pane::List } else { Pane::Right }
+            }
+            (KeyCode::Tab, _) => {
+                self.pane = match self.pane {
+                    Pane::Sidebar => Pane::List,
+                    Pane::List if self.right != RightView::Details => Pane::Right,
+                    _ => Pane::Sidebar,
+                }
+            }
+            (KeyCode::Char('A'), _) => {
+                self.toggle_right(RightView::Annotations);
+            }
+            (KeyCode::Char('T'), _) => {
+                self.toggle_right(RightView::Tables);
+            }
+            (KeyCode::Char('x'), _) if self.selected().is_some() => {
+                self.status = "extracting annotations…".into();
+                self.job = Some(Job::ExtractAnnotations);
+            }
+            (KeyCode::Char('/'), _) if self.pane == Pane::Sidebar => self.mode = Mode::SideSearch,
+            (KeyCode::Char('/'), _) => {
+                self.pane = Pane::List;
+                self.mode = Mode::Search;
+            }
+            (KeyCode::Esc, _) if self.pane == Pane::Sidebar => {
+                self.side_query.clear();
+                self.refilter_sidebar(false);
+            }
+            (KeyCode::Esc, _) => {
+                self.query.clear();
+                self.refilter();
+            }
+            (KeyCode::Char('s'), _) => self.cycle_status(true),
+            (KeyCode::Char('S'), _) => self.cycle_status(false),
+            (KeyCode::Char('C'), _) => match self.current_filter() {
+                Filter::Tag(t) if self.pane == Pane::Sidebar => {
+                    self.input = self.lib.tag_colors.get(t).cloned().unwrap_or_default();
+                    self.mode = Mode::Prompt(Prompt::TagColor);
+                }
+                _ => self.status = "select a tag in the library pane to color it".into(),
+            },
+            (KeyCode::Char('o'), _) => self.open_pdf(),
+            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| self.lib.ref_path(&r.key)),
+            (KeyCode::Char('t'), _) => self.open_chooser(PickKind::Tags),
+            (KeyCode::Char('m'), _) => self.open_chooser(PickKind::Move),
+            (KeyCode::Char(':'), _) => self.mode = Mode::Prompt(Prompt::Command),
+            (KeyCode::Char('a'), _) => self.mode = Mode::Prompt(Prompt::Add),
+            _ => {}
+        }
+    }
+
+    fn input_key(&mut self, k: KeyEvent) {
+        let mode = self.mode;
+        let buf = match mode {
+            Mode::Search => &mut self.query,
+            Mode::SideSearch => &mut self.side_query,
+            _ => &mut self.input,
+        };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Char('u') if ctrl => buf.clear(),
+            KeyCode::Char('w') if ctrl => {
+                let keep = buf.trim_end().rfind(' ').map_or(0, |i| i + 1);
+                buf.truncate(keep);
+            }
+            KeyCode::Char(c) => buf.push(c),
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Esc => {
+                buf.clear();
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => {
+                if let Mode::Prompt(p) = std::mem::replace(&mut self.mode, Mode::Normal) {
+                    let text = std::mem::take(&mut self.input);
+                    self.submit(p, text.trim());
+                }
+            }
+            _ => {}
+        }
+        match mode {
+            Mode::Search => self.refilter(),
+            Mode::SideSearch => self.refilter_sidebar(true),
+            _ => {}
+        }
+    }
+
+    fn open_chooser(&mut self, kind: PickKind) {
+        let Some(r) = self.selected() else {
+            self.status = "no reference selected".into();
+            return;
+        };
+        self.chooser = Some(Chooser { kind, tags: r.tags.clone(), options: vec![], sel: 0, moved: false });
+        self.input.clear();
+        self.mode = Mode::Pick;
+        self.refresh_options();
+    }
+
+    /// Rebuilds the dropdown from the input: fuzzy matches ranked by score, then create/remove entries.
+    fn refresh_options(&mut self) {
+        let current_coll = self.selected().and_then(|r| r.collections.first().cloned());
+        let Some(c) = &mut self.chooser else { return };
+        let query = self.input.trim().to_string();
+        let mut candidates: Vec<String> = match c.kind {
+            PickKind::Tags => c.tags.clone(),
+            PickKind::Move => vec![],
+        };
+        for f in &self.sidebar {
+            match (c.kind, f) {
+                (PickKind::Tags, Filter::Tag(t)) if !candidates.contains(t) => candidates.push(t.clone()),
+                (PickKind::Move, Filter::Collection(p)) => candidates.push(p.clone()),
+                _ => {}
+            }
+        }
+        let mut scored: Vec<(u32, &String)> = candidates
+            .iter()
+            .filter_map(|t| if query.is_empty() { Some((0, t)) } else { self.searcher.score(&query, t).map(|s| (s, t)) })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        c.options = scored
+            .into_iter()
+            .map(|(_, t)| {
+                let mark = match c.kind {
+                    PickKind::Tags if c.tags.contains(t) => "✓ ",
+                    PickKind::Move if current_coll.as_ref() == Some(t) => "• ",
+                    _ => "  ",
+                };
+                (format!("{mark}{t}"), Pick::Existing(t.clone()))
+            })
+            .collect();
+        if !query.is_empty() && !candidates.contains(&query) {
+            let what = if c.kind == PickKind::Tags { "tag" } else { "collection" };
+            c.options.push((format!("+ new {what} \"{query}\""), Pick::Create(query)));
+        }
+        if c.kind == PickKind::Move && current_coll.is_some() {
+            c.options.push(("— remove from its collection".into(), Pick::Unfile));
+        }
+        c.sel = 0;
+        c.moved = false;
+    }
+
+    fn pick_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(c) = &mut self.chooser else { return };
+        let step = |c: &mut Chooser, delta: isize| {
+            if !c.options.is_empty() {
+                let n = c.options.len() as isize;
+                c.sel = (c.sel as isize + delta).rem_euclid(n) as usize;
+                c.moved = true;
+            }
+        };
+        match k.code {
+            KeyCode::Esc => self.close_chooser(),
+            KeyCode::Down | KeyCode::Tab => step(c, 1),
+            KeyCode::Char('n') if ctrl => step(c, 1),
+            KeyCode::Up | KeyCode::BackTab => step(c, -1),
+            KeyCode::Char('p') if ctrl => step(c, -1),
+            KeyCode::Char('u') if ctrl => {
+                self.input.clear();
+                self.refresh_options();
+            }
+            KeyCode::Backspace => {
+                if self.input.is_empty() && c.kind == PickKind::Tags {
+                    c.tags.pop();
+                } else {
+                    self.input.pop();
+                }
+                self.refresh_options();
+            }
+            KeyCode::Char(ch) if !ctrl => {
+                self.input.push(ch);
+                self.refresh_options();
+            }
+            KeyCode::Enter if !c.active(&self.input) => self.close_chooser(),
+            KeyCode::Enter => {
+                let Some((_, choice)) = c.options.get(c.sel).cloned() else { return };
+                match (c.kind, choice) {
+                    (PickKind::Tags, Pick::Existing(t) | Pick::Create(t)) => {
+                        match c.tags.iter().position(|x| *x == t) {
+                            Some(i) => {
+                                c.tags.remove(i);
+                            }
+                            None => c.tags.push(t),
+                        }
+                        self.input.clear();
+                        self.refresh_options();
+                    }
+                    (PickKind::Move, choice) => {
+                        let collections = match choice {
+                            Pick::Existing(p) | Pick::Create(p) => vec![p],
+                            Pick::Unfile => vec![],
+                        };
+                        self.update_selected(|r| r.collections = collections);
+                        self.close_chooser();
+                    }
+                    (PickKind::Tags, Pick::Unfile) => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Saves edited tags (a move is applied on Enter, so closing a move picker changes nothing).
+    fn close_chooser(&mut self) {
+        self.mode = Mode::Normal;
+        self.input.clear();
+        if let Some(c) = self.chooser.take()
+            && c.kind == PickKind::Tags
+            && self.selected().is_some_and(|r| r.tags != c.tags)
+        {
+            self.update_selected(|r| r.tags = c.tags);
+        }
+    }
+
+    fn update_selected(&mut self, change: impl FnOnce(&mut Ref)) {
+        let Some(&i) = self.visible.get(self.sel) else { return };
+        change(&mut self.lib.refs[i]);
+        let r = &self.lib.refs[i];
+        self.status = match self.lib.save(r) {
+            Ok(()) => format!(
+                "{}: tags [{}], collection {}",
+                r.key,
+                r.tags.join(", "),
+                r.collections.first().map_or("none", String::as_str)
+            ),
+            Err(e) => format!("{e:#}"),
+        };
+        self.rebuild_sidebar();
+    }
+
+    fn submit(&mut self, p: Prompt, text: &str) {
+        match p {
+            Prompt::Command => match text.split_once(' ').unwrap_or((text, "")) {
+                ("q" | "q!" | "quit", _) => self.quit = true,
+                ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
+                ("save", _) => self.status = "usage: :save <name>".into(),
+                (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) => {
+                    if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!')) {
+                        self.status = format!("{e:#}");
+                    }
+                }
+                ("cancel", _) => match &self.summarizer {
+                    Some(s) => {
+                        s.cancel.store(true, Ordering::Relaxed);
+                        self.status = "cancelling after the current paper…".into();
+                    }
+                    None => self.status = "nothing to cancel".into(),
+                },
+                ("export", args) => self.export(args),
+                ("", _) => {}
+                _ => self.status = format!("unknown command: {text}"),
+            },
+            Prompt::TagColor => {
+                let Filter::Tag(tag) = self.current_filter().clone() else { return };
+                if !text.is_empty() && text.parse::<ratatui::style::Color>().is_err() {
+                    self.status = format!("not a color: {text} (use #rrggbb or a name like red)");
+                    return;
+                }
+                let result = self.lib.update_config(|t| {
+                    let colors = config_section(t, "tag_colors")?;
+                    if text.is_empty() {
+                        colors.remove(&tag);
+                    } else {
+                        colors.insert(tag.clone(), text.into());
+                    }
+                    Ok(())
+                });
+                self.after_config_change(result);
+            }
+            Prompt::Add if !text.is_empty() => {
+                self.status = format!("fetching {text}…");
+                self.job = Some(Job::Fetch(text.into()));
+            }
+            _ => {}
+        }
+    }
+
+    fn after_config_change(&mut self, result: anyhow::Result<()>) {
+        match result {
+            Ok(()) => self.reload(),
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    fn save_search(&mut self, name: &str) {
+        if self.query.trim().is_empty() {
+            self.status = "nothing to save: search with / first".into();
+            return;
+        }
+        let query = std::mem::take(&mut self.query);
+        let result = self.lib.update_config(|t| {
+            config_section(t, "searches")?.insert(name.into(), query.clone().into());
+            Ok(())
+        });
+        self.after_config_change(result);
+        self.side_query.clear();
+        self.refilter_sidebar(false);
+        self.select_filter(&Filter::Search(name.into(), query));
+        self.status = format!("saved search '{name}'");
+    }
+
+    fn delete_search(&mut self, name: &str) {
+        let result = self.lib.update_config(|t| {
+            config_section(t, "searches")?.remove(name);
+            Ok(())
+        });
+        self.after_config_change(result);
+    }
+
+    fn cycle_status(&mut self, forward: bool) {
+        let Some(&i) = self.visible.get(self.sel) else { return };
+        let r = &mut self.lib.refs[i];
+        let n = STATUSES.len() + 1;
+        let cur = r.status.as_deref().and_then(|s| STATUSES.iter().position(|x| *x == s)).map_or(0, |p| p + 1);
+        let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
+        r.status = next.checked_sub(1).map(|p| STATUSES[p].to_string());
+        // The date belongs to the status it was imported with.
+        r.extra.remove("status_date");
+        self.status = format!("status: {}", r.status.as_deref().unwrap_or("none"));
+        if let Err(e) = self.lib.save(&self.lib.refs[i]) {
+            self.status = format!("{e:#}");
+        }
+        self.refilter();
+    }
+
+    fn table_name(&self, arg: Option<&str>) -> anyhow::Result<String> {
+        let names: Vec<&String> = self.lib.tables.keys().collect();
+        match arg {
+            Some(n) if self.lib.tables.contains_key(n) => Ok(n.to_string()),
+            Some(n) => anyhow::bail!("no table named '{n}' (tables: {})", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
+            None if names.len() == 1 => Ok(names[0].clone()),
+            None if names.is_empty() => anyhow::bail!("no tables defined: add [tables.<name>] to yeda.toml or run import-table"),
+            None => anyhow::bail!("several tables; name one: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
+        }
+    }
+
+    /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
+    fn summarize(&mut self, args: &str, all: bool, overwrite: bool) -> anyhow::Result<()> {
+        if self.summarizer.is_some() {
+            anyhow::bail!("a summarization is already running (:cancel stops it)");
+        }
+        let mut words = args.split_whitespace();
+        let table_name = self.table_name(words.next())?;
+        let (profile_name, profile) = self.lib.llm_profile(words.next())?;
+        let table = self.lib.tables[&table_name].clone();
+        let targets: Vec<usize> =
+            if all { self.visible.clone() } else { self.visible.get(self.sel).copied().into_iter().collect() };
+        if targets.is_empty() {
+            anyhow::bail!("no reference selected");
+        }
+        let jobs: Vec<tables::Job> = targets
+            .iter()
+            .filter_map(|&i| tables::plan(&self.lib, &table_name, &table, &self.lib.refs[i], overwrite))
+            .collect();
+        if jobs.is_empty() {
+            anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
+        }
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let total = jobs.len();
+        std::thread::spawn(move || {
+            for (i, job) in jobs.into_iter().enumerate() {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name}…", job.key, i + 1)));
+                let prompt = LlmPrompt { system: job.system, text: job.text, pdf: job.pdf.as_deref(), schema: job.schema };
+                let result = llm::complete(&profile, &prompt)
+                    .and_then(|reply| Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note)))
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(WorkerMsg::Finished { key: job.key, result });
+            }
+        });
+        self.summarizer = Some(Summarizer {
+            rx,
+            cancel,
+            table: table_name,
+            overwrite,
+            total,
+            done: 0,
+            failed: vec![],
+            notes: vec![],
+        });
+        Ok(())
+    }
+
+    /// Applies finished summaries; called from the event loop.
+    pub fn poll_worker(&mut self) {
+        let Some(s) = &mut self.summarizer else { return };
+        loop {
+            match s.rx.try_recv() {
+                Ok(WorkerMsg::Started(text)) => self.status = text,
+                Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
+                    if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
+                        tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
+                        if let Err(e) = self.lib.save(&self.lib.refs[i]) {
+                            s.failed.push(format!("{key}: {e:#}"));
+                        }
+                    }
+                    s.done += 1;
+                    s.notes.extend(note.map(|n| format!("{key}: {n}")));
+                }
+                Ok(WorkerMsg::Finished { key, result: Err(e) }) => s.failed.push(format!("{key}: {e}")),
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    let mut msg = format!("summarized {}/{} into '{}'", s.done, s.total, s.table);
+                    if !s.failed.is_empty() {
+                        msg += &format!("; {} failed: {}", s.failed.len(), s.failed.join(" | "));
+                    }
+                    if !s.notes.is_empty() {
+                        msg += &format!("; {}", s.notes.join(" | "));
+                    }
+                    self.status = msg;
+                    self.summarizer = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn export(&mut self, args: &str) {
+        let Some((table, path)) = args.trim().split_once(' ') else {
+            self.status = "usage: :export <table> <file.csv>".into();
+            return;
+        };
+        let path = path.trim();
+        let path = match (path.strip_prefix("~/"), dirs::home_dir()) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(path),
+        };
+        self.status = match tables::export_csv(&self.lib, table, &path) {
+            Ok(n) => format!("exported {n} rows of '{table}' to {}", path.display()),
+            Err(e) => format!("{e:#}"),
+        };
+    }
+
+    pub fn run_job(&mut self, job: Job) {
+        match job {
+            Job::Fetch(input) => self.add_from(&input),
+            Job::ExtractAnnotations => self.extract_annotations(),
+        }
+    }
+
+    fn extract_annotations(&mut self) {
+        let Some(r) = self.selected() else { return };
+        let result = self
+            .lib
+            .pdf_path(r)
+            .and_then(|pdf| annotations::sync_from_pdf(&pdf, &self.lib.annotations_dir(&r.key)));
+        self.status = match result {
+            Ok(n) => format!("{n} annotations extracted from pdf"),
+            Err(e) => format!("{e:#}"),
+        };
+        self.annots_key = None;
+        self.image_for = None;
+        self.right = RightView::Annotations;
+        self.pane = Pane::Right;
+    }
+
+    /// Loads the selected ref's annotations and the selected annotation's image, if they changed.
+    pub fn sync_annots(&mut self) {
+        let key = self.selected().map(|r| r.key.clone());
+        let modified = key.as_ref().and_then(|k| annotations::modified(&self.lib.annotations_dir(k)));
+        if key != self.annots_key || modified != self.annots_modified {
+            self.annots_modified = modified;
+            let same_paper = key == self.annots_key;
+            self.annots = match &key {
+                Some(k) => annotations::load(&self.lib.annotations_dir(k)).unwrap_or_else(|e| {
+                    self.status = format!("{e:#}");
+                    vec![]
+                }),
+                None => vec![],
+            };
+            self.annots_key = key;
+            if same_paper {
+                // The file changed on disk (e.g. yeda-reader saved): keep the selection, re-read the image.
+                self.annot_sel = self.annot_sel.min(self.annots.len().saturating_sub(1));
+                self.image_for = None;
+            } else {
+                self.annot_sel = 0;
+            }
+        }
+        let want = match (&self.annots_key, self.annots.get(self.annot_sel)) {
+            (Some(k), Some(Annotation { image: Some(img), .. })) => Some(self.lib.annotations_dir(k).join(img)),
+            _ => None,
+        };
+        if want != self.image_for {
+            self.image = want.as_ref().and_then(|p| match image::open(p) {
+                Ok(img) => Some(self.picker.new_resize_protocol(img)),
+                Err(e) => {
+                    self.status = format!("{}: {e}", p.display());
+                    None
+                }
+            });
+            self.image_for = want;
+        }
+    }
+
+    fn add_from(&mut self, input: &str) {
+        let mut r = match wand::fetch(input) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = format!("{e:#}");
+                return;
+            }
+        };
+        let existing = r.doi.as_ref().and_then(|d| self.lib.refs.iter().find(|x| x.doi.as_ref() == Some(d)));
+        if let Some(x) = existing {
+            self.status = format!("already in library as {}", x.key);
+            r.key = x.key.clone();
+        } else {
+            r.key = self.lib.unique_key(&r);
+            if let Err(e) = self.lib.save(&r) {
+                self.status = format!("{e:#}");
+                return;
+            }
+            self.status = format!("added {}", r.key);
+            self.reload();
+        }
+        self.query.clear();
+        self.side_query.clear();
+        self.refilter_sidebar(false);
+        self.select_filter(&Filter::All);
+        self.pane = Pane::List;
+        if let Some(pos) = self.visible.iter().position(|&i| self.lib.refs[i].key == r.key) {
+            self.sel = pos;
+        }
+    }
+
+    fn toggle_right(&mut self, view: RightView) {
+        self.right = if self.right == view { RightView::Details } else { view };
+        self.pane = if self.right == RightView::Details { Pane::List } else { Pane::Right };
+    }
+
+    /// Scrolls the tables view back to the top when the selected reference changes.
+    pub fn sync_table_scroll(&mut self) {
+        let key = self.selected().map(|r| r.key.clone());
+        if key != self.table_scroll_key {
+            self.table_scroll = 0;
+            self.table_scroll_key = key;
+        }
+    }
+
+    fn step(&mut self, delta: isize) {
+        let cur = match self.pane {
+            Pane::Sidebar => self.side_sel,
+            Pane::List => self.sel,
+            Pane::Right if self.right == RightView::Tables => self.table_scroll as usize,
+            Pane::Right => self.annot_sel,
+        };
+        self.move_to(cur.saturating_add_signed(delta));
+    }
+
+    fn move_to(&mut self, i: usize) {
+        match self.pane {
+            Pane::Sidebar => {
+                self.side_sel = i.min(self.side_visible.len() - 1);
+                self.refilter();
+            }
+            Pane::List => self.sel = i.min(self.visible.len().saturating_sub(1)),
+            Pane::Right if self.right == RightView::Tables => self.table_scroll = i.min(u16::MAX as usize) as u16,
+            Pane::Right => self.annot_sel = i.min(self.annots.len().saturating_sub(1)),
+        }
+    }
+
+    fn open_pdf(&mut self) {
+        let Some(r) = self.selected() else { return };
+        match self.lib.pdf_path(r) {
+            Ok(p) if !p.exists() => self.status = format!("missing: {}", p.display()),
+            Ok(p) => {
+                let result = match self.lib.reader.as_deref().map(str::split_whitespace) {
+                    Some(mut words) => Command::new(words.next().unwrap_or_default())
+                        .args(words)
+                        .arg(&p)
+                        .arg("--annotations")
+                        .arg(self.lib.annotations_dir(&r.key))
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .map(drop),
+                    None => open::that_detached(&p),
+                };
+                if let Err(e) = result {
+                    self.status = format!("{}: {e}", p.display());
+                }
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+
+    fn delete_selected(&mut self) {
+        let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
+        if let Err(e) = std::fs::remove_file(self.lib.ref_path(&key)) {
+            self.status = e.to_string();
+            return;
+        }
+        let dir = self.lib.annotations_dir(&key);
+        if dir.exists()
+            && let Err(e) = std::fs::remove_dir_all(&dir)
+        {
+            self.status = format!("{}: {e}", dir.display());
+        }
+        self.reload();
+    }
+}

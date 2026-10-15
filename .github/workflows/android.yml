@@ -1,0 +1,68 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            reader/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      - run: npm run build:reader
+
+      # The generated Android project isn't committed yet, so it is created fresh on each run.
+      - name: Build APK
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: |
+          [ -d src-tauri/gen/android ] || npx tauri android init --ci
+          npx tauri android build --apk --target aarch64 --ci
+
+      # Without a keystore secret, a throwaway key signs the APK; installing a later build then needs an uninstall first.
+      - name: Sign APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          else
+            KEYSTORE_PASSWORD=throwaway
+            keytool -genkeypair -keystore release.jks -storepass "$KEYSTORE_PASSWORD" -alias release \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=yeda-reader"
+          fi
+          unsigned=$(find src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --out yeda-reader.apk "$unsigned"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yeda-reader-apk
+          path: yeda-reader.apk
