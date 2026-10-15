@@ -27,15 +27,25 @@ pub enum Mode {
     ConfirmDelete,
     Filter,
     Sort,
-    Help,
+    Help(HelpPage),
 }
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum HelpPage {
+    /// `HELP`, from `?` or `:keys`.
+    Keys,
+    /// `GUIDE`, from `:help`.
+    Guide,
+}
+
+pub const GUIDE: &str = include_str!("guide.txt");
 
 /// Every key and command, as `:help` lists them.
 pub const HELP: &[(&str, &str)] = &[
     ("j k Ctrl-d Ctrl-u gg G", "move"),
     ("h l Tab", "switch column"),
     ("c", "show only the current column; again to show all"),
-    ("/", "search; in the library column, filter it"),
+    ("/", "search; in the library column, filter it (:help explains the syntax)"),
     ("f", "filter by field"),
     ("s", "sort"),
     ("Esc", "clear the search"),
@@ -48,6 +58,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("x", "extract the annotations embedded in the PDF"),
     ("C", "colour the selected tag (library column)"),
     ("dd", "delete the reference or saved search"),
+    ("?", "this list"),
     ("q", "quit"),
     ("", ""),
     (":save <name>", "save the current search"),
@@ -55,7 +66,8 @@ pub const HELP: &[(&str, &str)] = &[
     (":summarize-all[!] [table] [profile]", "the same for every visible reference"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
-    (":help  :keys", "this list"),
+    (":keys", "this list"),
+    (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
     (":q", "quit"),
 ];
 
@@ -311,7 +323,7 @@ impl App {
             Mode::Pick => self.pick_key(k),
             Mode::Filter => self.filter_key(k),
             Mode::Sort => self.sort_key(k),
-            Mode::Help => self.help_key(k),
+            Mode::Help(_) => self.help_key(k),
             Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
         }
     }
@@ -381,6 +393,7 @@ impl App {
             (KeyCode::Char('r'), _) => self.cycle_status(true),
             (KeyCode::Char('R'), _) => self.cycle_status(false),
             (KeyCode::Char('c'), _) => self.focus = !self.focus,
+            (KeyCode::Char('?'), _) => self.open_help(HelpPage::Keys),
             (KeyCode::Char('f'), _) => self.open_filter(),
             (KeyCode::Char('s'), _) => {
                 self.sort_sel = SortField::ALL.iter().position(|f| *f == self.sort.field).unwrap_or(0);
@@ -511,6 +524,11 @@ impl App {
         }
     }
 
+    fn open_help(&mut self, page: HelpPage) {
+        self.help_scroll = 0;
+        self.mode = Mode::Help(page);
+    }
+
     fn help_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let half = (self.page / 2).max(1) as u16;
@@ -521,7 +539,7 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
             KeyCode::Char('k') | KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
             KeyCode::Char('g') => self.help_scroll = 0,
-            KeyCode::Char('G') => self.help_scroll = HELP.len() as u16,
+            KeyCode::Char('G') => self.help_scroll = u16::MAX,
             _ => {}
         }
     }
@@ -675,10 +693,8 @@ impl App {
                         self.status = format!("{e:#}");
                     }
                 }
-                ("help" | "keys", _) => {
-                    self.help_scroll = 0;
-                    self.mode = Mode::Help;
-                }
+                ("help", _) => self.open_help(HelpPage::Guide),
+                ("keys", _) => self.open_help(HelpPage::Keys),
                 ("cancel", _) => match &self.summarizer {
                     Some(s) => {
                         s.cancel.store(true, Ordering::Relaxed);
@@ -1033,7 +1049,10 @@ impl App {
                     .stderr(Stdio::null())
                     .spawn();
                 if let Err(e) = result {
-                    self.status = format!("{}: {e} (set reader in yeda.toml)", program.display());
+                    self.status = format!(
+                        "{}: {e} (install it with `cargo install --path yeda-reader/src-tauri`, or set reader in yeda.toml)",
+                        program.display()
+                    );
                 }
             }
             Err(e) => self.status = e.to_string(),

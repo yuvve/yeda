@@ -19,7 +19,7 @@ PDFs open in yeda-reader: the one next to the `yeda` binary, else the one on `PA
 | `j` `k` `Ctrl-d` `Ctrl-u` `gg` `G` | Move |
 | `h` `l` `Tab` | Switch column: library, references, right column |
 | `c` | Show only the current column; again to show all |
-| `/` | Search; in the library column, filter it |
+| `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
 | `f` | Filter by field in a popup (edits the same query as `/`) |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
@@ -32,6 +32,7 @@ PDFs open in yeda-reader: the one next to the `yeda` binary, else the one on `PA
 | `x` | Extract the annotations embedded in the PDF |
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |
+| `?` | List every key and command |
 | `:` | Command |
 | `q` | Quit |
 
@@ -44,4 +45,5 @@ PDFs open in yeda-reader: the one next to the `yeda` binary, else the one on `PA
 | `:summarize-all[!] [table] [profile]` | The same for every visible reference |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
-| `:help`, `:keys` | List every key and command |
+| `:keys` | List every key and command |
+| `:help` | Guide to search syntax (AND, OR, NOT, fields), filtering, sorting and saved searches |

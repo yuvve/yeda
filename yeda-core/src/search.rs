@@ -78,6 +78,22 @@ pub fn compose(fields: &[(String, String)], free: &str) -> String {
         .join(" ")
 }
 
+/// Splits on spaces that aren't escaped as `\\ ` (quoted phrases are escaped by `parse`).
+fn words(free: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = free.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b' ' && (i == 0 || bytes[i - 1] != b'\\') {
+            out.push(&free[start..i]);
+            start = i + 1;
+        }
+    }
+    out.push(&free[start..]);
+    out.retain(|w| !w.is_empty());
+    out
+}
+
 fn escape_spaces(s: &str) -> String {
     s.replace(' ', "\\ ")
 }
@@ -122,13 +138,16 @@ impl Searcher {
         self.score(needle, hay).is_some()
     }
 
+    /// Every field term and free-text word must match (AND); within one, `|` separates
+    /// alternatives of which one must match (OR).
     pub fn matches(&mut self, q: &Query, r: &Ref) -> bool {
         for (name, value) in &q.fields {
             let values = field_values(r, name);
+            let any = |s: &mut Self, v: &str| v.split('|').any(|alt| values.iter().any(|x| s.fuzzy(&escape_spaces(alt), x)));
             let ok = match value.strip_prefix('!') {
                 _ if value.is_empty() => values.iter().all(|v| v.is_empty()),
-                Some(v) => !values.iter().any(|x| self.fuzzy(&escape_spaces(v), x)),
-                None => values.iter().any(|x| self.fuzzy(&escape_spaces(value), x)),
+                Some(v) => !any(self, v),
+                None => any(self, value),
             };
             if !ok {
                 return false;
@@ -139,7 +158,7 @@ impl Searcher {
         }
         let year = r.year.map(|y| y.to_string()).unwrap_or_default();
         let hay = format!("{} {} {} {} {}", r.key, r.title, r.authors.join(" "), year, r.tags.join(" "));
-        self.fuzzy(&q.free, &hay)
+        words(&q.free).iter().all(|w| w.split('|').any(|alt| self.fuzzy(alt, &hay)))
     }
 }
 
@@ -189,5 +208,20 @@ mod tests {
         let q = compose(&fields, "deep learning");
         assert_eq!(q, r#"author:smith status:"To Read" doi:"" deep learning"#);
         assert_eq!(parse(&q), Query { fields, free: "deep learning".into() });
+    }
+
+    #[test]
+    fn alternatives_match_any() {
+        let r = Ref { key: "k".into(), title: "Deep Learning for Cats".into(), tags: vec!["ml".into(), "priority 1".into()], year: Some(2020), ..Default::default() };
+        let mut s = Searcher::new();
+        assert!(s.matches(&parse("tag:physics|ml"), &r));
+        assert!(!s.matches(&parse("tag:physics|chemistry"), &r));
+        assert!(s.matches(&parse(r#"tag:"'priority 1|'priority 2""#), &r));
+        assert!(!s.matches(&parse("tag:!physics|ml"), &r));
+        assert!(s.matches(&parse("year:2019|2020"), &r));
+        assert!(s.matches(&parse("dogs|cats learning"), &r));
+        assert!(!s.matches(&parse("dogs|birds learning"), &r));
+        assert!(s.matches(&parse(r#""for cats" deep"#), &r));
+        assert_eq!(words(r"a b\ c  d"), ["a", r"b\ c", "d"]);
     }
 }

@@ -1,4 +1,4 @@
-use crate::app::{App, HELP, Mode, Pane, PickKind, Prompt, RightView};
+use crate::app::{App, GUIDE, HELP, HelpPage, Mode, Pane, PickKind, Prompt, RightView};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
 use yeda_core::annotations::Annotation;
@@ -251,7 +251,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
-        Mode::Help => draw_help(f, app, main),
+        Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
     }
 }
@@ -302,17 +302,28 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
     );
 }
 
-fn draw_help(f: &mut Frame, app: &mut App, main: Rect) {
-    let width = HELP.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
-    let lines: Vec<Line> = HELP
-        .iter()
-        .map(|(k, v)| Line::from(vec![Span::styled(format!("{k:<width$}  "), Style::new().fg(Color::Cyan)), Span::raw(*v)]))
-        .collect();
-    let area = popup(main, 100, lines.len() as u16 + 2);
+fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
+    let (title, lines): (&str, Vec<Line>) = match page {
+        HelpPage::Keys => {
+            let width = HELP.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+            let lines = HELP
+                .iter()
+                .map(|(k, v)| Line::from(vec![Span::styled(format!("{k:<width$}  "), Style::new().fg(Color::Cyan)), Span::raw(*v)]))
+                .collect();
+            (" Keys · j/k scroll · q close · :help for the guide ", lines)
+        }
+        HelpPage::Guide => {
+            // Headings are the unindented lines.
+            let lines = GUIDE
+                .lines()
+                .map(|l| if l.starts_with(' ') || l.is_empty() { Line::from(l) } else { Line::from(l).bold().fg(Color::Cyan) })
+                .collect();
+            (" Guide · j/k Ctrl-d/u scroll · q close ", lines)
+        }
+    };
+    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2;
+    let area = popup(main, width, lines.len() as u16 + 2);
     app.help_scroll = app.help_scroll.min((lines.len() as u16).saturating_sub(area.height.saturating_sub(2)));
     f.render_widget(Clear, area);
-    f.render_widget(
-        Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(" Keys · j/k scroll · q close ".into(), true)),
-        area,
-    );
+    f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(title.into(), true)), area);
 }

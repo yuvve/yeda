@@ -6,7 +6,7 @@ The library format and the logic on top of it. It reads no files, makes no netwo
 |---|---|
 | `library` | `Library::parse` from `yeda.toml`, the machine config and `refs/*.toml`; saving, deleting and config edits as effects; PDF path resolution; reading status |
 | `browse` | Sidebar entries (saved searches, collections, tags) and the references a filter and query select |
-| `search` | Query parsing (`field:value`, `!` negation, `""` for an empty field) and fuzzy matching |
+| `search` | Query parsing (`field:value`, `\|` alternatives, `!` negation, `""` for an empty field), fuzzy matching, and composing a query from fields |
 | `annotations` | `annotations.toml`: typed parsing, merge and delete by `id`, and extraction of the annotations embedded in a PDF |
 | `tables` | LLM prompts for literature tables, parsing the model's reply, and CSV import and export |
 | `ids` | Recognising DOIs, arXiv IDs and ISBNs |

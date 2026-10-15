@@ -1,0 +1,76 @@
+SEARCHING  ( / )
+
+  Type words to narrow the list. Matching is fuzzy and ignores case: the
+  letters must appear in order, so "dplearn" finds "Deep Learning". Plain words
+  are matched against the key, title, authors, year and tags.
+
+  AND   Separate terms with spaces; every term must match.
+          swarm 2021              swarm AND 2021
+          author:smith tag:ml     both conditions
+  OR    Separate alternatives with | inside one term.
+          tag:ml|vision           tagged ml OR vision
+          swarm|flocking robot    (swarm OR flocking) AND robot
+  NOT   Put ! before a word or a field's value.
+          !survey                 nothing that matches "survey"
+          tag:!read               not tagged read
+          tag:!ml|vision          tagged neither ml nor vision
+
+  There are no parentheses: an OR covers a single term only.
+
+EXACT MATCHES
+
+  'word     contains exactly "word" (no fuzzy matching)
+  ^word     starts with "word"
+  word$     ends with "word"
+  ^word$    is exactly "word"
+  "a b"     quotes keep a phrase together:  "multi robot"
+
+FIELDS
+
+  name:value searches only one field:
+    author  title  year  doi  type  tag  coll (collection)  key  status
+  Any other field in a reference file also works (journal:, publisher:,
+  abstract:, ...), as does any table column.
+
+    status:"^To Read$"        exactly that status (quote values with spaces)
+    coll:^thesis              in "thesis" or any sub-collection of it
+    year:2023|2024|2025       years are text, so list them; there are no ranges
+    doi:""                    the field is empty: references without a DOI
+    status:""                 references without a reading status
+
+FILTER  ( f )
+
+  A form with one box per field (author, title, year, tag, collection,
+  status, type, DOI) plus free text. It edits the same query as /, so
+  everything above works inside the boxes, | and ! included. Tab moves
+  between boxes, Enter applies, Esc cancels.
+
+SORT  ( s )
+
+  Choose key, title, first author, year, reading status or type. Choosing the
+  current field again reverses the order. References missing the field always
+  go last.
+
+SAVED (CUSTOM) SEARCHES
+
+  1. Search with / or f until the list shows what you want.
+  2. Type  :save <name>
+  The search appears near the top of the library column, marked ⌕. Select it
+  to show its references; a / search then narrows within it (AND). To delete
+  it, select it in the library column and press dd.
+
+  Saved searches live in yeda.toml, so you can also write them by hand:
+
+    [searches]
+    "To read"          = 'status:"^To Read$"'
+    "Thesis, unread"   = 'coll:^thesis status:!^Read$'
+    "Vision or ML"     = 'tag:vision|ml'
+
+  The library column also lists every collection (a collection includes its
+  sub-collections) and every tag. Selecting one filters the list the same way.
+
+TABLES
+
+  Define literature tables in yeda.toml under [tables.<name>]. Then
+  :summarize fills the selected reference's row using an LLM profile from
+  [llm.<name>], and T shows the rows. See :keys for every command.
