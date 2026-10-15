@@ -55,6 +55,29 @@ pub fn parse(q: &str) -> Query {
     Query { fields, free: free.join(" ") }
 }
 
+/// The fields a filter form offers, as `(field name, label)`.
+pub const FILTER_FIELDS: [(&str, &str); 8] = [
+    ("author", "Author"),
+    ("title", "Title"),
+    ("year", "Year"),
+    ("tag", "Tag"),
+    ("coll", "Collection"),
+    ("status", "Status"),
+    ("type", "Type"),
+    ("doi", "DOI"),
+];
+
+/// Writes a query that `parse` reads back as these field terms and free text.
+pub fn compose(fields: &[(String, String)], free: &str) -> String {
+    let quote = |v: &str| if v.contains(char::is_whitespace) || v.is_empty() { format!("\"{v}\"") } else { v.to_string() };
+    fields
+        .iter()
+        .map(|(name, value)| format!("{name}:{}", quote(value)))
+        .chain(Some(free.trim().to_string()).filter(|f| !f.is_empty()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn escape_spaces(s: &str) -> String {
     s.replace(' ', "\\ ")
 }
@@ -158,5 +181,13 @@ mod tests {
         assert!(!s.matches(&parse("year:2021"), &r));
         assert!(!s.matches(&parse("author:doe"), &r));
         assert!(!s.matches(&parse("quantum"), &r));
+    }
+
+    #[test]
+    fn compose_round_trips_through_parse() {
+        let fields = vec![("author".to_string(), "smith".to_string()), ("status".into(), "To Read".into()), ("doi".into(), "".into())];
+        let q = compose(&fields, "deep learning");
+        assert_eq!(q, r#"author:smith status:"To Read" doi:"" deep learning"#);
+        assert_eq!(parse(&q), Query { fields, free: "deep learning".into() });
     }
 }

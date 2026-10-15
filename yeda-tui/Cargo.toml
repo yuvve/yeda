@@ -11,7 +11,6 @@ yeda-net = { path = "../yeda-net" }
 anyhow = "1.0.104"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-open = "5.4.4"
 ratatui = "0.30.2"
 ratatui-image = { version = "11", default-features = false, features = ["crossterm", "image-defaults"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

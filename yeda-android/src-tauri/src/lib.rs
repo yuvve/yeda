@@ -8,9 +8,9 @@ use std::sync::Mutex;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Manager, State};
 use yeda_core::annotations::{self, Annotation};
-use yeda_core::browse::{self, Filter};
+use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
-use yeda_core::search::Searcher;
+use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::{Effect, tables};
 use yeda_net::llm::{self, Paper, Prompt};
 use yeda_net::wand;
@@ -178,6 +178,10 @@ struct Overview {
     sidebar: Vec<SideEntry>,
     statuses: &'static [&'static str],
     tables: Vec<String>,
+    /// `(field, label)` for the filter form.
+    filter_fields: &'static [(&'static str, &'static str)],
+    /// `(field, label)` for sorting.
+    sort_fields: Vec<(SortField, &'static str)>,
 }
 
 /// Re-reads the library from disk, since Syncthing or another client may have changed it.
@@ -195,7 +199,13 @@ fn refresh(app: AppHandle, state: State<Shared>) -> Res<Overview> {
                 SideEntry { filter, color }
             })
             .collect();
-        Ok(Overview { sidebar, statuses: &library::STATUSES, tables: b.lib.tables.keys().cloned().collect() })
+        Ok(Overview {
+            sidebar,
+            statuses: &library::STATUSES,
+            tables: b.lib.tables.keys().cloned().collect(),
+            filter_fields: &FILTER_FIELDS,
+            sort_fields: SortField::ALL.iter().map(|f| (*f, f.name())).collect(),
+        })
     })
 }
 
@@ -211,9 +221,10 @@ struct Row {
 }
 
 #[tauri::command]
-fn list(app: AppHandle, state: State<Shared>, filter: Filter, query: String) -> Res<Vec<Row>> {
+fn list(app: AppHandle, state: State<Shared>, filter: Filter, query: String, sort: Sort) -> Res<Vec<Row>> {
     state.with(&app, |b| {
-        let visible = browse::visible(&mut b.searcher, &b.lib, &filter, &query);
+        let mut visible = browse::visible(&mut b.searcher, &b.lib, &filter, &query);
+        browse::sort(&b.lib, &mut visible, sort);
         Ok(visible
             .into_iter()
             .map(|i| {
@@ -230,6 +241,24 @@ fn list(app: AppHandle, state: State<Shared>, filter: Filter, query: String) -> 
             })
             .collect())
     })
+}
+
+#[derive(Serialize)]
+struct QueryFields {
+    fields: Vec<(String, String)>,
+    free: String,
+}
+
+/// A query's field terms and free text, for the filter form.
+#[tauri::command]
+fn parse_query(query: String) -> QueryFields {
+    let q = search::parse(&query);
+    QueryFields { fields: q.fields, free: q.free.replace("\\ ", " ") }
+}
+
+#[tauri::command]
+fn compose_query(fields: Vec<(String, String)>, free: String) -> String {
+    search::compose(&fields, &free)
 }
 
 #[derive(Serialize)]
@@ -476,6 +505,8 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         set_key,
         refresh,
         list,
+        parse_query,
+        compose_query,
         details,
         annotation_image,
         set_status,

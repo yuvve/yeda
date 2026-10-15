@@ -12,6 +12,13 @@ interface Overview {
 	sidebar: { filter: Filter; color: string | null }[];
 	statuses: string[];
 	tables: string[];
+	filter_fields: [string, string][];
+	sort_fields: [string, string][];
+}
+
+interface Sort {
+	field: string;
+	descending: boolean;
 }
 
 interface Row {
@@ -116,14 +123,16 @@ export function showBrowser(openReader: () => void) {
 	const main = h('main');
 	const search = h('input', { type: 'search', placeholder: 'Search (author:smith year:2020 …)' });
 	const filterButton = h('button');
+	const sortButton = h('button', { onclick: () => showSortMenu() });
 	const root = h('div', { className: 'yeda' },
-		h('div', { className: 'bar' }, filterButton, search,
-			button('+', () => addReference()), button('⚙', () => showSettings())),
+		h('div', { className: 'bar' }, filterButton, search, button('Filter', () => run(showFilterForm)),
+			sortButton, button('+', () => addReference()), button('⚙', () => showSettings())),
 		main, status);
 	document.body.append(style, root);
 
-	let overview: Overview = { sidebar: [], statuses: [], tables: [] };
+	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [] };
 	let filter: Filter = { kind: 'all' };
+	let sort: Sort = { field: 'key', descending: false };
 
 	const say = (text: string) => {
 		status.textContent = text;
@@ -155,10 +164,45 @@ export function showBrowser(openReader: () => void) {
 		overview = await invoke<Overview>('refresh');
 		filterButton.textContent = `${filterLabel(filter).trim()} ▾`;
 		filterButton.onclick = showSidebar;
+		sortButton.textContent = `${sort.descending ? '▼' : '▲'} ${overview.sort_fields.find(([f]) => f === sort.field)?.[1] ?? sort.field}`;
+	}
+
+	/** Enter on the current field reverses the order. */
+	function showSortMenu() {
+		show(h('ul', {}, ...overview.sort_fields.map(([field, label]) => h('li', {
+			onclick: () => run(async () => {
+				sort = { field, descending: field === sort.field && !sort.descending };
+				await refresh();
+				await showList();
+			}),
+		}, `${field === sort.field ? (sort.descending ? '▼ ' : '▲ ') : ''}${label}`))));
+	}
+
+	/** A form view of the search query: one input per field, then free text. */
+	async function showFilterForm() {
+		const parsed = await invoke<{ fields: [string, string][]; free: string }>('parse_query', { query: search.value });
+		const known = new Set(overview.filter_fields.map(([f]) => f));
+		const kept = parsed.fields.filter(([f]) => !known.has(f));
+		const inputs = overview.filter_fields.map(([field, label]) => {
+			const input = h('input', { value: parsed.fields.find(([f]) => f === field)?.[1] ?? '' });
+			if (field === 'status') input.setAttribute('list', 'yeda-statuses');
+			return [field, label, input] as const;
+		});
+		const free = h('input', { value: parsed.free });
+		const apply = () => run(async () => {
+			const fields = [...kept, ...inputs.filter(([, , i]) => i.value.trim()).map(([f, , i]) => [f, i.value.trim()])];
+			search.value = await invoke<string>('compose_query', { fields, free: free.value });
+			await showList();
+		});
+		show(h('h2', {}, 'Filter'),
+			h('table', {}, ...inputs.map(([, label, input]) => h('tr', {}, h('td', {}, label), h('td', {}, input))),
+				h('tr', {}, h('td', {}, 'Text'), h('td', {}, free))),
+			datalist('yeda-statuses', overview.statuses),
+			h('div', { className: 'actions' }, button('Apply', apply), button('Cancel', () => run(showList))));
 	}
 
 	async function showList() {
-		const rows = await invoke<Row[]>('list', { filter, query: search.value });
+		const rows = await invoke<Row[]>('list', { filter, query: search.value, sort });
 		const list = h('ul', {}, ...rows.map(r => h('li', { onclick: () => run(() => showDetails(r.key)) },
 			h('div', {}, `${GLYPHS[r.status ?? ''] ?? '·'} `, r.title || r.key),
 			h('div', { className: 'meta' }, [r.authors[0]?.split(',')[0], r.year].filter(Boolean).join(' · '),

@@ -25,7 +25,7 @@ A reference manager whose library is plain TOML and Markdown files, kept in git.
 `yeda.toml`:
 
 ```toml
-reader = "yeda-reader"           # opens PDFs; the system viewer when unset
+reader = "yeda-reader"           # opens PDFs as <reader> <pdf> --annotations <dir>; the default
 default_llm = "claude"
 
 [locations]                      # pdf.location in a reference names one of these

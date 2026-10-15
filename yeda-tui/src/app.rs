@@ -10,9 +10,9 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::process::{Command, Stdio};
 use yeda_core::Effect;
 use yeda_core::annotations::{self, Annotation};
-use yeda_core::browse::{self, Filter};
+use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
-use yeda_core::search::Searcher;
+use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::tables::{self, Row};
 use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
 use yeda_net::wand;
@@ -25,6 +25,46 @@ pub enum Mode {
     Pick,
     Prompt(Prompt),
     ConfirmDelete,
+    Filter,
+    Sort,
+    Help,
+}
+
+/// Every key and command, as `:help` lists them.
+pub const HELP: &[(&str, &str)] = &[
+    ("j k Ctrl-d Ctrl-u gg G", "move"),
+    ("h l Tab", "switch column"),
+    ("c", "show only the current column; again to show all"),
+    ("/", "search; in the library column, filter it"),
+    ("f", "filter by field"),
+    ("s", "sort"),
+    ("Esc", "clear the search"),
+    ("a", "add by DOI, arXiv ID or ISBN"),
+    ("o", "open the PDF in yeda-reader"),
+    ("e  n", "edit the reference file / its note in $EDITOR"),
+    ("t  m", "edit tags / move to a collection"),
+    ("r  R", "next / previous reading status"),
+    ("A  T", "show annotations / tables"),
+    ("x", "extract the annotations embedded in the PDF"),
+    ("C", "colour the selected tag (library column)"),
+    ("dd", "delete the reference or saved search"),
+    ("q", "quit"),
+    ("", ""),
+    (":save <name>", "save the current search"),
+    (":summarize[!] [table] [profile]", "fill the reference's table row with an LLM; ! overwrites"),
+    (":summarize-all[!] [table] [profile]", "the same for every visible reference"),
+    (":cancel", "stop summarizing after the current paper"),
+    (":export <table> <file.csv>", "export a table"),
+    (":help  :keys", "this list"),
+    (":q", "quit"),
+];
+
+/// The `f` popup: one value per `search::FILTER_FIELDS` entry, then free text.
+pub struct FilterForm {
+    pub values: Vec<String>,
+    pub sel: usize,
+    /// Terms of the query the form has no field for, kept as they are.
+    other: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -131,6 +171,12 @@ pub struct App {
     pub annot_sel: usize,
     pub image: Option<StatefulProtocol>,
     image_for: Option<PathBuf>,
+    /// Only the focused column is drawn.
+    pub focus: bool,
+    pub sort: Sort,
+    pub sort_sel: usize,
+    pub form: Option<FilterForm>,
+    pub help_scroll: u16,
 }
 
 impl App {
@@ -167,6 +213,11 @@ impl App {
             annot_sel: 0,
             image: None,
             image_for: None,
+            focus: false,
+            sort: Sort::default(),
+            sort_sel: 0,
+            form: None,
+            help_scroll: 0,
         };
         app.refilter_sidebar(false);
         app
@@ -183,6 +234,7 @@ impl App {
     fn refilter(&mut self) {
         let filter = self.current_filter().clone();
         self.visible = browse::visible(&mut self.searcher, &self.lib, &filter, &self.query);
+        browse::sort(&self.lib, &mut self.visible, self.sort);
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
     }
 
@@ -257,6 +309,9 @@ impl App {
                 }
             }
             Mode::Pick => self.pick_key(k),
+            Mode::Filter => self.filter_key(k),
+            Mode::Sort => self.sort_key(k),
+            Mode::Help => self.help_key(k),
             Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
         }
     }
@@ -323,8 +378,14 @@ impl App {
                 self.query.clear();
                 self.refilter();
             }
-            (KeyCode::Char('s'), _) => self.cycle_status(true),
-            (KeyCode::Char('S'), _) => self.cycle_status(false),
+            (KeyCode::Char('r'), _) => self.cycle_status(true),
+            (KeyCode::Char('R'), _) => self.cycle_status(false),
+            (KeyCode::Char('c'), _) => self.focus = !self.focus,
+            (KeyCode::Char('f'), _) => self.open_filter(),
+            (KeyCode::Char('s'), _) => {
+                self.sort_sel = SortField::ALL.iter().position(|f| *f == self.sort.field).unwrap_or(0);
+                self.mode = Mode::Sort;
+            }
             (KeyCode::Char('C'), _) => match self.current_filter() {
                 Filter::Tag(t) if self.pane == Pane::Sidebar => {
                     self.input = self.lib.tag_colors.get(t).cloned().unwrap_or_default();
@@ -376,6 +437,91 @@ impl App {
         match mode {
             Mode::Search => self.refilter(),
             Mode::SideSearch => self.refilter_sidebar(true),
+            _ => {}
+        }
+    }
+
+    fn open_filter(&mut self) {
+        let q = search::parse(&self.query);
+        let mut values = vec![String::new(); FILTER_FIELDS.len()];
+        let mut other = Vec::new();
+        for (name, value) in q.fields {
+            let canonical = match name.as_str() {
+                "authors" => "author",
+                "collection" => "coll",
+                n => n,
+            };
+            match FILTER_FIELDS.iter().position(|(f, _)| *f == canonical) {
+                Some(i) if values[i].is_empty() && !value.is_empty() => values[i] = value,
+                _ => other.push((name, value)),
+            }
+        }
+        values.push(q.free.replace("\\ ", " "));
+        self.form = Some(FilterForm { values, sel: 0, other });
+        self.mode = Mode::Filter;
+    }
+
+    fn filter_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(form) = &mut self.form else { return };
+        let n = form.values.len();
+        match k.code {
+            KeyCode::Esc => {
+                self.form = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => {
+                let mut fields = std::mem::take(&mut form.other);
+                for ((name, _), value) in FILTER_FIELDS.iter().zip(&form.values) {
+                    if !value.trim().is_empty() {
+                        fields.push((name.to_string(), value.trim().to_string()));
+                    }
+                }
+                self.query = search::compose(&fields, &form.values[n - 1]);
+                self.form = None;
+                self.mode = Mode::Normal;
+                self.pane = Pane::List;
+                self.refilter();
+            }
+            KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
+            KeyCode::Char('n') if ctrl => form.sel = (form.sel + 1) % n,
+            KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
+            KeyCode::Char('p') if ctrl => form.sel = (form.sel + n - 1) % n,
+            KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
+            KeyCode::Backspace => drop(form.values[form.sel].pop()),
+            KeyCode::Char(c) if !ctrl => form.values[form.sel].push(c),
+            _ => {}
+        }
+    }
+
+    /// Enter on the current sort field flips its direction.
+    fn sort_key(&mut self, k: KeyEvent) {
+        let n = SortField::ALL.len();
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.sort_sel = (self.sort_sel + 1) % n,
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.sort_sel = (self.sort_sel + n - 1) % n,
+            KeyCode::Enter => {
+                let field = SortField::ALL[self.sort_sel];
+                self.sort = Sort { field, descending: field == self.sort.field && !self.sort.descending };
+                self.mode = Mode::Normal;
+                self.refilter();
+            }
+            _ => {}
+        }
+    }
+
+    fn help_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let half = (self.page / 2).max(1) as u16;
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.mode = Mode::Normal,
+            KeyCode::Char('d') if ctrl => self.help_scroll = self.help_scroll.saturating_add(half),
+            KeyCode::Char('u') if ctrl => self.help_scroll = self.help_scroll.saturating_sub(half),
+            KeyCode::Char('j') | KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
+            KeyCode::Char('k') | KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+            KeyCode::Char('g') => self.help_scroll = 0,
+            KeyCode::Char('G') => self.help_scroll = HELP.len() as u16,
             _ => {}
         }
     }
@@ -528,6 +674,10 @@ impl App {
                     if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!')) {
                         self.status = format!("{e:#}");
                     }
+                }
+                ("help" | "keys", _) => {
+                    self.help_scroll = 0;
+                    self.mode = Mode::Help;
                 }
                 ("cancel", _) => match &self.summarizer {
                     Some(s) => {
@@ -871,21 +1021,19 @@ impl App {
         match self.lib.pdf_path(r) {
             Ok(p) if !p.exists() => self.status = format!("missing: {}", p.display()),
             Ok(p) => {
-                let result = match self.lib.reader.as_deref().map(str::split_whitespace) {
-                    Some(mut words) => Command::new(words.next().unwrap_or_default())
-                        .args(words)
-                        .arg(&p)
-                        .arg("--annotations")
-                        .arg(self.path(&library::annotations_dir(&r.key)))
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .spawn()
-                        .map(drop),
-                    None => open::that_detached(&p),
-                };
+                let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
+                let program = words.next().map_or_else(default_reader, PathBuf::from);
+                let result = Command::new(&program)
+                    .args(words)
+                    .arg(&p)
+                    .arg("--annotations")
+                    .arg(self.path(&library::annotations_dir(&r.key)))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
                 if let Err(e) = result {
-                    self.status = format!("{}: {e}", p.display());
+                    self.status = format!("{}: {e} (set reader in yeda.toml)", program.display());
                 }
             }
             Err(e) => self.status = e.to_string(),
@@ -897,4 +1045,10 @@ impl App {
         self.apply(Ok(self.lib.delete(&key)));
         self.reload();
     }
+}
+
+/// yeda-reader next to this binary (as cargo builds them), else the one on `PATH`.
+fn default_reader() -> PathBuf {
+    let sibling = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join("yeda-reader")));
+    sibling.filter(|p| p.is_file()).unwrap_or_else(|| "yeda-reader".into())
 }

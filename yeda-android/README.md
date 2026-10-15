@@ -3,7 +3,7 @@
 An Android app (Tauri v2) with a library browser and yeda-reader built in for PDFs. The interface is high-contrast and has no animations, for e-ink screens.
 
 The browser covers what yeda-tui does:
-- collections, tags in their colours, saved searches, and field and fuzzy search;
+- collections, tags in their colours, saved searches, field and fuzzy search, a filter form and sorting;
 - reading status, tags, collections and tag colours;
 - adding a reference by DOI, arXiv ID or ISBN, and deleting one;
 - previewing annotations with their images;

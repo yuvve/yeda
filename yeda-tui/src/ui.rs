@@ -1,4 +1,6 @@
-use crate::app::{App, Mode, Pane, PickKind, Prompt, RightView};
+use crate::app::{App, HELP, Mode, Pane, PickKind, Prompt, RightView};
+use yeda_core::browse::SortField;
+use yeda_core::search::FILTER_FIELDS;
 use yeda_core::annotations::Annotation;
 use yeda_core::browse::Filter;
 use yeda_core::library::{Library, Ref};
@@ -173,13 +175,13 @@ fn draw_tables(f: &mut Frame, app: &mut App, area: Rect) {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(f.area());
-    let [side, list, detail] = Layout::horizontal([
-        Constraint::Percentage(20),
-        Constraint::Percentage(40),
-        Constraint::Percentage(40),
-    ])
-    .areas(main);
-    app.page = list.height.saturating_sub(2) as usize;
+    let [side, list, detail] = match (app.focus, app.pane) {
+        (true, Pane::Sidebar) => [main, Rect::ZERO, Rect::ZERO],
+        (true, Pane::List) => [Rect::ZERO, main, Rect::ZERO],
+        (true, Pane::Right) => [Rect::ZERO, Rect::ZERO, main],
+        (false, _) => Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(40), Constraint::Percentage(40)]).areas(main),
+    };
+    app.page = main.height.saturating_sub(2) as usize;
     let hl = Style::new().add_modifier(Modifier::REVERSED);
 
     let items: Vec<ListItem> = app.side_visible.iter().map(|&i| ListItem::new(label(&app.sidebar[i], &app.lib))).collect();
@@ -191,14 +193,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     );
 
     let items: Vec<ListItem> = app.visible.iter().map(|&i| ListItem::new(row(&app.lib.refs[i], &app.lib))).collect();
-    let title = format!("References ({})", app.visible.len());
+    let order = if app.sort.descending { "▼" } else { "▲" };
+    let title = format!("References ({}) {order} {}", app.visible.len(), app.sort.field.name());
     f.render_stateful_widget(
         List::new(items).block(block(title, app.pane == Pane::List)).highlight_style(hl),
         list,
         &mut ListState::default().with_selected(Some(app.sel)),
     );
 
-    if app.right == RightView::Annotations {
+    if app.right == RightView::Annotations && !detail.is_empty() {
         draw_annotations(f, app, detail);
     } else if app.right == RightView::Tables {
         draw_tables(f, app, detail);
@@ -227,9 +230,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         _ => String::new(),
     };
     f.render_widget(Paragraph::new(status), bar);
+    let anchor = if list.is_empty() { main } else { list };
     if let Some(c) = &app.chooser {
         let height = (c.options.len().min(10) as u16 + 2).min(bar.y);
-        let area = Rect { x: list.x, y: bar.y - height, width: list.width, height };
+        let area = Rect { x: anchor.x, y: bar.y - height, width: anchor.width, height };
         let hint = if c.kind == PickKind::Tags {
             " Enter toggle · Tab/↓ next · Esc done "
         } else {
@@ -244,4 +248,71 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             &mut ListState::default().with_selected(sel),
         );
     }
+    match app.mode {
+        Mode::Filter => draw_filter(f, app, main),
+        Mode::Sort => draw_sort(f, app, main),
+        Mode::Help => draw_help(f, app, main),
+        _ => {}
+    }
+}
+
+fn popup(area: Rect, width: u16, height: u16) -> Rect {
+    let [area] = Layout::horizontal([Constraint::Length(width.min(area.width))]).flex(layout::Flex::Center).areas(area);
+    let [area] = Layout::vertical([Constraint::Length(height.min(area.height))]).flex(layout::Flex::Center).areas(area);
+    area
+}
+
+fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
+    let Some(form) = &app.form else { return };
+    let labels = FILTER_FIELDS.iter().map(|(_, label)| *label).chain(["Text"]);
+    let lines: Vec<Line> = labels
+        .zip(&form.values)
+        .enumerate()
+        .map(|(i, (label, value))| {
+            let cursor = if i == form.sel { "▏" } else { "" };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            if i == form.sel { line.reversed() } else { line }
+        })
+        .collect();
+    let area = popup(main, 60, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block(" Filter · Tab/↓ next · Enter apply · Esc cancel ".into(), true)), area);
+}
+
+fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
+    let items: Vec<ListItem> = SortField::ALL
+        .iter()
+        .map(|&field| {
+            let mark = match (field == app.sort.field, app.sort.descending) {
+                (true, false) => "▲ ",
+                (true, true) => "▼ ",
+                _ => "  ",
+            };
+            ListItem::new(format!("{mark}{}", field.name()))
+        })
+        .collect();
+    let area = popup(main, 44, items.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block(" Sort · Enter again reverses ".into(), true))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.sort_sel)),
+    );
+}
+
+fn draw_help(f: &mut Frame, app: &mut App, main: Rect) {
+    let width = HELP.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+    let lines: Vec<Line> = HELP
+        .iter()
+        .map(|(k, v)| Line::from(vec![Span::styled(format!("{k:<width$}  "), Style::new().fg(Color::Cyan)), Span::raw(*v)]))
+        .collect();
+    let area = popup(main, 100, lines.len() as u16 + 2);
+    app.help_scroll = app.help_scroll.min((lines.len() as u16).saturating_sub(area.height.saturating_sub(2)));
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(" Keys · j/k scroll · q close ".into(), true)),
+        area,
+    );
 }

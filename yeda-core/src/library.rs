@@ -61,7 +61,7 @@ pub struct Library {
     pub locations: BTreeMap<String, PathBuf>,
     pub tag_colors: BTreeMap<String, String>,
     pub searches: BTreeMap<String, String>,
-    /// Command that opens PDFs as `<reader> <pdf> --annotations <dir>`; the system viewer when unset.
+    /// Command that opens PDFs as `<reader> <pdf> --annotations <dir>`; clients default to yeda-reader.
     pub reader: Option<String>,
     pub tables: BTreeMap<String, Table>,
     pub llm: BTreeMap<String, Profile>,
