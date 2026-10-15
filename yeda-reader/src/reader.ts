@@ -58,6 +58,10 @@ export async function openReader(): Promise<boolean> {
 	const showImage = (a: Annotation) => reader!.setAnnotations([a]);
 
 	document.title = launch.title;
+	// zotero/reader lays its toolbar out for a desktop window; on phones it scrolls sideways instead.
+	document.head.append(Object.assign(document.createElement('style'), {
+		textContent: '@media (max-width: 799px) { .toolbar { overflow-x: auto; scrollbar-width: none; } .toolbar > * { flex-shrink: 0; } }',
+	}));
 	reader = window.createReader({
 		...requiredCallbacks,
 		type: 'pdf',
@@ -67,6 +71,7 @@ export async function openReader(): Promise<boolean> {
 		primaryViewState: launch.page ? { pageIndex: launch.page - 1 } : undefined,
 		readOnly: false,
 		showAnnotations: true,
+		sidebarOpen: window.innerWidth >= 800,
 		sidebarWidth: 240,
 		sidebarView: 'annotations',
 		authorName: '',

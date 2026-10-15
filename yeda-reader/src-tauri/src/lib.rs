@@ -109,9 +109,13 @@ fn read_image(current: State<Current>, id: String) -> Result<Response, String> {
 /// Takes the PNG as the raw request body and the annotation id in the `id` header.
 #[tauri::command]
 fn save_image(current: State<Current>, request: Request) -> Result<(), String> {
-    let InvokeBody::Raw(png) = request.body() else { return Err("expected raw PNG body".into()) };
+    // Android's postMessage IPC has no raw bodies; it sends the bytes as a JSON array.
+    let png = match request.body() {
+        InvokeBody::Raw(png) => png.clone(),
+        InvokeBody::Json(v) => serde_json::from_value(v.clone()).map_err(|_| "expected PNG bytes")?,
+    };
     let id = request.headers().get("id").and_then(|v| v.to_str().ok()).ok_or("missing id header")?;
-    current.with(|doc| Ok(yeda_fs::write_atomic(&image_path(doc, id)?, png)?))
+    current.with(|doc| Ok(yeda_fs::write_atomic(&image_path(doc, id)?, &png)?))
 }
 
 const USAGE: &str = "usage: yeda-reader <file.pdf> [--annotations <dir>] [--page N]";

@@ -12,8 +12,11 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import android.view.View
 import androidx.activity.enableEdgeToEdge
-import org.json.JSONObject
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import org.json.JSONArray
 import java.io.File
 
 class MainActivity : TauriActivity() {
@@ -37,6 +40,12 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
     webView.addJavascriptInterface(Bridge(), "YedaAndroid")
+    // Edge-to-edge is forced from targetSdk 35; pad instead of handling insets in each page.
+    ViewCompat.setOnApplyWindowInsetsListener(findViewById<View>(android.R.id.content)) { v, insets ->
+      val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+      v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      WindowInsetsCompat.CONSUMED
+    }
   }
 
   private fun viewedUri(intent: Intent?): Uri? =
@@ -88,7 +97,7 @@ class MainActivity : TauriActivity() {
   }
 
   private fun reply(callback: String, value: Any?) = runOnUiThread {
-    webView.evaluateJavascript("window.$callback(${JSONObject.wrap(value) ?: "null"})", null)
+    webView.evaluateJavascript("window.$callback(${JSONArray().put(value)}[0])", null)
   }
 
   /** Maps a storage document id such as `primary:Books/lib` or `1A2B-3C4D:lib` to a path. */

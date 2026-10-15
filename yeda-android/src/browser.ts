@@ -121,7 +121,8 @@ function filterLabel(f: Filter): string {
 }
 
 /** Shows the library browser; `openReader` switches to the reader once a PDF is open. */
-export function showBrowser(openReader: () => void) {
+/** Returns the Back handler: true if it went back to the list, false if already there. */
+export function showBrowser(openReader: () => void): () => boolean {
 	const style = h('style', { textContent: STYLE });
 	const status = h('div', { className: 'status' });
 	const main = h('main');
@@ -149,7 +150,9 @@ export function showBrowser(openReader: () => void) {
 			say(String(e));
 		}
 	};
+	let atList = false;
 	const show = (...children: Child[]) => {
+		atList = false;
 		main.replaceChildren(...children.filter((c): c is Node | string => !!c));
 		main.scrollTop = 0;
 	};
@@ -222,6 +225,7 @@ export function showBrowser(openReader: () => void) {
 			await showList();
 		}));
 		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list);
+		atList = true;
 	}
 
 	function showSidebar() {
@@ -508,4 +512,5 @@ export function showBrowser(openReader: () => void) {
 		if (!hasFileAccess() || !(await invoke<string | null>('library'))) await showSettings();
 		else await showList();
 	});
+	return () => !atList && (run(showList), true);
 }
