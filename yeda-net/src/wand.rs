@@ -16,7 +16,10 @@ pub fn fetch(input: &str) -> Result<Ref> {
             .get(url)
             .header("Accept", "application/vnd.citationstyles.csl+json, application/json")
             .call()
-            .with_context(|| url.to_string())?
+            .map_err(|e| match e {
+                ureq::Error::StatusCode(404) => anyhow::anyhow!("not found ({url})"),
+                e => anyhow::anyhow!("{url}: {e}"),
+            })?
             .body_mut()
             .read_to_string()?;
         Ok(serde_json::from_str(&body)?)

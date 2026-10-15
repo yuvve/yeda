@@ -385,6 +385,11 @@ struct Added {
 }
 
 #[tauri::command]
+fn split_ids(text: String) -> Vec<String> {
+    yeda_core::ids::split_ids(&text).into_iter().map(Into::into).collect()
+}
+
+#[tauri::command]
 async fn add_ref(app: AppHandle, state: State<'_, Shared>, input: String) -> Res<Added> {
     let fetched = tauri::async_runtime::spawn_blocking(move || wand::fetch(&input)).await.map_err(|e| e.to_string())?;
     let mut r = fetched.map_err(err)?;
@@ -629,6 +634,7 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         save_search,
         delete_search,
         add_ref,
+        split_ids,
         delete_ref,
         save_raw,
         save_note,

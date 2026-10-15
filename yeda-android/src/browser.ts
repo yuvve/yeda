@@ -452,17 +452,41 @@ export function showBrowser(openReader: () => void): () => boolean {
 		show(button('← Back', () => run(() => showDetails(d.key))), ...sections);
 	}
 
-	async function addReference() {
-		const input = window.prompt('DOI, arXiv ID or ISBN');
-		if (!input) return;
-		await run(async () => {
-			say(`fetching ${input}…`);
-			const added = await invoke<{ key: string; existed: boolean }>('add_ref', { input });
-			say(added.existed ? `already in library as ${added.key}` : `added ${added.key}`);
+	/** Adds each identifier in a pasted list, then lists the ones that failed and copies them. */
+	function addReference() {
+		const area = h('textarea', { rows: 8, placeholder: 'DOIs, arXiv IDs or ISBNs, one per line or separated by spaces' });
+		const add = () => run(async () => {
+			const inputs = await invoke<string[]>('split_ids', { text: area.value });
+			const added: string[] = [], existed: string[] = [], failed: [string, string][] = [];
+			for (const [i, input] of inputs.entries()) {
+				say(`fetching ${i + 1}/${inputs.length}: ${input}…`);
+				try {
+					const r = await invoke<{ key: string; existed: boolean }>('add_ref', { input });
+					(r.existed ? existed : added).push(r.key);
+				} catch (e) {
+					failed.push([input, String(e)]);
+				}
+			}
 			await refresh();
-			await showDetails(added.key);
+			const list = failed.map(([input]) => input).join('\n');
+			// Copying can fail once the tap that started the batch is too long ago; the button retries.
+			const copied = failed.length > 0 && await navigator.clipboard.writeText(list).then(() => true, () => false);
+			say([added.length && `added ${added.join(', ')}`, existed.length && `already in library: ${existed.join(', ')}`,
+				failed.length && `${failed.length} failed${copied ? ', copied to the clipboard' : ''}`].filter(Boolean).join(' · '));
+			const last = added.at(-1) ?? existed.at(-1);
+			if (failed.length === 0 && last) return showDetails(last);
+			show(h('h2', {}, 'Not added'),
+				h('ul', {}, ...failed.map(([input, e]) => h('li', {}, h('div', {}, input), h('div', { className: 'meta' }, e)))),
+				h('div', { className: 'actions' },
+					button('Copy these', () => navigator.clipboard.writeText(list).then(() => say('copied to the clipboard'), e => say(String(e)))),
+					last && button('Show the last added', () => run(() => showDetails(last))),
+					button('Back to the list', () => run(showList))));
 		});
+		show(h('h2', {}, 'Add references'), area,
+			h('div', { className: 'actions' }, button('Add', add), button('Cancel', () => run(showList))));
+		area.focus();
 	}
+
 
 	async function showSettings() {
 		if (!hasFileAccess()) {

@@ -5,7 +5,7 @@ An Android app (Tauri v2) with a library browser and yeda-reader built in for PD
 The browser covers what yeda-tui does:
 - collections, tags in their colours, saved searches, field and fuzzy search, a filter form and sorting;
 - reading status, tags, collections and tag colours;
-- adding a reference by DOI, arXiv ID or ISBN, and deleting one;
+- adding references from a pasted list of DOIs, arXiv IDs or ISBNs (the ones that fail are listed and copied to the clipboard), and deleting one;
 - previewing annotations with their images;
 - attaching a PDF, to a local or a WebDAV location, and opening PDFs from WebDAV;
 - editing the Markdown note and the raw reference file;

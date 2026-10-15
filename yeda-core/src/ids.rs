@@ -11,6 +11,10 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
         .map(|_| &s[prefix.len()..])
 }
 
+fn one_word(s: &str) -> Option<&str> {
+    Some(s.trim()).filter(|w| !w.is_empty() && !w.contains(char::is_whitespace))
+}
+
 fn strip_version(id: &str) -> &str {
     match id.rsplit_once('v') {
         Some((base, v)) if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) => base,
@@ -35,15 +39,15 @@ pub fn parse_id(input: &str) -> Option<Id> {
     let s = input.trim();
     for p in ["https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi.org/", "doi:"] {
         if let Some(rest) = strip_prefix_ci(s, p) {
-            return Some(Id::Doi(rest.trim().into()));
+            return one_word(rest).map(|r| Id::Doi(r.into()));
         }
     }
     for p in ["https://arxiv.org/abs/", "https://arxiv.org/pdf/", "arxiv.org/abs/", "arxiv:"] {
         if let Some(rest) = strip_prefix_ci(s, p) {
-            return Some(Id::Arxiv(strip_version(rest.trim().trim_end_matches(".pdf")).into()));
+            return one_word(rest).map(|r| Id::Arxiv(strip_version(r.trim_end_matches(".pdf")).into()));
         }
     }
-    if s.starts_with("10.") && s.contains('/') {
+    if s.starts_with("10.") && s.contains('/') && !s.contains(char::is_whitespace) {
         return Some(Id::Doi(s.into()));
     }
     if is_arxiv(strip_version(s)) {
@@ -61,6 +65,22 @@ pub fn parse_id(input: &str) -> Option<Id> {
         _ => false,
     };
     valid.then_some(Id::Isbn(isbn))
+}
+
+/// Splits a pasted list into identifiers, in order and without repeats. A line that is one
+/// identifier stays whole, so `doi: 10.1/x` and spaced ISBNs survive; other lines split on
+/// whitespace. Commas and semicolons only separate at word ends, since DOIs may contain them.
+pub fn split_ids(text: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let words: Vec<&str> = if parse_id(line).is_some() { vec![line] } else { line.split_whitespace().collect() };
+        for w in words.into_iter().map(|w| w.trim_matches([',', ';'])).filter(|w| !w.is_empty()) {
+            if !out.contains(&w) {
+                out.push(w);
+            }
+        }
+    }
+    out
 }
 
 /// An 8-character key in Zotero's format, so a Zotero export can keep it. Derived from `seed`
@@ -97,5 +117,12 @@ mod tests {
         assert_eq!(parse_id("ISBN 0-306-40615-x"), Some(Id::Isbn("030640615X".into())));
         assert_eq!(parse_id("hello world"), None);
         assert_eq!(parse_id("12345"), None);
+        assert_eq!(parse_id("10.1/a 10.1/b"), None);
+    }
+
+    #[test]
+    fn splits_pasted_lists() {
+        let text = "10.1/a 10.1/b, 1706.03762\nDOI: 10.1/c\n\n978 0 262 03384 8\nbogus 10.1/a;\n";
+        assert_eq!(split_ids(text), ["10.1/a", "10.1/b", "1706.03762", "DOI: 10.1/c", "978 0 262 03384 8", "bogus"]);
     }
 }

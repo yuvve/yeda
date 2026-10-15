@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::process::{Command, Stdio};
 use yeda_core::Effect;
 use yeda_core::annotations::{self, Annotation};
+use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
@@ -38,6 +39,8 @@ pub enum HelpPage {
     Keys,
     /// `GUIDE`, from `:help`.
     Guide,
+    /// `App::report`: the identifiers the last magic-wand batch could not add, with why.
+    Failed,
 }
 
 pub const GUIDE: &str = include_str!("guide.txt");
@@ -51,7 +54,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("f", "filter by field"),
     ("s", "sort"),
     ("Esc", "clear the search"),
-    ("a", "add by DOI, arXiv ID or ISBN"),
+    ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
     ("o", "open the PDF in the reader (yeda read)"),
     ("e  n", "edit the reference file / its note in $EDITOR"),
     ("t  m", "edit tags / move to a collection"),
@@ -71,6 +74,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
+    (":failed", "the identifiers the last add could not fetch"),
     (":q", "quit"),
 ];
 
@@ -119,8 +123,16 @@ pub enum RightView {
     Tables,
 }
 
+pub struct Batch {
+    todo: std::collections::VecDeque<String>,
+    total: usize,
+    added: Vec<String>,
+    existed: Vec<String>,
+    failed: Vec<(String, String)>,
+}
+
 pub enum Job {
-    Fetch(String),
+    Fetch(Batch),
     ExtractAnnotations,
     /// Download the selected reference's PDF from WebDAV with this password, then open it.
     Download(String),
@@ -180,6 +192,10 @@ pub struct App {
     /// Accounts whose stored secret the server rejected, so the store is skipped until a new one is entered.
     rejected: std::collections::HashSet<String>,
     pub asking: Option<PendingSecret>,
+    /// The last magic-wand batch's failures, one line each.
+    pub report: Vec<String>,
+    pub report_copied: bool,
+    clipboard: Option<arboard::Clipboard>,
     pub lib: Library,
     searcher: Searcher,
     pub query: String,
@@ -260,6 +276,9 @@ impl App {
             secrets: Default::default(),
             rejected: Default::default(),
             asking: None,
+            report: Vec::new(),
+            report_copied: false,
+            clipboard: None,
         };
         app.refilter_sidebar(false);
         app
@@ -457,6 +476,20 @@ impl App {
             (KeyCode::Char(':'), _) => self.mode = Mode::Prompt(Prompt::Command),
             (KeyCode::Char('a'), _) => self.mode = Mode::Prompt(Prompt::Add),
             _ => {}
+        }
+    }
+
+    /// Types pasted text into the open prompt; ignored in modes where letters are commands.
+    pub fn on_paste(&mut self, text: &str) {
+        let add = matches!(self.mode, Mode::Prompt(Prompt::Add));
+        if !matches!(self.mode, Mode::Prompt(_) | Mode::Search | Mode::SideSearch | Mode::Pick | Mode::Filter) {
+            return;
+        }
+        // Lines separate identifiers in a pasted list; elsewhere a newline would only end the prompt.
+        // Terminals differ in sending line breaks as \r, \n or both.
+        for c in text.replace("\r\n", "\n").replace('\r', "\n").trim_end().chars() {
+            let c = if c == '\n' && !add { ' ' } else { c };
+            self.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
     }
 
@@ -738,6 +771,7 @@ impl App {
                 }
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
+                ("failed", _) => self.open_help(HelpPage::Failed),
                 ("cancel", _) => match &self.summarizer {
                     Some(s) => {
                         s.cancel.store(true, Ordering::Relaxed);
@@ -779,9 +813,10 @@ impl App {
                 self.status = format!("save {} in the secret store? (y/n)", p.label);
                 self.mode = Mode::ConfirmSaveSecret;
             }
-            Prompt::Add if !text.is_empty() => {
-                self.status = format!("fetching {text}…");
-                self.job = Some(Job::Fetch(text.into()));
+            Prompt::Add if !ids::split_ids(text).is_empty() => {
+                let todo: std::collections::VecDeque<String> = ids::split_ids(text).into_iter().map(Into::into).collect();
+                self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
+                self.job = Some(Job::Fetch(Batch { total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
             }
             _ => {}
         }
@@ -963,7 +998,7 @@ impl App {
 
     pub fn run_job(&mut self, job: Job) {
         match job {
-            Job::Fetch(input) => self.add_from(&input),
+            Job::Fetch(batch) => self.add_next(batch),
             Job::ExtractAnnotations => self.extract_annotations(),
             Job::Download(password) => self.download(&password),
             Job::Attach { file, location, password } => self.finish_attach(&file, &location, password.as_deref()),
@@ -1160,33 +1195,80 @@ impl App {
         }
     }
 
-    fn add_from(&mut self, input: &str) {
-        let mut r = match wand::fetch(input) {
-            Ok(r) => r,
-            Err(e) => {
-                self.status = format!("{e:#}");
-                return;
-            }
-        };
+    /// Fetches and saves one identifier; returns its key and whether it was already in the library.
+    fn add_one(&mut self, input: &str) -> anyhow::Result<(String, bool)> {
+        let mut r = wand::fetch(input)?;
         if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) {
-            self.status = format!("already in library as {}", x.key);
-            r.key = x.key.clone();
-        } else {
-            r.key = self.lib.unique_key(&r);
-            if !self.apply(self.lib.save(&r).map(|e| vec![e])) {
-                return;
-            }
-            self.status = format!("added {}", r.key);
-            self.reload();
+            return Ok((x.key.clone(), true));
         }
+        r.key = self.lib.unique_key(&r);
+        yeda_fs::apply(&self.dir, vec![self.lib.save(&r)?])?;
+        self.reload();
+        Ok((r.key, false))
+    }
+
+    /// Adds the batch's next identifier, then queues the rest so the status line shows progress.
+    fn add_next(&mut self, mut batch: Batch) {
+        let Some(input) = batch.todo.pop_front() else { return self.finish_batch(batch) };
+        match self.add_one(&input) {
+            Ok((key, true)) => batch.existed.push(key),
+            Ok((key, false)) => batch.added.push(key),
+            Err(e) => batch.failed.push((input, format!("{e:#}"))),
+        }
+        match batch.todo.front() {
+            Some(next) => {
+                self.status = format!("fetching {}/{}: {next}…", batch.total - batch.todo.len() + 1, batch.total);
+                self.job = Some(Job::Fetch(batch));
+            }
+            None => self.finish_batch(batch),
+        }
+    }
+
+    fn finish_batch(&mut self, batch: Batch) {
+        let mut parts = Vec::new();
+        if !batch.added.is_empty() {
+            parts.push(format!("added {}", batch.added.join(", ")));
+        }
+        if !batch.existed.is_empty() {
+            parts.push(format!("already in library: {}", batch.existed.join(", ")));
+        }
+        if !batch.failed.is_empty() {
+            let failed: Vec<&str> = batch.failed.iter().map(|(i, _)| i.as_str()).collect();
+            let copy = self.copy(&failed.join("\n"));
+            self.report_copied = copy.is_ok();
+            let copied = match copy {
+                Ok(()) => "copied to the clipboard".to_string(),
+                Err(e) => format!("clipboard: {e}"),
+            };
+            parts.push(format!("{} failed ({copied})", failed.len()));
+            self.report = batch.failed.iter().map(|(i, e)| format!("{i}  {e}")).collect();
+        }
+        self.status = parts.join(" · ");
+        let Some(key) = batch.added.last().or(batch.existed.last()).cloned() else {
+            if !batch.failed.is_empty() {
+                self.open_help(HelpPage::Failed);
+            }
+            return;
+        };
         self.query.clear();
         self.side_query.clear();
         self.refilter_sidebar(false);
         self.select_filter(&Filter::All);
         self.pane = Pane::List;
-        if let Some(pos) = self.visible.iter().position(|&i| self.lib.refs[i].key == r.key) {
+        if let Some(pos) = self.visible.iter().position(|&i| self.lib.refs[i].key == key) {
             self.sel = pos;
         }
+        if !batch.failed.is_empty() {
+            self.open_help(HelpPage::Failed);
+        }
+    }
+
+    /// Keeps the clipboard open for the session: on Linux its contents last only while it is.
+    fn copy(&mut self, text: &str) -> Result<(), arboard::Error> {
+        if self.clipboard.is_none() {
+            self.clipboard = Some(arboard::Clipboard::new()?);
+        }
+        self.clipboard.as_mut().unwrap().set_text(text)
     }
 
     fn toggle_right(&mut self, view: RightView) {

@@ -81,9 +81,11 @@ fn main() -> Result<()> {
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
     let mut term = ratatui::init();
+    execute!(std::io::stdout(), event::EnableBracketedPaste)?;
     let picker = detect_picker();
     let mut app = App::new(dir, lib, picker);
     let res = run(&mut term, &mut app);
+    let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     res
 }
@@ -105,11 +107,12 @@ fn detect_picker() -> Picker {
 fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.quit {
         term.draw(|f| ui::draw(f, app))?;
-        if event::poll(Duration::from_millis(200))?
-            && let Event::Key(k) = event::read()?
-            && k.kind == KeyEventKind::Press
-        {
-            app.on_key(k);
+        if event::poll(Duration::from_millis(200))? {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
+                Event::Paste(text) => app.on_paste(&text),
+                _ => {}
+            }
         }
         app.poll_worker();
         if let Some(job) = app.job.take() {
@@ -117,6 +120,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             app.run_job(job);
         }
         if let Some(path) = app.edit.take() {
+            execute!(std::io::stdout(), event::DisableBracketedPaste)?;
             ratatui::restore();
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
@@ -124,7 +128,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
             let result = Command::new(editor).arg(&path).status();
             terminal::enable_raw_mode()?;
-            execute!(std::io::stdout(), terminal::EnterAlternateScreen)?;
+            execute!(std::io::stdout(), terminal::EnterAlternateScreen, event::EnableBracketedPaste)?;
             term.clear()?;
             match result {
                 Ok(_) => app.reload(),

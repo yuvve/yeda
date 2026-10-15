@@ -26,7 +26,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `f` | Filter by field in a popup (edits the same query as `/`) |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
-| `a` | Add by DOI, arXiv ID or ISBN |
+| `a` | Add by DOI, arXiv ID or ISBN; a pasted list adds each, and the ones that fail are listed and copied to the clipboard (`:failed` shows them again) |
 | `o` | Open the PDF in the reader |
 | `e` / `n` | Edit the reference file / its Markdown note in `$EDITOR` |
 | `t` / `m` | Edit tags / move to a collection |
