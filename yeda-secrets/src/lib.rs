@@ -55,6 +55,11 @@ pub fn webdav_account(user: &str, url: &str) -> String {
     format!("webdav:{user}@{url}")
 }
 
+/// The account name for a git remote's password or access token.
+pub fn git_account(url: &str) -> String {
+    format!("git:{url}")
+}
+
 /// The account name for an LLM API key, named after the environment variable that can also hold it.
 pub fn llm_account(env: &str) -> String {
     format!("llm:{env}")

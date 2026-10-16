@@ -97,6 +97,35 @@ pub fn delete(text: Option<&str>, ids: &[String]) -> Result<(String, Vec<String>
     Ok((toml::to_string(&doc)?, images))
 }
 
+/// Merges two edits of one file by `id`. An entry changed on one side takes that side; changed
+/// on both, `ours` wins. Deleting wins over leaving unchanged, and loses to a change.
+pub fn merge3(base: Option<&str>, ours: &str, theirs: &str) -> Result<String> {
+    let mut doc = read(Some(ours))?;
+    let by_id = |doc: &mut Table| -> Result<Vec<(String, Value)>> {
+        let id = |e: &Value| e.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+        Ok(entries(doc)?.drain(..).map(|e| (id(&e), e)).collect())
+    };
+    let (base, ours, theirs) = (by_id(&mut read(base)?)?, by_id(&mut doc)?, by_id(&mut read(Some(theirs))?)?);
+    let find = |list: &[(String, Value)], id: &str| list.iter().find(|(i, _)| i == id).map(|(_, e)| e.clone());
+    // ponytail: linear lookups, fine for the few hundred annotations one paper has.
+    let mut merged = Vec::new();
+    for (id, mine) in &ours {
+        let old = find(&base, id);
+        match find(&theirs, id) {
+            Some(other) if old.as_ref() == Some(mine) => merged.push(other),
+            None if old.as_ref() == Some(mine) => {}
+            _ => merged.push(mine.clone()),
+        }
+    }
+    for (id, other) in theirs {
+        if find(&ours, &id).is_none() && find(&base, &id).is_none_or(|old| old != other) {
+            merged.push(other);
+        }
+    }
+    *entries(&mut doc)? = merged;
+    Ok(toml::to_string(&doc)?)
+}
+
 fn read(text: Option<&str>) -> Result<Table> {
     Ok(text.map(str::parse).transpose().context(FILE)?.unwrap_or_default())
 }
@@ -329,6 +358,18 @@ pub fn unescape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge3_combines_both_sides_by_id() {
+        let entry = |id: &str, comment: &str| format!("[[annotation]]\nid = \"{id}\"\ncomment = \"{comment}\"\n");
+        let base = [entry("A", "a"), entry("B", "b"), entry("C", "c"), entry("D", "d")].concat();
+        // Ours edits A, deletes C, adds E; theirs edits B, deletes D, adds F.
+        let ours = [entry("A", "a2"), entry("B", "b"), entry("D", "d"), entry("E", "e")].concat();
+        let theirs = [entry("A", "a"), entry("B", "b2"), entry("C", "c"), entry("F", "f")].concat();
+        let merged = parse(&merge3(Some(&base), &ours, &theirs).unwrap()).unwrap();
+        let got: Vec<_> = merged.iter().map(|a| format!("{}={}", a.id, a.comment.as_deref().unwrap())).collect();
+        assert_eq!(got, ["A=a2", "B=b2", "E=e", "F=f"]);
+    }
 
     #[test]
     fn selects_words_under_quads() {

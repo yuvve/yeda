@@ -49,5 +49,6 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
 | `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
+| `:sync` | Commit all changes, pull with `git pull --no-rebase` and push; conflicting `annotations.toml` files are merged by annotation `id`, any other conflict aborts the merge |
 | `:keys` | List every key and command |
 | `:help` | Guide to search syntax (AND, OR, NOT, fields), filtering, sorting and saved searches |

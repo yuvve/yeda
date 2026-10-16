@@ -105,14 +105,9 @@ yeda-android must reach parity with yeda-tui. The exception is Zotero import, wh
 
 ## Later phases
 
-1. **Pen and e-ink.**
-   - Route input by `pointerType`: the pen uses the active tool, a finger pans and zooms, and touch is ignored while the pen is down (palm rejection).
-   - The EMR side button (`buttons & 2`) or eraser end (`buttons & 32`) erases while held.
-   - An E-ink mode removes animations, turns scrolling into page jumps, and uses a high-contrast theme with larger touch targets.
-   - Log the pressure values the WebView reports.
-2. **Low-latency ink (stretch).** A Tauri Android plugin that draws ink with androidx.graphics front-buffered rendering. Keep it only if the lag measured on the device improves.
-3. **Remote attachment storage.** WebDAV in Zotero's layout is done: download on open, `:attach` uploads. Secrets are kept in the system secret store via yeda-secrets, never in files; the URL and user name go in `yeda.toml`. Other services through `opendal` are still to do.
-4. **Git sync.** A Sync button that commits, pulls and pushes over HTTPS with a token, merging `annotations.toml` by `id`.
+Open work is listed in `TODO.md`. Done so far:
+- WebDAV attachments in Zotero's layout: download on open, `:attach` uploads. The URL and user name go in `yeda.toml`; passwords go in the system secret store via yeda-secrets, never in files.
+- Git sync: `:sync` in yeda-tui uses the git CLI; yeda-android uses libgit2 over HTTPS with a token in the Keystore. Both merge conflicting `annotations.toml` files by `id` (`annotations::merge3`).
 
 ## Verification
 

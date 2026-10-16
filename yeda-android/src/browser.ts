@@ -15,6 +15,7 @@ interface Overview {
 	filter_fields: [string, string][];
 	sort_fields: [string, string][];
 	locations: string[];
+	git: string | null;
 }
 
 interface Sort {
@@ -68,7 +69,8 @@ interface Details {
 type OpenRef =
 	| { status: 'opened' }
 	| { status: 'missingLocation'; location: string }
-	| { status: 'needsPassword'; account: string; label: string; rejected: boolean };
+	| { status: 'needsPassword'; account: string; label: string; rejected: boolean }
+	| { status: 'synced'; message: string };
 
 const STYLE = `
 .yeda { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; background: #fff; color: #000;
@@ -129,13 +131,14 @@ export function showBrowser(openReader: () => void): () => boolean {
 	const search = h('input', { type: 'search', placeholder: 'Search (author:smith year:2020 …)' });
 	const filterButton = h('button');
 	const sortButton = h('button', { onclick: () => showSortMenu() });
+	const syncButton = button('⟳', () => run(sync));
 	const root = h('div', { className: 'yeda' },
 		h('div', { className: 'bar' }, filterButton, search, button('Filter', () => run(showFilterForm)),
-			sortButton, button('+', () => addReference()), button('⚙', () => showSettings())),
+			sortButton, syncButton, button('+', () => addReference()), button('⚙', () => showSettings())),
 		main, status);
 	document.body.append(style, root);
 
-	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [], locations: [] };
+	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [], locations: [], git: null };
 	let filter: Filter = { kind: 'all' };
 	let sort: Sort = { field: 'key', descending: false };
 
@@ -171,6 +174,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 		overview = await invoke<Overview>('refresh');
 		filterButton.textContent = `${filterLabel(filter).trim()} ▾`;
 		filterButton.onclick = showSidebar;
+		syncButton.hidden = !overview.git;
 		sortButton.textContent = `${sort.descending ? '▼' : '▲'} ${overview.sort_fields.find(([f]) => f === sort.field)?.[1] ?? sort.field}`;
 	}
 
@@ -344,15 +348,35 @@ export function showBrowser(openReader: () => void): () => boolean {
 				});
 				resolve(!!saved);
 			};
-			show(h('h2', {}, 'WebDAV password'),
-				h('p', {}, rejected ? `The server rejected the password for ${label}.` : `Password for ${label}:`), input,
+			const what = account.startsWith('git:') ? 'password or access token' : 'password';
+			show(h('h2', {}, 'Password'),
+				h('p', {}, rejected ? `The server rejected the ${what} for ${label}.` : `The ${what} for ${label}:`), input,
 				h('p', { className: 'meta' }, 'It is kept in the Android Keystore, never in the library.'),
 				h('div', { className: 'actions' }, button('OK', () => done(true)), button('Cancel', () => done(false))));
 			input.focus();
 		});
 	}
 
-	/** Runs a command that may need a WebDAV password, asking for it until it succeeds or is cancelled. */
+	async function sync() {
+		say('syncing…');
+		const result = await withPassword(() => invoke<OpenRef>('git_sync'));
+		say(result?.status === 'synced' ? result.message : 'sync cancelled');
+		await refresh();
+		await showList();
+	}
+
+	async function cloneLibrary(url: string) {
+		const path = await pickFolder();
+		if (!path) return;
+		say('cloning…');
+		const result = await withPassword(() => invoke<OpenRef>('git_clone', { url, path }));
+		if (result?.status !== 'synced') return say('clone cancelled');
+		say(`cloned into ${path}`);
+		await refresh();
+		await showList();
+	}
+
+	/** Runs a command that may need a password, asking for it until it succeeds or is cancelled. */
 	async function withPassword(call: () => Promise<OpenRef>): Promise<OpenRef | null> {
 		for (;;) {
 			const result = await call();
@@ -394,6 +418,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			openReader();
 			return;
 		}
+		if (result.status !== 'missingLocation') return;
 		if (!window.confirm(`Folder for location "${result.location}" not found on this device. Pick it now?`)) return;
 		const path = await pickFolder();
 		if (path) {
@@ -496,6 +521,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			return;
 		}
 		const library = await invoke<string | null>('library');
+		const cloneUrl = h('input', { type: 'url', placeholder: 'https://user@host/library.git' });
 		const keys = await run(() => invoke<{ env: string; set: boolean }[]>('llm_keys')) ?? [];
 		const keyRows = keys.map(({ env, set }) => {
 			const input = h('input', { type: 'password', placeholder: set ? 'set (enter to replace)' : 'not set' });
@@ -513,6 +539,11 @@ export function showBrowser(openReader: () => void): () => boolean {
 				await refresh();
 				await showList();
 			})),
+			h('h2', {}, 'Git'),
+			overview.git
+				? h('div', {}, h('p', {}, overview.git), button('Sync now', () => run(sync)))
+				: h('div', {}, h('p', { className: 'meta' }, 'Clone a library repository over HTTPS into an empty folder; it becomes the library.'),
+					cloneUrl, button('Clone into a folder', () => cloneUrl.value.trim() && run(() => cloneLibrary(cloneUrl.value.trim())))),
 			keyRows.length > 0 && h('h2', {}, 'LLM API keys'), ...keyRows,
 			keyRows.length > 0 && h('p', { className: 'meta' }, 'Keys are kept in the Android Keystore, never in a file.'),
 			h('h2', {}, 'Settings file'),

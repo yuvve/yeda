@@ -10,11 +10,12 @@ The browser covers what yeda-tui does:
 - attaching a PDF, to a local or a WebDAV location, and opening PDFs from WebDAV;
 - editing the Markdown note and the raw reference file;
 - extracting a PDF's embedded annotations;
-- filling literature tables with an LLM, and exporting them to CSV in the Download folder.
+- filling literature tables with an LLM, and exporting them to CSV in the Download folder;
+- git sync over HTTPS (⟳): commit everything, merge `origin`'s branch of the same name and push. Conflicting `annotations.toml` files are merged by annotation `id`; any other conflict stops the sync. Settings can also clone a library repository into an empty folder.
 
 The app reads the library through all-files access, and the library folder is chosen with the system folder picker. A PDF location whose folder isn't found on the device is asked for once and remembered. The app also registers for "Open with" on PDFs; annotations then go in a sidecar `<file>.annotations/` folder.
 
-Settings live in `settings.toml` in the app's data folder. It holds the library folder, plus anything the desktop's `~/.config/yeda/config.toml` takes, such as per-device `[locations]`. It acts as the library's machine config and can be edited as text in the app. WebDAV passwords and LLM API keys go in the Android Keystore, never in this file.
+Settings live in `settings.toml` in the app's data folder. It holds the library folder, plus anything the desktop's `~/.config/yeda/config.toml` takes, such as per-device `[locations]`. It acts as the library's machine config and can be edited as text in the app. WebDAV and git passwords or tokens and LLM API keys go in the Android Keystore, never in this file.
 
 Where yeda-tui uses poppler, the app uses the pdf.js that ships with the reader. It supplies the highlight text and image PNGs for extracted annotations, and the paper text for LLM providers that take text.
 

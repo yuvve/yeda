@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 anyhow = "1.0.104"
+git2 = { version = "0.21.0", default-features = false, features = ["https", "vendored-libgit2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tauri = { version = "2", features = [] }
@@ -22,3 +23,6 @@ yeda-fs = { path = "../../yeda-fs" }
 yeda-net = { path = "../../yeda-net" }
 yeda-reader = { path = "../../yeda-reader/src-tauri" }
 yeda-secrets = { path = "../../yeda-secrets" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

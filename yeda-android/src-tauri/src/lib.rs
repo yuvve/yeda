@@ -1,5 +1,7 @@
 //! yeda-android's Tauri commands: the library browser, next to yeda-reader's commands for the PDF view.
 
+mod git;
+
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -213,6 +215,8 @@ struct Overview {
     sort_fields: Vec<(SortField, &'static str)>,
     /// Every location a PDF can be attached to, local and WebDAV.
     locations: Vec<String>,
+    /// The library's git remote, if it is in a git repository.
+    git: Option<String>,
 }
 
 /// Re-reads the library from disk, since Syncthing or another client may have changed it.
@@ -237,6 +241,7 @@ fn refresh(app: AppHandle, state: State<Shared>) -> Res<Overview> {
             filter_fields: &FILTER_FIELDS,
             sort_fields: SortField::ALL.iter().map(|f| (*f, f.name())).collect(),
             locations: b.lib.locations.keys().chain(b.lib.remotes.keys()).cloned().collect(),
+            git: b.dir().ok().and_then(git::remote_url),
         })
     })
 }
@@ -514,8 +519,57 @@ fn export_table(app: AppHandle, state: State<Shared>, table: String) -> Res<Stri
 enum OpenRef {
     Opened,
     MissingLocation { location: String },
-    /// The WebDAV password for `account` isn't in the Keystore, or the server rejected it.
+    /// The password for `account` isn't in the Keystore, or the server rejected it.
     NeedsPassword { account: String, label: String, rejected: bool },
+    Synced { message: String },
+}
+
+/// Runs a git operation off the main thread with the Keystore's token for `url`;
+/// a missing or rejected token becomes `NeedsPassword`.
+async fn with_git_login(url: String, run: impl FnOnce(&git::Login) -> anyhow::Result<String> + Send + 'static) -> Res<OpenRef> {
+    let account = yeda_secrets::git_account(&url);
+    let token = yeda_secrets::get(&account).map_err(err)?;
+    let rejected = token.is_some();
+    let (result, refused) = tauri::async_runtime::spawn_blocking(move || {
+        let refused = std::cell::Cell::new(false);
+        let result = run(&git::Login { token: token.as_deref(), refused: &refused });
+        (result, refused.get())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match result {
+        Ok(message) => Ok(OpenRef::Synced { message }),
+        Err(_) if refused => Ok(OpenRef::NeedsPassword { account, label: url, rejected }),
+        Err(e) => Err(err(e)),
+    }
+}
+
+#[tauri::command]
+async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
+    let dir = state.with(&app, |b| Ok(b.dir()?.to_path_buf()))?;
+    let url = git::remote_url(&dir).context("the library folder has no git remote named origin").map_err(err)?;
+    let out = with_git_login(url, move |login| git::sync(&dir, login)).await?;
+    state.change(&app, |_| Ok(()))?;
+    Ok(out)
+}
+
+/// Clones `url` into the empty folder `path` and makes it the library.
+#[tauri::command]
+async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: PathBuf) -> Res<OpenRef> {
+    if std::fs::read_dir(&path).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(format!("{} is not empty", path.display()));
+    }
+    let dir = path.clone();
+    let out = with_git_login(url.clone(), move |login| {
+        // A failed clone can leave a half-made repository, which would block the retry.
+        git::clone(&url, &dir, login).inspect_err(|_| drop(std::fs::remove_dir_all(dir.join(".git")))).map(|()| "cloned".into())
+    })
+    .await?;
+    if matches!(out, OpenRef::Synced { .. }) {
+        update_settings(&app, |s| s.library = Some(path)).map_err(err)?;
+        state.change(&app, |_| Ok(()))?;
+    }
+    Ok(out)
 }
 
 /// The password for `dav` from the Keystore, else what `open_ref` and `attach_pdf` answer.
@@ -653,6 +707,8 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         open_ref,
         attach_pdf,
         set_secret,
+        git_sync,
+        git_clone,
         settings_text,
         save_settings_text,
         open_pdf
@@ -661,6 +717,7 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    git::init();
     let browser = browser_handler();
     let reader = yeda_reader_lib::invoke_handler();
     tauri::Builder::default()

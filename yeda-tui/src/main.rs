@@ -1,5 +1,6 @@
 mod app;
 mod poppler;
+mod sync;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -119,22 +120,40 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             term.draw(|f| ui::draw(f, app))?;
             app.run_job(job);
         }
+        if std::mem::take(&mut app.sync) {
+            suspend(term, || {
+                let result = sync::run(&app.dir);
+                if let Err(e) = &result {
+                    println!("{e:#}\npress Enter to return");
+                    let _ = std::io::stdin().read_line(&mut String::new());
+                }
+                app.status = result.unwrap_or_else(|e| format!("sync: {e:#}"));
+            })?;
+            app.reload();
+        }
         if let Some(path) = app.edit.take() {
-            execute!(std::io::stdout(), event::DisableBracketedPaste)?;
-            ratatui::restore();
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
-            let result = Command::new(editor).arg(&path).status();
-            terminal::enable_raw_mode()?;
-            execute!(std::io::stdout(), terminal::EnterAlternateScreen, event::EnableBracketedPaste)?;
-            term.clear()?;
-            match result {
+            let mut result = None;
+            suspend(term, || result = Some(Command::new(editor).arg(&path).status()))?;
+            match result.unwrap() {
                 Ok(_) => app.reload(),
                 Err(e) => app.status = format!("editor: {e}"),
             }
         }
     }
+    Ok(())
+}
+
+/// Hands the terminal to `f`, then takes it back.
+fn suspend(term: &mut DefaultTerminal, f: impl FnOnce()) -> Result<()> {
+    execute!(std::io::stdout(), event::DisableBracketedPaste)?;
+    ratatui::restore();
+    f();
+    terminal::enable_raw_mode()?;
+    execute!(std::io::stdout(), terminal::EnterAlternateScreen, event::EnableBracketedPaste)?;
+    term.clear()?;
     Ok(())
 }
