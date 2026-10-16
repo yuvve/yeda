@@ -1,7 +1,7 @@
 # TODO
 
 ## Features
-- **Citation graph in yeda-tui.** Show a paper's references (out) and the papers citing it (in), and how papers connect, both in the library and outside it. Rendered in the terminal if possible; a separate view is acceptable. Citation data comes from an external API (for example OpenAlex, Semantic Scholar or OpenCitations), fetched through yeda-net. Similar to Local Citation Network (https://localcitationnetwork.github.io).
+- **Citation graph in yeda-tui.** Show a paper's references (out) and the papers citing it (in), and how papers connect, both in the library and outside it. Rendered in the terminal if possible; a separate view is acceptable. Citation data comes from an external API (for example OpenAlex, Semantic Scholar or OpenCitations), fetched through yeda-net. Similar to Local Citation Network (https://localcitationnetwork.github.io). Plan: `plans/citation-graph.md`.
 - **Pen and e-ink (yeda-android):**
   - route input by `pointerType`: the pen uses the active tool, a finger pans and zooms, and touch is ignored while the pen is down;
   - erase while the EMR side button (`buttons & 2`) or eraser end (`buttons & 32`) is held;
