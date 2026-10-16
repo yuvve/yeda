@@ -98,6 +98,12 @@ fn escape_spaces(s: &str) -> String {
     s.replace(' ', "\\ ")
 }
 
+/// Every distinct value `field` takes across `refs`, sorted.
+pub fn suggestions(refs: &[Ref], field: &str) -> Vec<String> {
+    let values: std::collections::BTreeSet<_> = refs.iter().flat_map(|r| field_values(r, field)).filter(|v| !v.is_empty()).collect();
+    values.into_iter().collect()
+}
+
 fn field_values(r: &Ref, name: &str) -> Vec<String> {
     match name {
         "author" | "authors" => r.authors.clone(),
@@ -208,6 +214,13 @@ mod tests {
         let q = compose(&fields, "deep learning");
         assert_eq!(q, r#"author:smith status:"To Read" doi:"" deep learning"#);
         assert_eq!(parse(&q), Query { fields, free: "deep learning".into() });
+    }
+
+    #[test]
+    fn suggests_distinct_sorted_values() {
+        let a = Ref { tags: vec!["ml".into(), "cats".into()], ..Default::default() };
+        let b = Ref { tags: vec!["ml".into()], ..Default::default() };
+        assert_eq!(suggestions(&[a, b], "tag"), ["cats", "ml"]);
     }
 
     #[test]

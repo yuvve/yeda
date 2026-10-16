@@ -188,11 +188,12 @@ export function showBrowser(openReader: () => void): () => boolean {
 	/** A form view of the search query: one input per field, then free text. */
 	async function showFilterForm() {
 		const parsed = await invoke<{ fields: [string, string][]; free: string }>('parse_query', { query: search.value });
+		const suggestions = await invoke<Record<string, string[]>>('filter_suggestions');
 		const known = new Set(overview.filter_fields.map(([f]) => f));
 		const kept = parsed.fields.filter(([f]) => !known.has(f));
 		const inputs = overview.filter_fields.map(([field, label]) => {
 			const input = h('input', { value: parsed.fields.find(([f]) => f === field)?.[1] ?? '' });
-			if (field === 'status') input.setAttribute('list', 'yeda-statuses');
+			input.setAttribute('list', `yeda-${field}`);
 			return [field, label, input] as const;
 		});
 		const free = h('input', { value: parsed.free });
@@ -204,7 +205,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 		show(h('h2', {}, 'Filter'),
 			h('table', {}, ...inputs.map(([, label, input]) => h('tr', {}, h('td', {}, label), h('td', {}, input))),
 				h('tr', {}, h('td', {}, 'Text'), h('td', {}, free))),
-			datalist('yeda-statuses', overview.statuses),
+			...overview.filter_fields.map(([field]) => datalist(`yeda-${field}`, suggestions[field] ?? [])),
 			h('div', { className: 'actions' }, button('Apply', apply), button('Cancel', () => run(showList))));
 	}
 

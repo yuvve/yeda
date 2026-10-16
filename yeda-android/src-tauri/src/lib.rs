@@ -288,6 +288,12 @@ fn parse_query(query: String) -> QueryFields {
     QueryFields { fields: q.fields, free: q.free.replace("\\ ", " ") }
 }
 
+/// Existing values of each filter form field.
+#[tauri::command]
+fn filter_suggestions(app: AppHandle, state: State<Shared>) -> Res<std::collections::HashMap<&'static str, Vec<String>>> {
+    state.with(&app, |b| Ok(FILTER_FIELDS.iter().map(|(f, _)| (*f, search::suggestions(&b.lib.refs, f))).collect()))
+}
+
 #[tauri::command]
 fn compose_query(fields: Vec<(String, String)>, free: String) -> String {
     search::compose(&fields, &free)
@@ -624,6 +630,7 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         refresh,
         list,
         parse_query,
+        filter_suggestions,
         compose_query,
         details,
         annotation_image,
