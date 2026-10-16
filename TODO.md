@@ -12,7 +12,6 @@
 - **Zotero exporter:** push references and annotations to Zotero through its web API.
 - **Zotero attachment items:** let yeda create them.
 - **Help screen** in yeda-android.
-- **Filter suggestions** in yeda-tui's `f` popup, as yeda-android has.
 
 ## Known gaps
 - WebDAV: a cached PDF isn't downloaded again when the copy on the server changes.

@@ -1,4 +1,4 @@
-use crate::app::{App, GUIDE, HELP, HelpPage, Mode, Pane, PickKind, Prompt, RightView};
+use crate::app::{App, FilterForm, GUIDE, HELP, HelpPage, Mode, Pane, PickKind, Prompt, RightView};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
 use yeda_core::annotations::Annotation;
@@ -270,7 +270,7 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     let Some(form) = &app.form else { return };
     let labels = FILTER_FIELDS.iter().map(|(_, label)| *label).chain(["Text"]);
-    let lines: Vec<Line> = labels
+    let mut lines: Vec<Line> = labels
         .zip(&form.values)
         .enumerate()
         .map(|(i, (label, value))| {
@@ -279,7 +279,16 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
-    let area = popup(main, 60, lines.len() as u16 + 2);
+    let suggestions = form.suggestions();
+    if !suggestions.is_empty() {
+        lines.push(Line::raw(format!("{:>10}  Ctrl-N/Ctrl-P pick · → completes", "")).dim());
+    }
+    for (i, s) in suggestions.iter().enumerate() {
+        let line = Line::raw(format!("{:>10}  {s}", ""));
+        lines.push(if i == form.pick { line.reversed() } else { line.dim() });
+    }
+    let height = (FILTER_FIELDS.len() + 2 + FilterForm::SHOWN) as u16 + 2;
+    let area = popup(main, 60, height);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(" Filter · Tab/↓ next · Enter apply · Esc cancel ".into(), true)), area);
 }

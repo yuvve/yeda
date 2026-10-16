@@ -51,7 +51,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("h l Tab", "switch column"),
     ("c", "show only the current column; again to show all"),
     ("/", "search; in the library column, filter it (:help explains the syntax)"),
-    ("f", "filter by field"),
+    ("f", "filter by field, with suggestions from the library"),
     ("s", "sort"),
     ("Esc", "clear the search"),
     ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
@@ -85,6 +85,35 @@ pub struct FilterForm {
     pub sel: usize,
     /// Terms of the query the form has no field for, kept as they are.
     other: Vec<(String, String)>,
+    /// Every value the selected field takes in the library.
+    options: Vec<String>,
+    pub pick: usize,
+}
+
+impl FilterForm {
+    /// How many suggestions the popup shows.
+    pub const SHOWN: usize = 8;
+
+    /// The options containing what is typed after the last `|`.
+    pub fn suggestions(&self) -> Vec<&str> {
+        let typed = self.values[self.sel].rsplit('|').next().unwrap_or_default().trim().to_lowercase();
+        self.options.iter().map(String::as_str).filter(|o| o.to_lowercase().contains(&typed) && o.to_lowercase() != typed).take(Self::SHOWN).collect()
+    }
+
+    fn select(&mut self, sel: usize, refs: &[Ref]) {
+        self.sel = sel;
+        self.pick = 0;
+        self.options = FILTER_FIELDS.get(sel).map(|(f, _)| search::suggestions(refs, f)).unwrap_or_default();
+    }
+
+    /// Replaces what is typed after the last `|` with the picked suggestion.
+    fn accept(&mut self) {
+        let Some(choice) = self.suggestions().get(self.pick).map(|s| s.to_string()) else { return };
+        let value = &mut self.values[self.sel];
+        value.truncate(value.rfind('|').map_or(0, |i| i + 1));
+        value.push_str(&choice);
+        self.pick = 0;
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -549,7 +578,9 @@ impl App {
             }
         }
         values.push(q.free.replace("\\ ", " "));
-        self.form = Some(FilterForm { values, sel: 0, other });
+        let mut form = FilterForm { values, sel: 0, other, options: Vec::new(), pick: 0 };
+        form.select(0, &self.lib.refs);
+        self.form = Some(form);
         self.mode = Mode::Filter;
     }
 
@@ -575,13 +606,20 @@ impl App {
                 self.pane = Pane::List;
                 self.refilter();
             }
-            KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
-            KeyCode::Char('n') if ctrl => form.sel = (form.sel + 1) % n,
-            KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
-            KeyCode::Char('p') if ctrl => form.sel = (form.sel + n - 1) % n,
+            KeyCode::Down | KeyCode::Tab => form.select((form.sel + 1) % n, &self.lib.refs),
+            KeyCode::Up | KeyCode::BackTab => form.select((form.sel + n - 1) % n, &self.lib.refs),
+            KeyCode::Char('n') if ctrl => form.pick = (form.pick + 1).min(form.suggestions().len().saturating_sub(1)),
+            KeyCode::Char('p') if ctrl => form.pick = form.pick.saturating_sub(1),
+            KeyCode::Right => form.accept(),
             KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
-            KeyCode::Backspace => drop(form.values[form.sel].pop()),
-            KeyCode::Char(c) if !ctrl => form.values[form.sel].push(c),
+            KeyCode::Backspace => {
+                form.values[form.sel].pop();
+                form.pick = 0;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                form.values[form.sel].push(c);
+                form.pick = 0;
+            }
             _ => {}
         }
     }

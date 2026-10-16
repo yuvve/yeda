@@ -45,6 +45,10 @@ FILTER  ( f )
   everything above works inside the boxes, | and ! included. Tab moves
   between boxes, Enter applies, Esc cancels.
 
+  Below the boxes, values the library already has for that field are
+  suggested as you type (after the last |, if any). Ctrl-N and Ctrl-P pick
+  one, and → puts it in the box.
+
 SORT  ( s )
 
   Choose key, title, first author, year, reading status or type. Choosing the
