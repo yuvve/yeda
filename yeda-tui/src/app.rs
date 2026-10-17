@@ -88,6 +88,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
     (":failed", "what the last add or fetch could not get, with the reasons"),
+    (":log", "every status message and failure, with times, in $EDITOR"),
     (":q", "quit"),
 ];
 
@@ -338,6 +339,7 @@ pub struct App {
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub help_scroll: u16,
+    pub log: crate::log::Log,
     /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
     history: Vec<String>,
     history_at: Option<usize>,
@@ -351,6 +353,7 @@ impl App {
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
             history_at: None,
+            log: crate::log::Log::open(),
             dir,
             sidebar: browse::sidebar(&lib),
             side_query: String::new(),
@@ -1011,6 +1014,13 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("failed", _) => self.open_help(HelpPage::Failed),
+                ("log", _) => match self.log.path.clone() {
+                    Some(path) => {
+                        let lines = fs::read_to_string(&path).map_or(1, |t| t.lines().count().max(1));
+                        self.edit = Some((path, Some(lines)));
+                    }
+                    None => self.status = "no folder for the log".into(),
+                },
                 ("cancel", _) => match &self.summarizer {
                     Some(s) => {
                         s.cancel.store(true, Ordering::Relaxed);
@@ -1194,7 +1204,10 @@ impl App {
         let Some(s) = &mut self.summarizer else { return };
         loop {
             match s.rx.try_recv() {
-                Ok(WorkerMsg::Started(text)) => self.status = text,
+                Ok(WorkerMsg::Started(text)) => {
+                    self.log.write(&text);
+                    self.status = text;
+                }
                 Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
                     if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
                         tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
@@ -1538,6 +1551,9 @@ impl App {
             Err(e) => format!("clipboard: {e}"),
         };
         self.report = failed.iter().map(|(i, e)| format!("{i}  {e}")).collect();
+        for line in &self.report {
+            self.log.write(&format!("failed: {line}"));
+        }
         format!("{} failed ({copied})", inputs.len())
     }
 
@@ -1746,7 +1762,10 @@ impl App {
         let Some(job) = &self.graph_job else { return };
         loop {
             match job.rx.try_recv() {
-                Ok(citations::Msg::Progress(s)) => self.status = format!("graph: {s}"),
+                Ok(citations::Msg::Progress(s)) => {
+                    self.status = format!("graph: {s}");
+                    self.log.write(&self.status);
+                }
                 Ok(citations::Msg::Done(result)) => {
                     let job = self.graph_job.take().unwrap();
                     return self.finish_graph(result, job.scope);
@@ -1946,7 +1965,10 @@ impl App {
         let Some(mut job) = self.fetch_job.take() else { return };
         loop {
             match job.rx.try_recv() {
-                Ok(fetch::Msg::Progress(s)) => self.status = s,
+                Ok(fetch::Msg::Progress(s)) => {
+                    self.log.write(&s);
+                    self.status = s;
+                }
                 Ok(fetch::Msg::Saved { key, file, verify }) => match self.attach_fetched(&key, &file, verify, &job) {
                     Ok(()) => job.added.push(key),
                     Err(e) => job.failed.push((key, format!("{e:#}"))),

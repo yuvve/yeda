@@ -1,6 +1,7 @@
 mod app;
 mod citations;
 mod fetch;
+mod log;
 mod poppler;
 mod sync;
 mod ui;
@@ -278,6 +279,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_worker();
         app.poll_graph();
         app.poll_fetch();
+        app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
             app.run_job(job);
