@@ -52,7 +52,7 @@ pub const GUIDE: &str = include_str!("guide.txt");
 pub const HELP: &[(&str, &str)] = &[
     ("j k Ctrl-d Ctrl-u gg G", "move"),
     ("h l Tab", "switch column"),
-    ("c", "show only the current column; again to show all"),
+    ("c", "show only the current column; again to show all. Below 120 columns the right column is hidden, below 80 the library column too"),
     ("/", "search; in the library column, filter it (:help explains the syntax)"),
     ("f", "filter by field, with suggestions from the library"),
     ("s", "sort"),
