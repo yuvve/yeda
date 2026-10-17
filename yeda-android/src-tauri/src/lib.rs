@@ -647,6 +647,28 @@ fn pdf_is(app: AppHandle, state: State<Shared>, key: String, text: String) -> Re
     state.with(&app, |b| Ok(fulltext::looks_like(&text, b.get(&key)?)))
 }
 
+#[derive(Serialize)]
+struct CiteFormats {
+    default: String,
+    styles: Vec<&'static str>,
+}
+
+#[tauri::command]
+fn cite_formats(app: AppHandle, state: State<Shared>) -> Res<CiteFormats> {
+    let default = state.with(&app, |b| Ok(b.lib.cite.format.clone().unwrap_or_else(|| "bibtex".into())))?;
+    Ok(CiteFormats { default, styles: yeda_core::cite::style_names() })
+}
+
+/// The references `keys` as `format` (see `cite::export`); a `.csl` path is relative to the library.
+#[tauri::command]
+fn cite(app: AppHandle, state: State<Shared>, keys: Vec<String>, format: String) -> Res<String> {
+    state.with(&app, |b| {
+        let refs: Vec<Ref> = keys.iter().filter_map(|k| b.lib.get(k).cloned()).collect();
+        let dir = b.dir()?.to_path_buf();
+        yeda_core::cite::export(&refs, &format, |path| Ok(std::fs::read_to_string(dir.join(path))?))
+    })
+}
+
 /// Clones `url` into the empty folder `path` and makes it the library.
 #[tauri::command]
 async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: PathBuf) -> Res<OpenRef> {
@@ -803,6 +825,8 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         set_secret,
         git_sync,
         git_clone,
+        cite_formats,
+        cite,
         fetch_plan,
         fetch_direct,
         read_download,

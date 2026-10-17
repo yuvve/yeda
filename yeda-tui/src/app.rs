@@ -14,7 +14,7 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
-use yeda_core::fulltext;
+use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::tables::{self, Row};
@@ -79,6 +79,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":sync", "commit, pull and push the library with git"),
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
+    (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
@@ -952,6 +953,7 @@ impl App {
                 ("sync", _) => self.sync = true,
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
                 ("fetch", args) => self.fetch_command(args.trim(), text),
+                ("cite", args) => self.cite(args.trim()),
                 ("", _) => {}
                 _ => self.status = format!("unknown command: {text}"),
             },
@@ -1852,6 +1854,36 @@ impl App {
         if !job.failed.is_empty() {
             self.open_help(HelpPage::Failed);
         }
+    }
+}
+
+impl App {
+    /// Copies the targets as `format`, else `[cite] format`, else BibTeX.
+    fn cite(&mut self, format: &str) {
+        let refs: Vec<Ref> = self.targets().iter().map(|&i| self.lib.refs[i].clone()).collect();
+        if refs.is_empty() {
+            self.status = "no reference selected".into();
+            return;
+        }
+        let format = if format.is_empty() { self.lib.cite.format.clone().unwrap_or_else(|| "bibtex".into()) } else { format.to_string() };
+        let read = |path: &str| {
+            let path = match (path.strip_prefix("~/"), dirs::home_dir()) {
+                (Some(rest), Some(home)) => home.join(rest),
+                _ => self.dir.join(path),
+            };
+            fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
+        };
+        let text = match cite::export(&refs, &format, read) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("{e:#}");
+                return;
+            }
+        };
+        self.status = match self.copy(&text) {
+            Ok(()) => format!("copied {} reference{} as {format}", refs.len(), if refs.len() == 1 { "" } else { "s" }),
+            Err(e) => format!("clipboard: {e}"),
+        };
     }
 }
 

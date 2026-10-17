@@ -76,6 +76,15 @@ struct Config {
     default_llm: Option<String>,
     graph: Option<crate::graph::Settings>,
     fulltext: Option<crate::fulltext::Settings>,
+    cite: Option<CiteSettings>,
+}
+
+/// `[cite]` in yeda.toml.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CiteSettings {
+    /// What `:cite` copies without an argument: `bibtex`, a style name, or a `.csl` file.
+    pub format: Option<String>,
 }
 
 pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not Reading"];
@@ -99,6 +108,7 @@ pub struct Library {
     pub graph: crate::graph::Settings,
     /// `[fulltext]`, for fetching PDFs.
     pub fulltext: crate::fulltext::Settings,
+    pub cite: CiteSettings,
     pub refs: Vec<Ref>,
     /// `yeda.toml` as loaded, so config edits keep keys this version doesn't know.
     shared: toml::Table,
@@ -166,6 +176,9 @@ impl Library {
             }
             if let Some(f) = cfg.fulltext {
                 lib.fulltext = f;
+            }
+            if let Some(c) = cfg.cite {
+                lib.cite = c;
             }
         }
         for (key, text) in refs {

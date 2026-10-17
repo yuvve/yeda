@@ -9,6 +9,7 @@ zotero = ["dep:rusqlite"]
 
 [dependencies]
 anyhow = "1.0.104"
+hayagriva = "0.10.1"
 csv = "1.4.0"
 lopdf = "0.45.0"
 md5 = { package = "md-5", version = "0.11.0" }

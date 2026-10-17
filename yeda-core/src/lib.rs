@@ -3,6 +3,7 @@
 
 pub mod annotations;
 pub mod browse;
+pub mod cite;
 pub mod fulltext;
 pub mod graph;
 pub mod ids;

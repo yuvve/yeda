@@ -101,6 +101,17 @@ CITATION GRAPH  ( :graph )
   and keeps it in the system secret store, never in a file. You are also
   asked when the keyless budget runs out, and OPENALEX_API_KEY works too.
 
+CITING  ( :cite [format] )
+
+  Copies the selected or marked references to the clipboard. The format is
+  bibtex, the name of a citation style (ieee, apa, chicago-author-date,
+  vancouver, nature, …), or the path of a .csl file, relative to the library
+  or starting with ~/. Without one it uses [cite] format from yeda.toml, else
+  bibtex:
+
+    [cite]
+    format = "ieee"
+
 FETCHING PDFS  ( :fetch [location] )
 
   For the selected or marked references without a PDF, :fetch tries, in order:

@@ -239,7 +239,8 @@ export function showBrowser(openReader: () => void): () => boolean {
 		}));
 		const missing = rows.filter(r => !r.has_pdf).map(r => r.key);
 		const findMissing = missing.length > 0 && button(`Find missing PDFs (${missing.length})`, () => run(() => findPdfs(missing)));
-		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list, findMissing);
+		const citeAll = rows.length > 0 && button(`Cite these (${rows.length})`, () => run(() => showCite(rows.map(r => r.key), showList)));
+		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list, h('div', { className: 'actions' }, findMissing, citeAll));
 		atList = true;
 	}
 
@@ -325,6 +326,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 				r.pdf && button('Open PDF', () => run(() => openPdf(key))),
 				button(r.pdf ? 'Replace PDF' : 'Attach PDF', () => run(() => attachPdf(key))),
 				!r.pdf && button('Find PDF', () => run(() => findPdfs([key]))),
+				button('Cite', () => run(() => showCite([key], () => showDetails(key)))),
 				button(`Annotations (${d.annotations.length})`, () => showAnnotations(d)),
 				button(d.note ? 'Note' : 'Add note', () => showText(d, 'note')),
 				overview.tables.length > 0 && button('Tables', () => showTables(d)),
@@ -490,6 +492,22 @@ export function showBrowser(openReader: () => void): () => boolean {
 	}
 
 	/** Adds each identifier in a pasted list, then lists the ones that failed and copies them. */
+	async function showCite(keys: string[], back: () => Promise<void>) {
+		const { default: initial, styles } = await invoke<{ default: string; styles: string[] }>('cite_formats');
+		const formats = [...new Set([initial, 'bibtex', 'ieee', 'apa', ...styles])];
+		const select = h('select', {}, ...formats.map(f => h('option', { value: f, selected: f === initial }, f)));
+		const out = h('textarea', { rows: 12, readOnly: true, className: 'mono' });
+		const copy = async () => {
+			out.value = await invoke<string>('cite', { keys, format: select.value });
+			await navigator.clipboard.writeText(out.value).then(() => say(`copied ${keys.length} as ${select.value}`), e => say(String(e)));
+		};
+		select.onchange = () => run(copy);
+		show(button('← Back', () => run(back)), h('h2', {}, `Cite ${keys.length === 1 ? keys[0] : `${keys.length} references`}`),
+			h('p', {}, 'Format: ', select), out,
+			h('div', { className: 'actions' }, button('Copy', () => run(copy))));
+		await run(copy);
+	}
+
 	/** Lists what failed with the reasons, copying the inputs; `done` parts go in the status line. */
 	async function showFailures(title: string, done: (string | 0 | false)[], failed: [string, string][], extra?: Child) {
 		const list = failed.map(([input]) => input).join('\n');
