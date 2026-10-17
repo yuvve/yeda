@@ -51,5 +51,6 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `:export <table> <file.csv>` | Export a table |
 | `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
 | `:sync` | Commit all changes, pull with `git pull --no-rebase` and push; conflicting `annotations.toml` files are merged by annotation `id`, any other conflict aborts the merge |
+| `:graph[!] [selected\|filtered\|prefetch]` | Citation graph of the selected (or marked) references, the list, or the whole library, from OpenAlex; see `:help`. `!` fetches citing papers again. `:graph key` sets an optional OpenAlex API key, kept in the secret store |
 | `:keys` | List every key and command |
 | `:help` | Guide to search syntax (AND, OR, NOT, fields), filtering, sorting and saved searches |

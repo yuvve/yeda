@@ -7458,6 +7458,8 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "rusqlite",
+ "serde",
+ "serde_json",
  "yeda-core",
  "yeda-fs",
  "yeda-net",

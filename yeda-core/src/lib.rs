@@ -3,6 +3,7 @@
 
 pub mod annotations;
 pub mod browse;
+pub mod graph;
 pub mod ids;
 pub mod library;
 pub mod llm;

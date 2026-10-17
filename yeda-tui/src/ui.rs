@@ -5,6 +5,8 @@ use yeda_core::annotations::Annotation;
 use yeda_core::browse::Filter;
 use yeda_core::library::{Library, Ref};
 use ratatui::prelude::*;
+use ratatui::symbols::Marker;
+use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui_image::StatefulImage;
 
@@ -212,7 +214,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         &mut ListState::default().with_selected(Some(app.sel)),
     );
 
-    if app.right == RightView::Annotations && !detail.is_empty() {
+    if app.right == RightView::Graph && app.graph.is_some() {
+        draw_graph(f, app, detail);
+    } else if app.right == RightView::Annotations && !detail.is_empty() {
         draw_annotations(f, app, detail);
     } else if app.right == RightView::Tables {
         draw_tables(f, app, detail);
@@ -352,4 +356,75 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     app.help_scroll = app.help_scroll.min((lines.len() as u16).saturating_sub(area.height.saturating_sub(2)));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(title.into(), true)), area);
+}
+
+/// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it.
+fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
+    let Some(v) = &app.graph else { return };
+    if area.height < 10 {
+        return;
+    }
+    let g = &v.graph;
+    let focused = app.pane == Pane::Right;
+    let near = v.neighbours();
+    let list_height = (near.len() as u16 + 3).clamp(5, area.height / 2);
+    let [top, bottom] = Layout::vertical([Constraint::Min(6), Constraint::Length(list_height)]).areas(area);
+    let rows = g.years.len().max(1) as f64;
+    let pos = |i: usize| (g.nodes[i].x, rows - g.nodes[i].row as f64 - 0.5);
+    let edge = |(a, b): (usize, usize), color| {
+        let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
+        CanvasLine { x1, y1, x2, y2, color }
+    };
+    let canvas = Canvas::default()
+        .block(block(format!("Graph of {} ({} papers)", v.scope, g.nodes.len()), focused))
+        .marker(Marker::Braille)
+        .x_bounds([-0.15, 1.0])
+        .y_bounds([0.0, rows])
+        .paint(|ctx| {
+            // ponytail: past this many edges braille lines merge into a solid block, so only the selection's are drawn.
+            if g.edges.len() <= 60 {
+                for &e in g.edges.iter().filter(|e| e.0 != v.sel && e.1 != v.sel) {
+                    ctx.draw(&edge(e, Color::DarkGray));
+                }
+            }
+            ctx.layer();
+            for &e in g.edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
+                ctx.draw(&edge(e, Color::Yellow));
+            }
+            ctx.layer();
+            // Label only as many year rows as fit.
+            let step = (rows / top.height.saturating_sub(2).max(1) as f64).ceil().max(1.0) as usize;
+            for (row, year) in g.years.iter().enumerate().step_by(step) {
+                let label = year.map_or("?".to_string(), |y| y.to_string());
+                ctx.print(-0.15, rows - row as f64 - 0.5, Span::raw(label).dim());
+            }
+            for (i, n) in g.nodes.iter().enumerate() {
+                let glyph = if n.seed { "◉" } else if n.key.is_some() { "●" } else { "○" };
+                let style = if i == v.sel {
+                    Style::new().fg(Color::Yellow).bold()
+                } else if near.iter().any(|&(_, j)| j == i) {
+                    Style::new().fg(Color::Cyan)
+                } else {
+                    Style::new()
+                };
+                let (x, y) = pos(i);
+                ctx.print(x, y, Span::styled(glyph, style));
+            }
+        });
+    f.render_widget(canvas, top);
+
+    let node = &g.nodes[v.sel];
+    let label = |n: &yeda_core::graph::Node| {
+        let year = n.year.map(|y| y.to_string()).unwrap_or_default();
+        let mark = if n.key.is_some() { "●" } else { "○" };
+        format!("{mark} {year:4} {:<12.12} {}", n.first_author, n.title)
+    };
+    let items: Vec<ListItem> = near
+        .iter()
+        .map(|&(citing, i)| ListItem::new(format!("{} {}", if citing { "←" } else { "→" }, label(&g.nodes[i]))))
+        .collect();
+    let title = format!("{} · ← cites it, → it cites", label(node));
+    let mut state = ListState::default().with_selected(focused.then_some(v.nbr));
+    let list = List::new(items).block(block(title, focused)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    f.render_stateful_widget(list, bottom, &mut state);
 }

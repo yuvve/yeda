@@ -1,4 +1,5 @@
 mod app;
+mod citations;
 mod poppler;
 mod sync;
 mod ui;
@@ -116,6 +117,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             }
         }
         app.poll_worker();
+        app.poll_graph();
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
             app.run_job(job);

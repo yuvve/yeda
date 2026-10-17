@@ -1,4 +1,4 @@
-use crate::poppler;
+use crate::{citations, poppler};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
@@ -14,6 +14,7 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
+use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::tables::{self, Row};
 use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
@@ -75,6 +76,8 @@ pub const HELP: &[(&str, &str)] = &[
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":sync", "commit, pull and push the library with git"),
+    (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
+    (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
     (":failed", "the identifiers the last add could not fetch"),
@@ -153,6 +156,35 @@ pub enum RightView {
     Details,
     Annotations,
     Tables,
+    Graph,
+}
+
+const OPENALEX_ACCOUNT: &str = "api:openalex";
+
+/// The citation graph shown in the right column; its selected node follows the reference list.
+pub struct GraphView {
+    pub graph: Graph,
+    pub sel: usize,
+    /// The highlighted entry of `neighbours()`.
+    pub nbr: usize,
+    pub scope: String,
+    /// Nodes navigated away from, for Backspace.
+    back: Vec<usize>,
+}
+
+impl GraphView {
+    /// The selected node's neighbours: `(true, i)` for those citing it, then `(false, i)` for those it cites.
+    pub fn neighbours(&self) -> Vec<(bool, usize)> {
+        let (citing, cited) = self.graph.neighbours(self.sel);
+        citing.into_iter().map(|i| (true, i)).chain(cited.into_iter().map(|i| (false, i))).collect()
+    }
+}
+
+struct GraphJob {
+    rx: Receiver<citations::Msg>,
+    command: String,
+    scope: String,
+    keyless: bool,
 }
 
 pub struct Batch {
@@ -266,6 +298,8 @@ pub struct App {
     pub marked: BTreeSet<String>,
     /// `V` range marking: the anchor's index in `visible`, and the marks from before it started.
     pub visual: Option<(usize, BTreeSet<String>)>,
+    pub graph: Option<GraphView>,
+    graph_job: Option<GraphJob>,
     pub sort: Sort,
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
@@ -310,6 +344,8 @@ impl App {
             focus: false,
             marked: BTreeSet::new(),
             visual: None,
+            graph: None,
+            graph_job: None,
             sort: Sort::default(),
             sort_sel: 0,
             form: None,
@@ -434,6 +470,7 @@ impl App {
                     Some(secret) if k.code == KeyCode::Char('y') => yeda_secrets::set(&p.account, secret).err(),
                     _ => None,
                 };
+                self.status = if k.code == KeyCode::Char('y') { "saved" } else { "kept for this session" }.into();
                 self.retry(p.retry);
                 // After the retry, so its own status doesn't hide that the secret wasn't saved.
                 if let Some(e) = saved {
@@ -490,6 +527,10 @@ impl App {
             (KeyCode::Char('h') | KeyCode::Left, _) => {
                 self.pane = if self.pane == Pane::Right { Pane::List } else { Pane::Sidebar }
             }
+            (KeyCode::Enter, _) if self.in_graph() => self.graph_go(),
+            (KeyCode::Backspace, _) if self.in_graph() => self.graph_back(),
+            (KeyCode::Char('a'), _) if self.in_graph() => self.graph_add(),
+            (KeyCode::Char('o'), _) if self.in_graph() => self.graph_open(),
             (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
                 let right_focusable = self.right != RightView::Details;
                 self.pane = if self.pane == Pane::Sidebar || !right_focusable { Pane::List } else { Pane::Right }
@@ -897,6 +938,7 @@ impl App {
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
                 ("sync", _) => self.sync = true,
+                (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
                 ("", _) => {}
                 _ => self.status = format!("unknown command: {text}"),
             },
@@ -1426,6 +1468,7 @@ impl App {
             Pane::Sidebar => self.side_sel,
             Pane::List => self.sel,
             Pane::Right if self.right == RightView::Tables => self.table_scroll as usize,
+            Pane::Right if self.right == RightView::Graph => self.graph.as_ref().map_or(0, |g| g.nbr),
             Pane::Right => self.annot_sel,
         };
         self.move_to(cur.saturating_add_signed(delta));
@@ -1440,6 +1483,12 @@ impl App {
             Pane::List => {
                 self.sel = i.min(self.visible.len().saturating_sub(1));
                 self.extend_visual();
+                self.follow_in_graph();
+            }
+            Pane::Right if self.right == RightView::Graph => {
+                if let Some(g) = &mut self.graph {
+                    g.nbr = i.min(g.neighbours().len().saturating_sub(1));
+                }
             }
             Pane::Right if self.right == RightView::Tables => self.table_scroll = i.min(u16::MAX as usize) as u16,
             Pane::Right => self.annot_sel = i.min(self.annots.len().saturating_sub(1)),
@@ -1494,6 +1543,188 @@ impl App {
         self.apply(Ok(effects));
         self.marked.clear();
         self.reload();
+    }
+}
+
+impl App {
+    fn in_graph(&self) -> bool {
+        self.pane == Pane::Right && self.right == RightView::Graph && self.graph.is_some()
+    }
+
+    /// The OpenAlex key from the secret store, looked up once per session.
+    fn openalex_key(&mut self) -> Option<String> {
+        let key = self
+            .secrets
+            .entry(OPENALEX_ACCOUNT.into())
+            .or_insert_with(|| yeda_secrets::get(OPENALEX_ACCOUNT).ok().flatten().unwrap_or_default());
+        Some(key.clone()).filter(|k| !k.is_empty())
+    }
+
+    /// `args` is `selected` (the default), `filtered` or `prefetch`; `refresh` fetches citing works again.
+    fn graph_command(&mut self, args: &str, refresh: bool, command: &str) {
+        if self.graph_job.is_some() {
+            self.status = "a graph is already being fetched".into();
+            return;
+        }
+        let (scope, seeds): (&str, Vec<usize>) = match args.trim() {
+            "key" => {
+                let label = "OpenAlex API key (free at openalex.org/settings/api)".into();
+                self.asking = Some(PendingSecret { account: OPENALEX_ACCOUNT.into(), label, retry: Retry::Command(String::new()) });
+                self.input.clear();
+                self.mode = Mode::Prompt(Prompt::Secret);
+                return;
+            }
+            "" | "selected" => ("the selection", self.targets()),
+            "filtered" => ("the list", self.visible.clone()),
+            "prefetch" => ("the library", (0..self.lib.refs.len()).collect()),
+            _ => {
+                self.status = "usage: :graph[!] [selected|filtered|prefetch|key]".into();
+                return;
+            }
+        };
+        if seeds.is_empty() {
+            self.status = "no reference selected".into();
+            return;
+        }
+        let key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
+        let keyless = key.is_none();
+        let rx = citations::spawn(citations::Request {
+            refs: self.lib.refs.clone(),
+            seeds: seeds.iter().map(|&i| self.lib.refs[i].key.clone()).collect(),
+            settings: self.lib.graph.clone(),
+            cache: self.lib.cache.clone().unwrap_or_else(std::env::temp_dir),
+            key,
+            refresh,
+        });
+        self.status = "graph: starting…".into();
+        self.graph_job = Some(GraphJob { rx, command: command.into(), scope: scope.into(), keyless });
+    }
+
+    /// Applies a finished graph fetch; called from the event loop.
+    pub fn poll_graph(&mut self) {
+        let Some(job) = &self.graph_job else { return };
+        loop {
+            match job.rx.try_recv() {
+                Ok(citations::Msg::Progress(s)) => self.status = format!("graph: {s}"),
+                Ok(citations::Msg::Done(result)) => {
+                    let job = self.graph_job.take().unwrap();
+                    return self.finish_graph(result, job.scope);
+                }
+                Ok(citations::Msg::OverBudget) => {
+                    let job = self.graph_job.take().unwrap();
+                    if !job.keyless {
+                        self.status = "OpenAlex's daily budget for this key is used up; what was fetched is cached".into();
+                        return;
+                    }
+                    self.secrets.remove(OPENALEX_ACCOUNT);
+                    let label = "OpenAlex API key (free at openalex.org/settings/api; the keyless daily budget is used up)";
+                    if let Some(k) = self.secret(OPENALEX_ACCOUNT, label, Retry::Command(job.command.clone())) {
+                        self.secrets.insert(OPENALEX_ACCOUNT.into(), k);
+                        self.submit(Prompt::Command, &job.command);
+                    }
+                    return;
+                }
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.graph_job = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn finish_graph(&mut self, result: Result<citations::Fetched, String>, scope: String) {
+        let f = match result {
+            Ok(f) => f,
+            Err(e) => {
+                self.status = format!("graph: {e}");
+                return;
+            }
+        };
+        let mut effects = Vec::new();
+        for (key, id) in &f.matched {
+            if let Some(i) = self.lib.refs.iter().position(|r| &r.key == key) {
+                graph::set_work_id(&mut self.lib.refs[i], id);
+                effects.push(self.lib.save(&self.lib.refs[i]));
+            }
+        }
+        self.apply(effects.into_iter().collect());
+        let unknown = match f.unknown.len() {
+            0 => String::new(),
+            n => format!(" · {n} not in OpenAlex (no DOI, or an unknown one)"),
+        };
+        if f.graph.nodes.is_empty() {
+            self.status = format!("graph: nothing to show{unknown}");
+            return;
+        }
+        self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
+        let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
+        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, back: Vec::new() });
+        self.right = RightView::Graph;
+    }
+
+    /// Selects the list's reference in the graph, if it is there.
+    fn follow_in_graph(&mut self) {
+        let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
+        if let Some(g) = &mut self.graph
+            && let Some(i) = g.graph.find_key(&key)
+            && i != g.sel
+        {
+            g.sel = i;
+            g.nbr = 0;
+        }
+    }
+
+    fn graph_select(&mut self, i: usize) {
+        let Some(g) = &mut self.graph else { return };
+        g.sel = i;
+        g.nbr = 0;
+        // Move the list too, so the details and other commands follow the graph.
+        if let Some(key) = g.graph.nodes[i].key.clone()
+            && let Some(pos) = self.visible.iter().position(|&r| self.lib.refs[r].key == key)
+        {
+            self.sel = pos;
+        }
+    }
+
+    fn graph_go(&mut self) {
+        let Some(g) = &mut self.graph else { return };
+        let Some(&(_, target)) = g.neighbours().get(g.nbr) else { return };
+        g.back.push(g.sel);
+        self.graph_select(target);
+    }
+
+    fn graph_back(&mut self) {
+        if let Some(prev) = self.graph.as_mut().and_then(|g| g.back.pop()) {
+            self.graph_select(prev);
+        }
+    }
+
+    /// The highlighted neighbour, else the selected node.
+    fn graph_target(&self) -> Option<&graph::Node> {
+        let g = self.graph.as_ref()?;
+        let i = g.neighbours().get(g.nbr).map_or(g.sel, |&(_, i)| i);
+        g.graph.nodes.get(i)
+    }
+
+    fn graph_add(&mut self) {
+        match self.graph_target().map(|n| (n.key.clone(), n.doi.clone())) {
+            Some((Some(key), _)) => self.status = format!("{key} is already in the library"),
+            Some((None, Some(doi))) => self.submit(Prompt::Add, &doi),
+            _ => self.status = "this work has no DOI to add it by".into(),
+        }
+    }
+
+    fn graph_open(&mut self) {
+        let Some(doi) = self.graph_target().and_then(|n| n.doi.clone()) else {
+            self.status = "this work has no DOI".into();
+            return;
+        };
+        // ponytail: xdg-open only; macOS would need `open`.
+        let result = Command::new("xdg-open").arg(format!("https://doi.org/{doi}")).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        if let Err(e) = result {
+            self.status = format!("xdg-open: {e}");
+        }
     }
 }
 
