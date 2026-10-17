@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use yeda_core::graph::{self, Graph, Known, Settings, Work};
@@ -52,6 +52,28 @@ impl Cache {
     }
 }
 
+/// What OpenAlex didn't find, as `doi:…`, `title:…` and `id:…`, so it isn't asked again; `:graph!` retries.
+struct Misses<'a> {
+    cache: &'a Cache,
+    set: HashSet<String>,
+}
+
+impl<'a> Misses<'a> {
+    fn load(cache: &'a Cache, refresh: bool) -> Self {
+        let set = if refresh { HashSet::new() } else { cache.get("misses", "all").unwrap_or_default() };
+        Misses { cache, set }
+    }
+
+    fn has(&self, what: &str) -> bool {
+        self.set.contains(what)
+    }
+
+    fn add(&mut self, what: impl IntoIterator<Item = String>) -> Result<()> {
+        self.set.extend(what);
+        self.cache.put("misses", "all", &self.set)
+    }
+}
+
 pub fn spawn(req: Request) -> Receiver<Msg> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -71,10 +93,15 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
     let cache = Cache(req.cache.join("openalex"));
     let client = Client::new(req.key);
     let mut refs = req.refs;
+    let mut misses = Misses::load(&cache, req.refresh);
 
-    // ponytail: DOIs OpenAlex doesn't know are asked about again on every graph; remember misses if that adds up.
-    let unmatched: Vec<(usize, String)> =
-        refs.iter().enumerate().filter(|(_, r)| graph::work_id(r).is_none()).filter_map(|(i, r)| Some((i, graph::lookup_doi(r)?))).collect();
+    let unmatched: Vec<(usize, String)> = refs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| graph::work_id(r).is_none())
+        .filter_map(|(i, r)| Some((i, graph::lookup_doi(r)?)))
+        .filter(|(_, doi)| !misses.has(&format!("doi:{doi}")))
+        .collect();
     let mut matched = Vec::new();
     if !unmatched.is_empty() {
         progress(format!("matching {} references with OpenAlex…", unmatched.len()));
@@ -92,29 +119,37 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
         let rest: Vec<&(usize, String)> = unmatched.iter().filter(|(i, _)| graph::work_id(&refs[*i]).is_none()).collect();
         for (n, (i, doi)) in rest.iter().enumerate() {
             progress(format!("looking up DOI {}/{}…", n + 1, rest.len()));
-            if let Some(w) = client.one_by_doi(doi)? {
-                cache.put_works(std::slice::from_ref(&w))?;
-                graph::set_work_id(&mut refs[*i], &w.id);
-                matched.push((refs[*i].key.clone(), w.id));
+            match client.one_by_doi(doi)? {
+                Some(w) => {
+                    cache.put_works(std::slice::from_ref(&w))?;
+                    graph::set_work_id(&mut refs[*i], &w.id);
+                    matched.push((refs[*i].key.clone(), w.id));
+                }
+                None => misses.add([format!("doi:{doi}")])?,
             }
         }
     }
 
-    // ponytail: references OpenAlex doesn't find by title are searched again on every graph; a handful of list requests.
-    let untitled: Vec<usize> = (0..refs.len()).filter(|&i| graph::work_id(&refs[i]).is_none() && graph::lookup_doi(&refs[i]).is_none()).collect();
+    let untitled: Vec<usize> = (0..refs.len())
+        .filter(|&i| graph::work_id(&refs[i]).is_none() && graph::lookup_doi(&refs[i]).is_none())
+        .filter(|&i| !misses.has(&format!("title:{}", refs[i].title)))
+        .collect();
     for (n, &i) in untitled.iter().enumerate() {
         progress(format!("looking up {}/{} references without a DOI by title…", n + 1, untitled.len()));
         let found = client.by_title(&refs[i].title, refs[i].year)?;
-        if let Some(w) = found.into_iter().find(|w| graph::same_title(&w.title, &refs[i].title)) {
-            cache.put_works(std::slice::from_ref(&w))?;
-            graph::set_work_id(&mut refs[i], &w.id);
-            matched.push((refs[i].key.clone(), w.id));
+        match found.into_iter().find(|w| graph::same_title(&w.title, &refs[i].title)) {
+            Some(w) => {
+                cache.put_works(std::slice::from_ref(&w))?;
+                graph::set_work_id(&mut refs[i], &w.id);
+                matched.push((refs[i].key.clone(), w.id));
+            }
+            None => misses.add([format!("title:{}", refs[i].title)])?,
         }
     }
 
     let mut works: HashMap<String, Work> = HashMap::new();
     let library_ids: Vec<String> = refs.iter().filter_map(graph::work_id).map(String::from).collect();
-    load_or_fetch(&cache, &client, &library_ids, &mut works, &progress, "library works")?;
+    load_or_fetch(&cache, &client, &mut misses, &library_ids, &mut works, &progress, "library works")?;
 
     let by_key: HashMap<&str, &Ref> = refs.iter().map(|r| (r.key.as_str(), r)).collect();
     let mut seeds = Vec::new();
@@ -136,21 +171,21 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
     }
     for s in &seeds {
         let ids: Vec<String> = cache.get("citing", s).unwrap_or_default();
-        load_or_fetch(&cache, &client, &ids, &mut works, &progress, "citing works")?;
+        load_or_fetch(&cache, &client, &mut misses, &ids, &mut works, &progress, "citing works")?;
         citing.insert(s.clone(), ids);
     }
 
     let candidates = graph::candidates(&refs, &seeds, &Known { works: &works, citing: &citing }, req.settings.outside);
-    load_or_fetch(&cache, &client, &candidates, &mut works, &progress, "outside works")?;
+    load_or_fetch(&cache, &client, &mut misses, &candidates, &mut works, &progress, "outside works")?;
     let graph = graph::build(&refs, &seeds, &Known { works: &works, citing: &citing }, req.settings.outside);
     Ok(Fetched { graph, matched, unknown })
 }
 
 /// Puts the works for `ids` into `works`, from the cache or else from OpenAlex.
-fn load_or_fetch(cache: &Cache, client: &Client, ids: &[String], works: &mut HashMap<String, Work>, progress: &dyn Fn(String), what: &str) -> Result<()> {
+fn load_or_fetch(cache: &Cache, client: &Client, misses: &mut Misses, ids: &[String], works: &mut HashMap<String, Work>, progress: &dyn Fn(String), what: &str) -> Result<()> {
     let mut missing = Vec::new();
     for id in ids {
-        if works.contains_key(id) {
+        if works.contains_key(id) || misses.has(&format!("id:{id}")) {
             continue;
         }
         match cache.get::<Work>("works", id) {
@@ -162,6 +197,8 @@ fn load_or_fetch(cache: &Cache, client: &Client, ids: &[String], works: &mut Has
         progress(format!("fetching {} {what}…", missing.len()));
         let found = client.by_id(&missing)?;
         cache.put_works(&found)?;
+        let returned: HashSet<&str> = found.iter().map(|w| w.id.as_str()).collect();
+        misses.add(missing.iter().filter(|id| !returned.contains(*id)).map(|id| format!("id:{id}")))?;
         works.extend(found.into_iter().map(|w| (w.id.clone(), w)));
     }
     Ok(())

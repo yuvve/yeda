@@ -89,8 +89,9 @@ CITATION GRAPH  ( :graph )
 
   Data comes from OpenAlex. References are matched by DOI and get an
   `openalex` field. For each seed, its references and its 100 most cited
-  citing papers are fetched, then cached, so later graphs are instant. :graph!
-  fetches the citing papers again. Set the counts in yeda.toml:
+  citing papers are fetched, then cached, so later graphs are instant. What
+  OpenAlex doesn't have is remembered too. :graph! fetches the citing papers
+  again and retries what wasn't found. Set the counts in yeda.toml:
 
     [graph]
     outside = 20
