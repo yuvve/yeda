@@ -41,7 +41,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |
 | `?` | List every key and command |
-| `:` | Command |
+| `:` | Command; Up/Down recall earlier ones |
 | `q` | Quit |
 
 ## Commands

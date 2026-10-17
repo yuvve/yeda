@@ -69,6 +69,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("x", "extract the annotations embedded in the PDF"),
     ("C", "colour the selected tag (library column)"),
     ("dd", "delete the reference or saved search"),
+    (":  ↑ ↓", "command line; Up/Down recall earlier commands"),
     ("?", "this list"),
     ("q", "quit"),
     ("", ""),
@@ -337,11 +338,19 @@ pub struct App {
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub help_scroll: u16,
+    /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
+    history: Vec<String>,
+    history_at: Option<usize>,
 }
+
+const HISTORY_LEN: usize = 200;
 
 impl App {
     pub fn new(dir: PathBuf, lib: Library, picker: Picker) -> Self {
+        let history = lib.cache.as_ref().and_then(|c| fs::read_to_string(c.join("history")).ok()).unwrap_or_default();
         let mut app = Self {
+            history: history.lines().map(String::from).collect(),
+            history_at: None,
             dir,
             sidebar: browse::sidebar(&lib),
             side_query: String::new(),
@@ -662,8 +671,34 @@ impl App {
         }
     }
 
+    fn remember(&mut self, command: &str) {
+        self.history.retain(|c| c != command);
+        self.history.push(command.to_string());
+        let excess = self.history.len().saturating_sub(HISTORY_LEN);
+        self.history.drain(..excess);
+        if let Some(cache) = &self.lib.cache {
+            let _ = fs::create_dir_all(cache);
+            let _ = fs::write(cache.join("history"), self.history.join("\n") + "\n");
+        }
+    }
+
+    /// Up (`back`) or Down through the command history; past the newest is an empty line.
+    fn recall(&mut self, back: bool) {
+        let at = match (self.history_at, back) {
+            (None, true) => self.history.len().checked_sub(1),
+            (None, false) => None,
+            (Some(i), true) => Some(i.saturating_sub(1)),
+            (Some(i), false) => Some(i + 1).filter(|&i| i < self.history.len()),
+        };
+        self.history_at = at;
+        self.input = at.map(|i| self.history[i].clone()).unwrap_or_default();
+    }
+
     fn input_key(&mut self, k: KeyEvent) {
         let mode = self.mode;
+        if mode == Mode::Prompt(Prompt::Command) && matches!(k.code, KeyCode::Up | KeyCode::Down) {
+            return self.recall(k.code == KeyCode::Up);
+        }
         let buf = match mode {
             Mode::Search => &mut self.query,
             Mode::SideSearch => &mut self.side_query,
@@ -683,10 +718,15 @@ impl App {
             KeyCode::Esc => {
                 buf.clear();
                 self.mode = Mode::Normal;
+                self.history_at = None;
             }
             KeyCode::Enter => {
                 if let Mode::Prompt(p) = std::mem::replace(&mut self.mode, Mode::Normal) {
                     let text = std::mem::take(&mut self.input);
+                    self.history_at = None;
+                    if p == Prompt::Command && !text.trim().is_empty() {
+                        self.remember(text.trim());
+                    }
                     self.submit(p, text.trim());
                 }
             }
