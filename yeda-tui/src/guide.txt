@@ -84,7 +84,8 @@ CITATION GRAPH  ( :graph )
   (○). Rows are years, newest at the top. It stays in the right column and
   follows the reference list. In it, j/k pick a neighbour (← cites the
   selected paper, → is cited by it), Enter goes there, Backspace goes back,
-  a adds the paper by DOI, and o opens its DOI in the browser.
+  a adds the paper by DOI, o opens its DOI in the browser, and Esc (or
+  :graph close) closes the graph.
 
   Data comes from OpenAlex. References are matched by DOI and get an
   `openalex` field. For each seed, its references and its 100 most cited

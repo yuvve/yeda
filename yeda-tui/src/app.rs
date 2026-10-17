@@ -79,6 +79,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":sync", "commit, pull and push the library with git"),
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
+    (":graph close", "close the graph (Esc in the graph does too)"),
     (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -600,6 +601,7 @@ impl App {
                 self.extend_visual();
             }
             (KeyCode::Esc, _) if self.visual.is_some() => self.visual = None,
+            (KeyCode::Esc, _) if self.in_graph() => self.close_graph(),
             (KeyCode::Esc, _) if self.pane == Pane::List && !self.marked.is_empty() => {
                 self.status = format!("unmarked {}", self.marked.len());
                 self.marked.clear();
@@ -1603,6 +1605,14 @@ impl App {
 }
 
 impl App {
+    fn close_graph(&mut self) {
+        self.graph = None;
+        if self.right == RightView::Graph {
+            self.right = RightView::Details;
+            self.pane = Pane::List;
+        }
+    }
+
     fn in_graph(&self) -> bool {
         self.pane == Pane::Right && self.right == RightView::Graph && self.graph.is_some()
     }
@@ -1620,6 +1630,7 @@ impl App {
             return;
         }
         let (scope, seeds): (&str, Vec<usize>) = match args.trim() {
+            "close" => return self.close_graph(),
             "key" => {
                 let label = "OpenAlex API key (free at openalex.org/settings/api)".into();
                 self.asking = Some(PendingSecret { account: OPENALEX_ACCOUNT.into(), label, retry: Retry::Command(String::new()) });
@@ -1631,7 +1642,7 @@ impl App {
             "filtered" => ("the list", self.visible.clone()),
             "prefetch" => ("the library", (0..self.lib.refs.len()).collect()),
             _ => {
-                self.status = "usage: :graph[!] [selected|filtered|prefetch|key]".into();
+                self.status = "usage: :graph[!] [selected|filtered|prefetch|key|close]".into();
                 return;
             }
         };
