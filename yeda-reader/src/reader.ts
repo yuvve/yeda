@@ -60,7 +60,8 @@ export async function openReader(): Promise<boolean> {
 	document.title = launch.title;
 	// zotero/reader lays its toolbar out for a desktop window; on phones it scrolls sideways instead.
 	document.head.append(Object.assign(document.createElement('style'), {
-		textContent: '@media (max-width: 799px) { .toolbar { overflow-x: auto; scrollbar-width: none; } .toolbar > * { flex-shrink: 0; } }',
+		// zotero/reader positions the "/ N" page count absolutely, so it needs real width once items stop shrinking.
+		textContent: '@media (max-width: 799px) { .toolbar { overflow-x: auto; scrollbar-width: none; } .toolbar > * { flex-shrink: 0; } .toolbar #numPages div { position: static; } }',
 	}));
 	reader = window.createReader({
 		...requiredCallbacks,
