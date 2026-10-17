@@ -49,9 +49,9 @@ pub fn init() {
     }
 }
 
-/// The URL of the library's remote, or `None` if the folder isn't in a git repository.
+/// The URL of the library's remote, or `None` if the folder isn't itself a git repository.
 pub fn remote_url(dir: &Path) -> Option<String> {
-    let repo = Repository::discover(dir).ok()?;
+    let repo = Repository::open(dir).ok()?;
     repo.find_remote(REMOTE).ok()?.url().ok().map(String::from)
 }
 
@@ -82,7 +82,8 @@ fn commit_all(repo: &Repository) -> Result<bool> {
 
 /// Commits everything, merges `origin`'s branch of the same name and pushes; returns what happened.
 pub fn sync(dir: &Path, login: &Login) -> Result<String> {
-    let repo = Repository::discover(dir)?;
+    // `open`, not `discover`: a parent repository (a dotfiles repo, say) must not be synced.
+    let repo = Repository::open(dir).context("the library folder is not a git repository of its own")?;
     let committed = commit_all(&repo)?;
     let head = repo.head()?;
     let refname = head.name().context("HEAD is not a branch")?.to_string();
@@ -193,6 +194,10 @@ mod tests {
         assert_eq!(ids(&a), ["A", "C", "B"]);
         assert_eq!(ids(&b), ids(&a));
         assert!(!refused.get());
+        // A folder inside a repository is not one of its own.
+        fs::create_dir_all(a.join("inner")).unwrap();
+        assert!(remote_url(&a).is_some() && remote_url(&a.join("inner")).is_none());
+        assert!(sync(&a.join("inner"), &login).is_err());
         fs::remove_dir_all(&t).unwrap();
     }
 }

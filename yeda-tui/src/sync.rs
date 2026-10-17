@@ -28,9 +28,11 @@ fn interactive(dir: &Path, args: &[&str]) -> Result<bool> {
 
 /// Commits everything, merges the upstream branch and pushes; returns what happened.
 pub fn run(dir: &Path) -> Result<String> {
-    // Conflict paths are relative to the repository root, which may be above the library.
+    // A library inside some other repository (dotfiles in the home folder, say) must not sync it.
     let root = std::path::PathBuf::from(stdout(dir, &["rev-parse", "--show-toplevel"])?.trim());
-    let dir = root.as_path();
+    if root.canonicalize()? != dir.canonicalize()? {
+        bail!("the library folder is not a git repository of its own (it is inside {}); run git init in it", root.display());
+    }
     let committed = !stdout(dir, &["status", "--porcelain"])?.is_empty();
     if committed {
         stdout(dir, &["add", "-A"])?;
