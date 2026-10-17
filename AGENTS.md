@@ -11,6 +11,7 @@
 
 ## Testing
 - `cargo test --workspace`; `npx tsc --noEmit` in yeda-android.
+- CI runs `cargo clippy --workspace --all-targets -- -D warnings` on the latest stable Rust, which may be newer than the local default; run it with that version (`rustup toolchain install <version>`, then `cargo +<version> clippy …`).
 - APK:
   ```sh
   cd yeda-android && npm run build
