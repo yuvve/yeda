@@ -35,7 +35,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `e` / `n` | Edit the reference file / its Markdown note in `$EDITOR` |
 | `t` / `m` | Edit tags / move to a collection |
 | `r` / `R` | Next / previous reading status |
-| `A` / `T` | Show annotations / tables in the right column |
+| `A` / `T` | Show annotations / tables in the right column; in annotations, `o` opens an image in the image viewer and any other annotation in `$EDITOR` |
 | `x` | Extract the annotations embedded in the PDF |
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |

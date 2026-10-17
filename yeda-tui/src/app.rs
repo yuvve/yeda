@@ -58,7 +58,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("s", "sort"),
     ("Esc", "clear the search"),
     ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
-    ("o", "open the PDF in the reader (yeda read)"),
+    ("o", "open the PDF in the reader (yeda read); in annotations, the image in the viewer or the entry in $EDITOR"),
     ("e  n", "edit the reference file / its note in $EDITOR"),
     ("v  V", "mark or unmark one / mark a range until Esc; Esc again unmarks all"),
     ("t  m", "edit tags / move to a collection"),
@@ -304,7 +304,8 @@ pub struct App {
     pending: Option<char>,
     pub status: String,
     pub quit: bool,
-    pub edit: Option<PathBuf>,
+    /// A file for $EDITOR, and the line to start at.
+    pub edit: Option<(PathBuf, Option<usize>)>,
     pub sync: bool,
     pub job: Option<Job>,
     picker: Picker,
@@ -566,6 +567,7 @@ impl App {
             }
             (KeyCode::Char('a'), _) if self.in_graph() => self.graph_add(),
             (KeyCode::Char('o'), _) if self.in_graph() => self.graph_open(),
+            (KeyCode::Char('o'), _) if self.pane == Pane::Right && self.right == RightView::Annotations => self.open_annotation(),
             (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
                 let right_focusable = self.right != RightView::Details;
                 self.pane = if self.pane == Pane::Sidebar || !right_focusable { Pane::List } else { Pane::Right }
@@ -631,8 +633,8 @@ impl App {
                 _ => self.status = "select a tag in the library pane to color it".into(),
             },
             (KeyCode::Char('o'), _) => self.open_pdf(),
-            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| self.path(&library::ref_path(&r.key))),
-            (KeyCode::Char('n'), _) => self.edit = self.selected().map(|r| self.path(&library::note_path(&r.key))),
+            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| (self.path(&library::ref_path(&r.key)), None)),
+            (KeyCode::Char('n'), _) => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
             (KeyCode::Char('t'), _) => self.open_chooser(PickKind::Tags),
             (KeyCode::Char('m'), _) => self.open_chooser(PickKind::Move),
             (KeyCode::Char(':'), _) => self.mode = Mode::Prompt(Prompt::Command),
@@ -1785,11 +1787,28 @@ impl App {
             self.status = "this work has no DOI".into();
             return;
         };
+        self.xdg_open(format!("https://doi.org/{doi}"));
+    }
+
+    fn xdg_open(&mut self, target: impl AsRef<std::ffi::OsStr>) {
         // ponytail: xdg-open only; macOS would need `open`.
-        let result = Command::new("xdg-open").arg(format!("https://doi.org/{doi}")).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        let result = Command::new("xdg-open").arg(target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
         if let Err(e) = result {
             self.status = format!("xdg-open: {e}");
         }
+    }
+
+    /// Opens an image annotation in the image viewer, any other in $EDITOR at its entry.
+    fn open_annotation(&mut self) {
+        let (Some(key), Some(a)) = (self.annots_key.clone(), self.annots.get(self.annot_sel)) else { return };
+        if let Some(img) = &a.image {
+            let path = self.path(&library::annotations_dir(&key)).join(img);
+            return self.xdg_open(path);
+        }
+        let path = self.path(&annotations::file_path(&key));
+        let entry = format!("id = \"{}\"", a.id);
+        let line = fs::read_to_string(&path).ok().and_then(|t| t.lines().position(|l| l.trim() == entry)).map(|i| i + 1);
+        self.edit = Some((path, line));
     }
 }
 
