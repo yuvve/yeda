@@ -116,6 +116,10 @@ fn in_browser(req: &Request, items: &[&Item], pending: &mut HashSet<String>, sen
     for line in BufReader::new(child.stdout.take().unwrap()).lines() {
         let v: serde_json::Value = serde_json::from_str(&line?)?;
         let key = v["key"].as_str().unwrap_or_default().to_string();
+        if let Some(page) = v["page"].as_str() {
+            send(Msg::Progress(format!("fetch window: {key}: {page}")));
+            continue;
+        }
         pending.remove(&key);
         match (v["file"].as_str(), v["error"].as_str()) {
             (Some(file), _) => send(Msg::Saved { key, file: file.into(), verify: true }),
