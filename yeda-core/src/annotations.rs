@@ -206,7 +206,7 @@ fn extract(dir: &str, pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) ->
             let boxes: Vec<_> = if matches!(kind, "highlight" | "underline") {
                 let quads = numbers(&doc, get(b"QuadPoints"));
                 if quads.len() >= 8 {
-                    quads.chunks_exact(8).map(|q| bbox(&[q[0], q[2], q[4], q[6]], &[q[1], q[3], q[5], q[7]])).collect()
+                    quads.as_chunks::<8>().0.iter().map(|q| bbox(&[q[0], q[2], q[4], q[6]], &[q[1], q[3], q[5], q[7]])).collect()
                 } else {
                     rect_box.into_iter().collect()
                 }
@@ -283,7 +283,7 @@ fn text_string(obj: &Object) -> Option<String> {
     let bytes = obj.as_str().ok()?;
     Some(match bytes {
         [0xFE, 0xFF, rest @ ..] => {
-            String::from_utf16_lossy(&rest.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect::<Vec<_>>())
+            String::from_utf16_lossy(&rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect::<Vec<_>>())
         }
         [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into(),
         // ponytail: PDFDocEncoding read as Latin-1; differs only in a few punctuation code points.

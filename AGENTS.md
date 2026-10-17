@@ -11,6 +11,7 @@
 
 ## Testing
 - `cargo test --workspace`; `npx tsc --noEmit` in yeda-android.
+- CI runs `cargo clippy --workspace --all-targets -- -D warnings` on the latest stable Rust, which may be newer than the local default; run it with that version (`rustup toolchain install <version>`, then `cargo +<version> clippy …`).
 - APK:
   ```sh
   cd yeda-android && npm run build
@@ -24,4 +25,11 @@
 
 ## Workflow
 - Every change starts from a GitHub issue. Work on a branch `<issue number>-<short-name>` and open a PR that says `Closes #<n>`.
+- Give every new issue one Eisenhower label, and work in that order, oldest first within a quadrant:
+  - `Q1 do first`: urgent and important;
+  - `Q2 plan`: important;
+  - `Q3 quick`: urgent;
+  - `Q4 later`: neither.
+
+  Urgent means broken, blocking the user now, or risking data or secrets. Important means it serves reading and annotating, the library's integrity or security.
 - Keep no TODO or plan files in the repository; plans go in the issue.
