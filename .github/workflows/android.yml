@@ -3,6 +3,8 @@ name: Android APK
 on:
   push:
     branches: [main]
+  pull_request:
+    paths: [".github/workflows/android.yml"]
   workflow_dispatch:
 
 jobs:
@@ -35,10 +37,14 @@ jobs:
       - run: npm ci
       - run: npm run build:reader -w yeda-reader
 
+      # The runner image has no NDK variable to rely on; pin the version used for local builds.
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;30.0.16248370" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+
       - name: Build APK
         working-directory: yeda-android
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: npx tauri android build --apk --target aarch64 --ci
 
       # Without a keystore secret, a throwaway key signs the APK; installing a later build then needs an uninstall first.
