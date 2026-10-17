@@ -16,23 +16,26 @@ pub fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Patterns a Syncthing-shared library should never sync: git's internals, which Syncthing and git
-/// would corrupt between them, and the temporary files of atomic writes.
+/// What a Syncthing-shared library folder should never sync: git's internals (git carries the
+/// data; Syncthing and git working on one repository corrupt it) and atomic-write temporaries.
 const STIGNORE: &str = "// Written by yeda.\n.git\n*.tmp\n";
+/// The same for a PDF location, which holds no repository of yeda's.
+const STIGNORE_PDFS: &str = "// Written by yeda.\n*.tmp\n";
 
 /// Gives a Syncthing folder (one with `.stfolder`) a `.stignore`, unless it has one already.
-fn ensure_stignore(dir: &Path) -> io::Result<()> {
+fn ensure_stignore(dir: &Path, patterns: &str) -> io::Result<()> {
     let ignore = dir.join(".stignore");
     if dir.join(".stfolder").exists() && !ignore.exists() {
-        write_atomic(&ignore, STIGNORE.as_bytes())?;
+        write_atomic(&ignore, patterns.as_bytes())?;
     }
     Ok(())
 }
 
 /// Loads the library at `dir`, with `machine` as the per-device config overriding `yeda.toml`.
-/// A Syncthing-shared library also gets a `.stignore` (see `STIGNORE`) if it has none.
+/// The library folder and its local PDF locations, where shared with Syncthing, also get a
+/// `.stignore` if they have none.
 pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> Result<Library> {
-    ensure_stignore(dir).with_context(|| dir.join(".stignore").display().to_string())?;
+    ensure_stignore(dir, STIGNORE).with_context(|| dir.join(".stignore").display().to_string())?;
     let shared = read_optional(&dir.join(library::CONFIG))?;
     let machine = machine.map(read_optional).transpose()?.flatten();
     let mut refs = Vec::new();
@@ -45,7 +48,12 @@ pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> 
             }
         }
     }
-    Library::parse(shared.as_deref(), machine.as_deref(), refs, home)
+    let lib = Library::parse(shared.as_deref(), machine.as_deref(), refs, home)?;
+    for base in lib.locations.values() {
+        // A PDF folder that can't be written (read-only, unmounted) mustn't keep the library from loading.
+        let _ = ensure_stignore(base, STIGNORE_PDFS);
+    }
+    Ok(lib)
 }
 
 pub fn apply(dir: &Path, effects: impl IntoIterator<Item = Effect>) -> Result<()> {
@@ -124,6 +132,22 @@ mod tests {
         apply(&dir, lib.delete("a2020")).unwrap();
         assert!(load_library(&dir, None, None).unwrap().refs.is_empty());
         assert!(!dir.join("annotations/a2020").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn writes_stignore_only_for_syncthing_folders_without_one() {
+        let dir = std::env::temp_dir().join(format!("yeda-stignore-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        ensure_stignore(&dir, STIGNORE).unwrap();
+        assert!(!dir.join(".stignore").exists());
+        fs::create_dir(dir.join(".stfolder")).unwrap();
+        ensure_stignore(&dir, STIGNORE_PDFS).unwrap();
+        assert_eq!(fs::read_to_string(dir.join(".stignore")).unwrap(), STIGNORE_PDFS);
+        fs::write(dir.join(".stignore"), "mine\n").unwrap();
+        ensure_stignore(&dir, STIGNORE).unwrap();
+        assert_eq!(fs::read_to_string(dir.join(".stignore")).unwrap(), "mine\n");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
