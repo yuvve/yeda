@@ -644,7 +644,28 @@ export function showBrowser(openReader: () => void): () => boolean {
 			keyRows.length > 0 && h('p', { className: 'meta' }, 'Keys are kept in the Android Keystore, never in a file.'),
 			h('h2', {}, 'Settings file'),
 			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
-			button('Edit settings.toml', () => run(showSettingsFile)));
+			button('Edit settings.toml', () => run(showSettingsFile)),
+			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp));
+	}
+
+	function showHelp() {
+		const section = (title: string, ...lines: string[]) => [h('h2', {}, title), h('ul', {}, ...lines.map(l => h('li', {}, l)))];
+		show(button('← Back', () => run(showSettings)),
+			...section('Search',
+				'Words separated by spaces must all match (AND), in any field, fuzzily.',
+				'a|b matches either (OR); !word excludes it (NOT).',
+				'field:value searches one field: author, title, year, tag, coll, status, type, doi, key, or any field of the reference.',
+				'Quote values with spaces: status:"To Read". An empty value ("") finds references without that field.',
+				'Values are fuzzy; ^ and $ anchor them: status:"^Read$".'),
+			...section('Browsing',
+				'The first button picks a collection, tag or saved search; "Save this search" under a search keeps it.',
+				'Filter opens a form with one box per field and suggestions from the library.',
+				'The sort button picks the order; picking the current field again reverses it.'),
+			...section('A reference',
+				'Open PDF reads and annotates it; annotations are saved to the library as you go.',
+				'Status, tags and collection are set on the reference page; tag colours from the sidebar.',
+				'Extract annotations from PDF imports the annotations already embedded in the file.'),
+			...section('Sync', '⟳ commits, pulls and pushes the library with git, when the library folder is a git repository.'));
 	}
 
 	async function showSettingsFile() {
