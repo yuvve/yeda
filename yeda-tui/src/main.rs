@@ -22,7 +22,7 @@ use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
        yeda read <file.pdf> [--annotations <dir>] [--page N]
-       yeda import-zotero <zotero data dir> [library dir]
+       yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
        yeda import-table <table name> <file.csv> [library dir]
        yeda copy-pdfs <from location> <to location> [library dir]";
 
@@ -71,9 +71,18 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("import-zotero") {
+        let mut args = args.clone();
+        let pdfs_to = args.iter().position(|a| a == "--pdfs-to").map(|i| {
+            let to = args.get(i + 1).cloned();
+            args.drain(i..(i + 2).min(args.len()));
+            to
+        });
         let zotero = args.get(1).context(USAGE)?;
-        let lib = args.get(2).map_or(".", String::as_str);
-        println!("{}", import_zotero(Path::new(zotero), Path::new(lib))?);
+        let lib = Path::new(args.get(2).map_or(".", String::as_str));
+        println!("{}", import_zotero(Path::new(zotero), lib)?);
+        if let Some(to) = pdfs_to {
+            copy_pdfs(ZOTERO_LOCATION, &to.context(USAGE)?, lib)?;
+        }
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("copy-pdfs") {
@@ -128,28 +137,69 @@ fn ask_password(label: &str) -> Result<String> {
     result.map(|()| password)
 }
 
+/// The location `import-zotero` creates for Zotero's storage folder.
+const ZOTERO_LOCATION: &str = "zotero";
+
+/// Zotero's file-sync WebDAV folder, from its preferences, if it syncs files over WebDAV.
+fn zotero_webdav() -> Option<library::Dav> {
+    let base = dirs::home_dir()?.join(".zotero/zotero");
+    let profiles = fs::read_to_string(base.join("profiles.ini")).ok()?;
+    let profile = profiles.lines().find_map(|l| l.strip_prefix("Path="))?;
+    let prefs = fs::read_to_string(base.join(profile).join("prefs.js")).ok()?;
+    let pref = |name: &str| {
+        let line = prefs.lines().find(|l| l.contains(&format!("\"extensions.zotero.sync.storage.{name}\"")))?;
+        line.rsplit(", \"").next()?.split('"').next().map(String::from)
+    };
+    if pref("protocol")? != "webdav" {
+        return None;
+    }
+    // Zotero keeps its files in a `zotero` folder under the configured URL.
+    let url = format!("{}://{}/zotero", pref("scheme").unwrap_or_else(|| "https".into()), pref("url")?.trim_end_matches('/'));
+    Some(library::Dav { url, user: pref("username")? })
+}
+
+/// The WebDAV password for `dav`, from the secret store or asked for in the terminal.
+fn dav_password(dav: &library::Dav) -> Result<String> {
+    let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+    if let Ok(Some(p)) = yeda_secrets::get(&account) {
+        return Ok(p);
+    }
+    let p = ask_password(&format!("{}@{}", dav.user, dav.url))?;
+    if std::io::stdin().is_terminal() {
+        eprint!("save it in the secret store? [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if answer.trim().eq_ignore_ascii_case("y") {
+            yeda_secrets::set(&account, &p)?;
+        }
+    }
+    Ok(p)
+}
+
+/// A file from Zotero's WebDAV, where attachment `KEY/file` is stored as `KEY.zip`. Only reads.
+fn from_zotero_webdav(dav: &library::Dav, password: &str, path: &str) -> Result<Vec<u8>> {
+    let (key, file) = path.split_once('/').context("not a Zotero storage path")?;
+    let (zip, _) = yeda_net::webdav::download(dav, password, &format!("{key}.zip"))?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).context("not a zip file")?;
+    let index = archive.index_for_name(file).or((archive.len() == 1).then_some(0)).with_context(|| format!("{file} is not in {key}.zip"))?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut archive.by_index(index)?, &mut bytes)?;
+    Ok(bytes)
+}
+
 /// Copies every PDF at location `from` to location `to`, as `<citekey>/<file>`, and points the
-/// references at the copies. The originals stay where they are.
+/// references at the copies. The originals stay where they are. For Zotero's storage folder, a
+/// file missing on disk is downloaded from Zotero's WebDAV, which is only read.
 fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
     let mut lib = load_library(dir)?;
-    let password = |name: &str| -> Result<Option<String>> {
-        let Some(dav) = lib.remotes.get(name) else { return Ok(None) };
-        let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-        if let Ok(Some(p)) = yeda_secrets::get(&account) {
-            return Ok(Some(p));
-        }
-        let label = format!("{}@{}", dav.user, dav.url);
-        let p = ask_password(&label)?;
-        if std::io::stdin().is_terminal() {
-            eprint!("save it in the secret store? [y/N] ");
-            let mut answer = String::new();
-            std::io::stdin().read_line(&mut answer)?;
-            if answer.trim().eq_ignore_ascii_case("y") {
-                yeda_secrets::set(&account, &p)?;
-            }
-        }
-        Ok(Some(p))
-    };
+    let zotero_dav = (from == ZOTERO_LOCATION).then(zotero_webdav).flatten();
+    if let (Some(z), Some(target)) = (&zotero_dav, lib.remotes.get(to))
+        && target.url.trim_end_matches('/').starts_with(z.url.trim_end_matches('/'))
+    {
+        anyhow::bail!("{to} is inside Zotero's WebDAV folder ({}); use a folder of its own", z.url);
+    }
+    let mut zotero_password: Option<String> = None;
+    let password = |name: &str| lib.remotes.get(name).map(dav_password).transpose();
     let (from_password, to_password) = (password(from)?, password(to)?);
     let todo: Vec<usize> = (0..lib.refs.len()).filter(|&i| lib.refs[i].pdf.as_ref().is_some_and(|p| p.location == from)).collect();
     let mut failed = Vec::new();
@@ -162,7 +212,17 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
                 (Some(remote), Some(p)) => yeda_net::webdav::download(remote.dav, p, &remote.path)?.0,
                 _ => {
                     let path = lib.pdf_path(r)?;
-                    fs::read(&path).with_context(|| path.display().to_string())?
+                    match (fs::read(&path), &zotero_dav) {
+                        (Ok(bytes), _) => bytes,
+                        (Err(e), Some(z)) if e.kind() == std::io::ErrorKind::NotFound => {
+                            let password = match &zotero_password {
+                                Some(p) => p.clone(),
+                                None => zotero_password.insert(dav_password(z)?).clone(),
+                            };
+                            from_zotero_webdav(z, &password, &r.pdf.as_ref().unwrap().path)?
+                        }
+                        (Err(e), _) => return Err(anyhow::Error::from(e).context(path.display().to_string())),
+                    }
                 }
             };
             let old = r.pdf.as_ref().unwrap().path.clone();

@@ -1,6 +1,7 @@
 # TODO
 
 ## Features
+- **Smaller yeda-android:** keep reading, annotating, sorting, filtering, searches, tags and collections; drop what desktop covers, such as the magic wand, citation graph and LLM tables.
 - **Citation graph in yeda-android** (yeda-tui has `:graph`). Also: Semantic Scholar as a second source, and title search for references without a DOI.
 - **Pen and e-ink (yeda-android):**
   - route input by `pointerType`: the pen uses the active tool, a finger pans and zooms, and touch is ignored while the pen is down;
