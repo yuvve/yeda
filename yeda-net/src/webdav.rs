@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use std::time::Duration;
 use yeda_core::library::Dav;
-use yeda_core::webdav;
 
 /// The server rejected the user name and password; ask for the password again.
 #[derive(Debug)]
@@ -24,6 +23,7 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10 * 60)))
         .http_status_as_error(false)
+        .allow_non_standard_methods(true)
         .build()
         .into()
 }
@@ -42,23 +42,43 @@ fn check(url: &str, status: ureq::http::StatusCode) -> Result<()> {
     }
 }
 
-/// Downloads attachment `key` and returns the file `file` from it.
-pub fn download(dav: &Dav, password: &str, key: &str, file: &str) -> Result<Vec<u8>> {
-    let url = dav.file_url(&webdav::zip_name(key));
-    let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
-    check(&url, resp.status())?;
-    let zip = resp.body_mut().with_config().limit(u64::MAX).read_to_vec().with_context(|| url.clone())?;
-    webdav::unpack(&zip, file).with_context(|| url)
+/// The server's version of a file: its ETag, else its Last-Modified date. A cached copy with the
+/// same version needs no download.
+fn version(resp: &ureq::http::Response<ureq::Body>) -> Option<String> {
+    let header = |name| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(String::from);
+    header("etag").or_else(|| header("last-modified"))
 }
 
-/// Uploads `bytes` as attachment `key` in Zotero's layout; `mtime_ms` is the file's modification time.
-pub fn upload(dav: &Dav, password: &str, key: &str, file: &str, bytes: &[u8], mtime_ms: i64) -> Result<()> {
-    let (zip, prop) = webdav::pack(file, bytes, mtime_ms)?;
-    // The .prop goes last: Zotero takes its presence to mean the upload is complete.
-    for (name, body) in [(webdav::zip_name(key), zip), (webdav::prop_name(key), prop.into_bytes())] {
-        let url = dav.file_url(&name);
-        let resp = agent().put(&url).header("Authorization", authorization(dav, password)).send(&body[..]).with_context(|| url.clone())?;
-        check(&url, resp.status())?;
+/// The file at `path` and its version.
+pub fn download(dav: &Dav, password: &str, path: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let url = dav.file_url(path);
+    let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
+    check(&url, resp.status())?;
+    let version = version(&resp);
+    let bytes = resp.body_mut().with_config().limit(u64::MAX).read_to_vec().with_context(|| url)?;
+    Ok((bytes, version))
+}
+
+/// The version of the file at `path`, without downloading it.
+pub fn current_version(dav: &Dav, password: &str, path: &str) -> Result<Option<String>> {
+    let url = dav.file_url(path);
+    let resp = agent().head(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
+    check(&url, resp.status())?;
+    Ok(version(&resp))
+}
+
+/// Uploads `bytes` to `path`, creating its folder first.
+pub fn upload(dav: &Dav, password: &str, path: &str, bytes: &[u8]) -> Result<()> {
+    if let Some((dir, _)) = path.rsplit_once('/') {
+        let url = dav.file_url(dir) + "/";
+        let mkcol = ureq::http::Request::builder().method("MKCOL").uri(&url).header("Authorization", authorization(dav, password)).body(())?;
+        let resp = agent().run(mkcol).with_context(|| url.clone())?;
+        // 405: the folder exists already.
+        if resp.status().as_u16() != 405 {
+            check(&url, resp.status())?;
+        }
     }
-    Ok(())
+    let url = dav.file_url(path);
+    let resp = agent().put(&url).header("Authorization", authorization(dav, password)).send(bytes).with_context(|| url.clone())?;
+    check(&url, resp.status())
 }

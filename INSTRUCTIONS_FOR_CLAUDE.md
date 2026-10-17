@@ -106,7 +106,7 @@ yeda-android must reach parity with yeda-tui. The exception is Zotero import, wh
 ## Later phases
 
 Open work is listed in `TODO.md`. Done so far:
-- WebDAV attachments in Zotero's layout: download on open, `:attach` uploads. The URL and user name go in `yeda.toml`; passwords go in the system secret store via yeda-secrets, never in files.
+- WebDAV attachments as plain files at `<citekey>/<file>`, like local locations: download on open when the server's copy changed, `:attach` uploads. The URL and user name go in `yeda.toml`; passwords go in the system secret store via yeda-secrets, never in files.
 - Git sync: `:sync` in yeda-tui uses the git CLI; yeda-android uses libgit2 over HTTPS with a token in the Keystore. Both merge conflicting `annotations.toml` files by `id` (`annotations::merge3`).
 
 ## Verification

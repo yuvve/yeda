@@ -10,20 +10,21 @@ use app::App;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::Picker;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::{execute, terminal};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use yeda_core::library::Library;
+use yeda_core::library::{self, Library};
 use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
        yeda read <file.pdf> [--annotations <dir>] [--page N]
        yeda import-zotero <zotero data dir> [library dir]
-       yeda import-table <table name> <file.csv> [library dir]";
+       yeda import-table <table name> <file.csv> [library dir]
+       yeda copy-pdfs <from location> <to location> [library dir]";
 
 pub fn load_library(dir: &Path) -> Result<Library> {
     let machine = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
@@ -75,6 +76,10 @@ fn main() -> Result<()> {
         println!("{}", import_zotero(Path::new(zotero), Path::new(lib))?);
         return Ok(());
     }
+    if args.first().map(String::as_str) == Some("copy-pdfs") {
+        let (Some(from), Some(to)) = (args.get(1), args.get(2)) else { anyhow::bail!(USAGE) };
+        return copy_pdfs(from, to, Path::new(args.get(3).map_or(".", String::as_str)));
+    }
     if args.first().map(String::as_str) == Some("import-table") {
         let (Some(name), Some(csv)) = (args.get(1), args.get(2)) else { anyhow::bail!(USAGE) };
         let dir = Path::new(args.get(3).map_or(".", String::as_str));
@@ -96,6 +101,93 @@ fn main() -> Result<()> {
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     res
+}
+
+/// Reads a password from the terminal without echoing it.
+fn ask_password(label: &str) -> Result<String> {
+    use event::{KeyCode, KeyModifiers};
+    eprint!("password for {label}: ");
+    std::io::stderr().flush()?;
+    terminal::enable_raw_mode()?;
+    let mut password = String::new();
+    let result = loop {
+        match event::read() {
+            Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
+                KeyCode::Enter => break Ok(()),
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => break Err(anyhow::anyhow!("cancelled")),
+                KeyCode::Backspace => drop(password.pop()),
+                KeyCode::Char(c) => password.push(c),
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(e) => break Err(e.into()),
+        }
+    };
+    terminal::disable_raw_mode()?;
+    eprintln!();
+    result.map(|()| password)
+}
+
+/// Copies every PDF at location `from` to location `to`, as `<citekey>/<file>`, and points the
+/// references at the copies. The originals stay where they are.
+fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
+    let mut lib = load_library(dir)?;
+    let password = |name: &str| -> Result<Option<String>> {
+        let Some(dav) = lib.remotes.get(name) else { return Ok(None) };
+        let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+        if let Ok(Some(p)) = yeda_secrets::get(&account) {
+            return Ok(Some(p));
+        }
+        let label = format!("{}@{}", dav.user, dav.url);
+        let p = ask_password(&label)?;
+        if std::io::stdin().is_terminal() {
+            eprint!("save it in the secret store? [y/N] ");
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            if answer.trim().eq_ignore_ascii_case("y") {
+                yeda_secrets::set(&account, &p)?;
+            }
+        }
+        Ok(Some(p))
+    };
+    let (from_password, to_password) = (password(from)?, password(to)?);
+    let todo: Vec<usize> = (0..lib.refs.len()).filter(|&i| lib.refs[i].pdf.as_ref().is_some_and(|p| p.location == from)).collect();
+    let mut failed = Vec::new();
+    for (n, &i) in todo.iter().enumerate() {
+        let key = lib.refs[i].key.clone();
+        eprint!("\r{}/{} {key:<40}", n + 1, todo.len());
+        let result = (|| -> Result<library::Ref> {
+            let r = &lib.refs[i];
+            let bytes = match (lib.remote_pdf(r), &from_password) {
+                (Some(remote), Some(p)) => yeda_net::webdav::download(remote.dav, p, &remote.path)?.0,
+                _ => {
+                    let path = lib.pdf_path(r)?;
+                    fs::read(&path).with_context(|| path.display().to_string())?
+                }
+            };
+            let old = r.pdf.as_ref().unwrap().path.clone();
+            let mut r = r.clone();
+            r.pdf = Some(lib.attach(&r, to, &old)?);
+            let dest = lib.pdf_path(&r)?;
+            yeda_fs::write_atomic(&dest, &bytes)?;
+            if let (Some(remote), Some(p)) = (lib.remote_pdf(&r), &to_password) {
+                yeda_net::webdav::upload(remote.dav, p, &remote.path, &bytes)?;
+                yeda_fs::set_cached_version(&dest, yeda_net::webdav::current_version(remote.dav, p, &remote.path)?.as_deref())?;
+            }
+            yeda_fs::apply(dir, [lib.save(&r)?])?;
+            Ok(r)
+        })();
+        match result {
+            Ok(r) => lib.refs[i] = r,
+            Err(e) if yeda_net::webdav::is_unauthorized(&e) => return Err(e),
+            Err(e) => failed.push(format!("{key}: {e:#}")),
+        }
+    }
+    eprintln!("\rcopied {} of {} PDFs from {from} to {to}{:30}", todo.len() - failed.len(), todo.len(), "");
+    for f in &failed {
+        eprintln!("  failed: {f}");
+    }
+    Ok(())
 }
 
 fn detect_picker() -> Picker {

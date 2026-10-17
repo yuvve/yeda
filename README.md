@@ -29,10 +29,10 @@ A reference manager whose library is plain TOML and Markdown files, kept in git.
 reader = "zathura"               # opens PDFs as <reader> <pdf> --annotations <dir>; default: yeda read
 default_llm = "claude"
 
-[locations]                      # pdf.location in a reference names one of these
+[locations]                      # pdf.location in a reference names one; PDFs go in <citekey>/<file>
 zotero = "~/Zotero/storage"
 
-[locations.dav]                  # a WebDAV server in Zotero's layout (<key>.zip + <key>.prop)
+[locations.dav]                  # a WebDAV server; PDFs are plain files at <citekey>/<file>
 url = "https://dav.example.com/zotero/"
 user = "yuvve"
 

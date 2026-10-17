@@ -42,8 +42,8 @@ pub struct Ref {
     pub tables: BTreeMap<String, BTreeMap<String, String>>,
 }
 
-/// A WebDAV server holding PDFs in Zotero's layout (`<key>.zip` and `<key>.prop`). The password
-/// is never part of the library: clients keep it in the system secret store.
+/// A WebDAV server holding PDFs as plain files, `<citekey>/<file>` like a local location. The
+/// password is never part of the library: clients keep it in the system secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dav {
     pub url: String,
@@ -51,8 +51,18 @@ pub struct Dav {
 }
 
 impl Dav {
-    pub fn file_url(&self, name: &str) -> String {
-        format!("{}/{name}", self.url.trim_end_matches('/'))
+    /// The URL of `path` (`/`-separated), each segment percent-encoded.
+    pub fn file_url(&self, path: &str) -> String {
+        let encode = |seg: &str| {
+            seg.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect::<String>()
+        };
+        let path: Vec<String> = path.split('/').map(encode).collect();
+        format!("{}/{}", self.url.trim_end_matches('/'), path.join("/"))
     }
 }
 
@@ -117,8 +127,8 @@ pub struct Library {
 pub struct RemotePdf<'a> {
     pub location: &'a str,
     pub dav: &'a Dav,
-    pub key: String,
-    pub file: String,
+    /// `/`-separated, relative to the server's URL.
+    pub path: String,
 }
 
 pub fn ref_path(key: &str) -> String {
@@ -252,16 +262,14 @@ impl Library {
         Ok(cache.join(&pdf.location).join(&pdf.path))
     }
 
-    /// The WebDAV server holding `r`'s PDF, with its attachment key and file name.
+    /// The WebDAV server holding `r`'s PDF, with the PDF's path on it.
     pub fn remote_pdf(&self, r: &Ref) -> Option<RemotePdf<'_>> {
         let pdf = r.pdf.as_ref()?;
         let (name, dav) = self.remotes.get_key_value(&pdf.location)?;
-        let (key, file) = pdf.path.split_once('/')?;
-        Some(RemotePdf { location: name, dav, key: key.into(), file: file.into() })
+        Some(RemotePdf { location: name, dav, path: pdf.path.clone() })
     }
 
-    /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<key>/<file name>`,
-    /// as Zotero lays out its storage, with a new Zotero-style attachment key.
+    /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<citekey>/<file name>`.
     pub fn attach(&self, r: &Ref, location: &str, file_name: &str) -> Result<Pdf> {
         anyhow::ensure!(
             self.locations.contains_key(location) || self.remotes.contains_key(location),
@@ -269,8 +277,7 @@ impl Library {
             self.locations.keys().chain(self.remotes.keys()).cloned().collect::<Vec<_>>().join(", ")
         );
         let file = Path::new(file_name).file_name().and_then(|f| f.to_str()).context("not a file name")?;
-        let key = crate::ids::zotero_key(&format!("{}|{location}|{file}", r.key));
-        Ok(Pdf { location: location.into(), path: format!("{key}/{file}") })
+        Ok(Pdf { location: location.into(), path: format!("{}/{file}", r.key) })
     }
 }
 
@@ -378,12 +385,11 @@ mod tests {
         lib.cache = Some("/c".into());
         assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/c/dav/ABCD2345/a.pdf"));
         let remote = lib.remote_pdf(&lib.refs[0]).unwrap();
-        assert_eq!((remote.key.as_str(), remote.file.as_str()), ("ABCD2345", "a.pdf"));
-        assert_eq!(remote.dav.file_url("ABCD2345.zip"), "https://dav.example/zotero/ABCD2345.zip");
+        assert_eq!(remote.path, "ABCD2345/a.pdf");
+        assert_eq!(remote.dav.file_url("a2020/Smith - 2020 - A & B.pdf"), "https://dav.example/zotero/a2020/Smith%20-%202020%20-%20A%20%26%20B.pdf");
 
         let pdf = lib.attach(&lib.refs[0], "papers", "/tmp/x/Paper.pdf").unwrap();
-        assert_eq!(pdf.location, "papers");
-        assert!(pdf.path.ends_with("/Paper.pdf") && pdf.path.len() == "ABCD2345/Paper.pdf".len(), "{}", pdf.path);
+        assert_eq!((pdf.location.as_str(), pdf.path.as_str()), ("papers", "a2020/Paper.pdf"));
         assert!(lib.attach(&lib.refs[0], "nowhere", "x.pdf").is_err());
 
         let local = Library::parse(Some(shared), Some("[locations]\ndav = \"/mirror\"\n"), [], None).unwrap();

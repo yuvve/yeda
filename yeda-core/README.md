@@ -11,7 +11,9 @@ The library format and the logic on top of it. It reads no files, makes no netwo
 | `tables` | LLM prompts for literature tables, parsing the model's reply, and CSV import and export |
 | `ids` | Recognising DOIs, arXiv IDs and ISBNs |
 | `llm` | LLM profile configuration |
-| `webdav` | Zotero's WebDAV layout: packing and unpacking `<key>.zip` and `<key>.prop` |
+| `graph` | Citation graphs: the seeds, the library and outside works linked to them, and a layout by year |
+| `fulltext` | Finding a PDF: open-access and publisher URLs, the library proxy, and checking a PDF is the paper |
+| `cite` | BibTeX export and bibliographies in a CSL style (hayagriva) |
 | `zotero` | Import from a Zotero database (feature `zotero`) |
 
 Some operations need things core can't provide itself, so the caller passes them in as arguments:

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use yeda_core::Effect;
 use yeda_core::library::{self, Library};
 
@@ -52,6 +52,37 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     f.write_all(bytes)?;
     f.sync_all()?;
     fs::rename(&tmp, path)
+}
+
+/// The server's version of a cached remote file, kept next to it.
+fn version_path(cached: &Path) -> PathBuf {
+    let mut p = cached.as_os_str().to_owned();
+    p.push(".version");
+    p.into()
+}
+
+pub fn set_cached_version(cached: &Path, version: Option<&str>) -> Result<()> {
+    match version {
+        Some(v) => write_atomic(&version_path(cached), v.as_bytes())?,
+        None => remove(&version_path(cached))?,
+    }
+    Ok(())
+}
+
+/// Downloads a remote file to `cached` unless the copy there is current: `is_current` gets the
+/// version stored with it and asks the server. Errors (offline, say) leave the cached copy alone.
+pub fn sync_cached(
+    cached: &Path,
+    is_current: impl FnOnce(Option<&str>) -> Result<bool>,
+    download: impl FnOnce() -> Result<(Vec<u8>, Option<String>)>,
+) -> Result<()> {
+    let version = read_optional(&version_path(cached))?;
+    if cached.exists() && version.is_some() && is_current(version.as_deref())? {
+        return Ok(());
+    }
+    let (bytes, version) = download()?;
+    write_atomic(cached, &bytes)?;
+    set_cached_version(cached, version.as_deref())
 }
 
 fn remove(path: &Path) -> io::Result<()> {

@@ -1216,17 +1216,22 @@ impl App {
         }
     }
 
+    /// Brings the cached copy of the selected reference's WebDAV PDF up to date, then opens it.
     fn download(&mut self, password: &str) {
         let Some(r) = self.selected() else { return };
         let (Some(remote), Ok(path)) = (self.lib.remote_pdf(r), self.lib.pdf_path(r)) else { return };
         let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-        let saved = yeda_net::webdav::download(remote.dav, password, &remote.key, &remote.file)
-            .and_then(|pdf| Ok(yeda_fs::write_atomic(&path, &pdf)?));
-        match saved {
-            Ok(()) => self.open_pdf(),
+        match yeda_fs::sync_cached(&path, |cached| {
+            yeda_net::webdav::current_version(remote.dav, password, &remote.path).map(|v| v.is_some() && v.as_deref() == cached)
+        }, || yeda_net::webdav::download(remote.dav, password, &remote.path)) {
+            Ok(()) => self.launch_reader(&path),
             Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
                 self.reject(&account);
                 self.open_pdf();
+            }
+            Err(e) if path.exists() => {
+                self.status = format!("{e:#}; opened the cached copy");
+                self.launch_reader(&path);
             }
             Err(e) => self.status = format!("{e:#}"),
         }
@@ -1278,11 +1283,13 @@ impl App {
         let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
         let mut r = self.lib.refs[i].clone();
         r.pdf = Some(self.lib.attach(&r, location, &file.to_string_lossy())?);
+        let path = self.lib.pdf_path(&r)?;
+        yeda_fs::write_atomic(&path, &bytes)?;
         if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&r), password) {
-            let mtime = fs::metadata(file)?.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis() as i64;
-            yeda_net::webdav::upload(remote.dav, password, &remote.key, &remote.file, &bytes, mtime)?;
+            yeda_net::webdav::upload(remote.dav, password, &remote.path, &bytes)?;
+            let version = yeda_net::webdav::current_version(remote.dav, password, &remote.path)?;
+            yeda_fs::set_cached_version(&path, version.as_deref())?;
         }
-        yeda_fs::write_atomic(&self.lib.pdf_path(&r)?, &bytes)?;
         Ok(r)
     }
 
@@ -1520,44 +1527,49 @@ impl App {
 
     fn open_pdf(&mut self) {
         let Some(r) = self.selected() else { return };
-        match self.lib.pdf_path(r) {
-            Ok(p) if !p.exists() => {
-                let Some(remote) = self.lib.remote_pdf(r) else {
-                    self.status = format!("missing: {}", p.display());
-                    return;
-                };
-                let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-                let label = format!("{}@{}", remote.dav.user, remote.dav.url);
-                let file = remote.file.clone();
-                if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
-                    self.status = format!("downloading {file}…");
-                    self.job = Some(Job::Download(password));
-                }
+        let path = match self.lib.pdf_path(r) {
+            Ok(p) => p,
+            Err(e) => return self.status = e.to_string(),
+        };
+        if let Some(remote) = self.lib.remote_pdf(r) {
+            let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
+            let label = format!("{}@{}", remote.dav.user, remote.dav.url);
+            let file = remote.path.clone();
+            if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
+                self.status = format!("checking {file}…");
+                self.job = Some(Job::Download(password));
             }
-            Ok(p) => {
-                let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
-                let mut command = match words.next() {
-                    Some(program) => Command::new(program),
-                    None => {
-                        let mut c = Command::new(std::env::current_exe().unwrap_or_else(|_| "yeda".into()));
-                        c.arg("read");
-                        c
-                    }
-                };
-                let result = command
-                    .args(words)
-                    .arg(&p)
-                    .arg("--annotations")
-                    .arg(self.path(&library::annotations_dir(&r.key)))
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-                if let Err(e) = result {
-                    self.status = format!("{}: {e}", command.get_program().to_string_lossy());
-                }
+            return;
+        }
+        if !path.exists() {
+            return self.status = format!("missing: {}", path.display());
+        }
+        self.launch_reader(&path);
+    }
+
+    /// Opens `pdf` for the selected reference, with its annotations folder.
+    fn launch_reader(&mut self, pdf: &std::path::Path) {
+        let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
+        let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
+        let mut command = match words.next() {
+            Some(program) => Command::new(program),
+            None => {
+                let mut c = Command::new(std::env::current_exe().unwrap_or_else(|_| "yeda".into()));
+                c.arg("read");
+                c
             }
-            Err(e) => self.status = e.to_string(),
+        };
+        let result = command
+            .args(words)
+            .arg(pdf)
+            .arg("--annotations")
+            .arg(self.path(&library::annotations_dir(&key)))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Err(e) = result {
+            self.status = format!("{}: {e}", command.get_program().to_string_lossy());
         }
     }
 

@@ -57,7 +57,7 @@ A yeda window with the system web engine yeda already ships for the reader: WebK
 - **Clients:**
   - `:fetch` (TUI) and "Find PDF" (Android) act on the selection or the marked references. They try option 1 first, then the window for the rest.
   - They report the same way as the batch magic wand: what was attached, and what failed with the reason, with the failures copied to the clipboard.
-  - A fetched PDF goes through the same code as `:attach`: it's copied into a local `[locations]` folder, or uploaded to a WebDAV one in Zotero's layout, with a copy in the cache. The file in the downloads folder is removed only after that succeeds. The location is `[fulltext] location`, and `:fetch <location>` overrides it; with neither set, yeda asks.
+  - A fetched PDF goes through the same code as `:attach`: it's copied into a local `[locations]` folder, or uploaded to a WebDAV one, with a copy in the cache. The file in the downloads folder is removed only after that succeeds. The location is `[fulltext] location`, and `:fetch <location>` overrides it; with neither set, yeda asks.
 
 ## Phases
 Built: all three phases, in yeda-tui (`:fetch`, the `yeda fetch` window) and yeda-android (Find PDF, `FetchActivity`).

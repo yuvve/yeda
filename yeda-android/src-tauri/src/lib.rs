@@ -726,19 +726,21 @@ async fn transfer(
 async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, Current>, key: String) -> Res<OpenRef> {
     let (pdf, remote) = state.with(&app, |b| {
         let r = b.get(&key)?;
-        let remote = b.lib.remote_pdf(r).map(|rp| (rp.dav.clone(), rp.key, rp.file));
+        let remote = b.lib.remote_pdf(r).map(|rp| (rp.dav.clone(), rp.path));
         Ok((b.lib.pdf_path(r).ok(), remote))
     })?;
-    if let (Some(path), Some((dav, attachment, file))) = (&pdf, remote)
-        && !path.is_file()
-    {
-        let path = path.clone();
-        let download = move |dav: &library::Dav, password: &str| {
-            let bytes = yeda_net::webdav::download(dav, password, &attachment, &file)?;
-            Ok(yeda_fs::write_atomic(&path, &bytes)?)
+    if let (Some(path), Some((dav, remote_path))) = (&pdf, remote) {
+        let cached = path.clone();
+        let sync = move |dav: &library::Dav, password: &str| {
+            let is_current = |v: Option<&str>| Ok(yeda_net::webdav::current_version(dav, password, &remote_path)?.is_some_and(|c| Some(c.as_str()) == v));
+            yeda_fs::sync_cached(&cached, is_current, || yeda_net::webdav::download(dav, password, &remote_path))
         };
-        if let Some(ask) = transfer(dav, download).await? {
-            return Ok(ask);
+        match transfer(dav, sync).await {
+            Ok(Some(ask)) => return Ok(ask),
+            Ok(None) => {}
+            // Offline, say: the cached copy will do.
+            Err(_) if path.is_file() => {}
+            Err(e) => return Err(e),
         }
     }
     state.with(&app, |b| {
@@ -758,22 +760,19 @@ async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, C
 #[tauri::command]
 async fn attach_pdf(app: AppHandle, state: State<'_, Shared>, key: String, path: PathBuf, location: String) -> Res<OpenRef> {
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mtime = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_millis() as i64);
     let (r, dest, remote) = state.with(&app, |b| {
         let mut r = b.get(&key)?.clone();
         r.pdf = Some(b.lib.attach(&r, &location, &path.to_string_lossy())?);
-        let remote = b.lib.remote_pdf(&r).map(|rp| (rp.dav.clone(), rp.key, rp.file));
+        let remote = b.lib.remote_pdf(&r).map(|rp| (rp.dav.clone(), rp.path));
         let dest = b.lib.pdf_path(&r)?;
         Ok((r, dest, remote))
     })?;
-    if let Some((dav, attachment, file)) = remote {
+    if let Some((dav, remote_path)) = remote {
         let upload_bytes = bytes.clone();
+        let cached = dest.clone();
         let upload = move |dav: &library::Dav, password: &str| {
-            yeda_net::webdav::upload(dav, password, &attachment, &file, &upload_bytes, mtime)
+            yeda_net::webdav::upload(dav, password, &remote_path, &upload_bytes)?;
+            yeda_fs::set_cached_version(&cached, yeda_net::webdav::current_version(dav, password, &remote_path)?.as_deref())
         };
         if let Some(ask) = transfer(dav, upload).await? {
             return Ok(ask);
