@@ -1,7 +1,7 @@
 # TODO
 
 ## Features
-- **PDF downloader:** fetch missing PDFs from open-access sources and through institutional access, with a download inbox as the fallback. Plan: `plans/pdf-downloader.md`.
+- **PDF downloader:** fetch missing PDFs from open-access sources, and through the library proxy in a bundled browser. Plan: `plans/pdf-downloader.md`.
 - **Citation graph in yeda-android** (yeda-tui has `:graph`). Also: Semantic Scholar as a second source, and title search for references without a DOI.
 - **Pen and e-ink (yeda-android):**
   - route input by `pointerType`: the pen uses the active tool, a finger pans and zooms, and touch is ignored while the pen is down;
