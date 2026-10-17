@@ -55,7 +55,7 @@ Settings for one machine go in `~/.config/yeda/config.toml`, which uses the same
 
 Secrets are never stored in a file. WebDAV passwords and LLM API keys are kept in the system secret store (see [yeda-secrets](yeda-secrets)), and clients ask for them when missing. On the desktop, an LLM key can also come from the environment variable named by `api_key_env`, which defaults to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
-PDFs on a WebDAV location are downloaded on first open into a cache (`~/.cache/yeda/<location>/<key>/<file>` on the desktop).
+PDFs live at `<location>/<citekey>/<file>`, locally or on WebDAV. A WebDAV PDF is cached (`~/.cache/yeda/<location>/…` on the desktop) and downloaded again when the server's copy changes.
 
 ## Building
 
