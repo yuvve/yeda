@@ -60,6 +60,21 @@ pub fn proxied_host(url: &str, proxy_host: &str) -> Option<String> {
     Some(format!("{scheme}://{host}.{proxy_host}{path}"))
 }
 
+/// IEEE Xplore's PDF for a `/document/<number>` page, directly or through the proxy, whose
+/// bot check stops the page but not the PDF.
+pub fn ieee_pdf(page: &str) -> Option<String> {
+    let (scheme, rest) = page.split_once("://")?;
+    let (host, path) = rest.split_once('/')?;
+    if !(host == "ieeexplore.ieee.org" || host.starts_with("ieeexplore-ieee-org.")) {
+        return None;
+    }
+    let number = path.strip_prefix("document/")?.split(['/', '?', '#']).next()?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{scheme}://{host}/stampPDF/getPDF.jsp?tp=&arnumber={number}&ref="))
+}
+
 pub fn is_pdf(bytes: &[u8]) -> bool {
     bytes.trim_ascii_start().starts_with(b"%PDF-")
 }
@@ -90,6 +105,16 @@ pub fn looks_like(text: &str, r: &Ref) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_ieee_pdfs() {
+        let pdf = |n: &str, host: &str| format!("https://{host}/stampPDF/getPDF.jsp?tp=&arnumber={n}&ref=");
+        let proxied = "ieeexplore-ieee-org.proxy.lib.ltu.se";
+        assert_eq!(ieee_pdf("https://ieeexplore-ieee-org.proxy.lib.ltu.se/document/10015635/"), Some(pdf("10015635", proxied)));
+        assert_eq!(ieee_pdf("https://ieeexplore.ieee.org/document/8993024"), Some(pdf("8993024", "ieeexplore.ieee.org")));
+        assert_eq!(ieee_pdf("https://ieeexplore.ieee.org/search/x"), None);
+        assert_eq!(ieee_pdf("https://link.springer.com/document/123"), None);
+    }
 
     #[test]
     fn builds_urls_and_checks_pdfs() {

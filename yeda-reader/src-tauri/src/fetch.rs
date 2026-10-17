@@ -182,6 +182,12 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             match event {
                 Ok(Event::Loaded(url)) => {
                     report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
+                    if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
+                        tried.push(pdf.clone());
+                        if let Some(outcome) = fetch_with_cookies(window, &pdf).and_then(save) {
+                            break outcome;
+                        }
+                    }
                     let _ = window.eval(&script);
                     loaded = Some(url);
                 }
