@@ -1,5 +1,6 @@
 use crate::{citations, fetch, poppler};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use std::collections::BTreeSet;
@@ -53,6 +54,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("j k Ctrl-d Ctrl-u gg G", "move"),
     ("h l Tab", "switch column"),
     ("c", "show only the current column; again to show all. Below 120 columns the right column is hidden, below 80 the library column too"),
+    ("mouse", "click selects and focuses; the wheel moves the selection"),
     ("/", "search; in the library column, filter it (:help explains the syntax)"),
     ("f", "filter by field, with suggestions from the library"),
     ("s", "sort"),
@@ -301,6 +303,8 @@ pub struct App {
     pub visible: Vec<usize>,
     pub sel: usize,
     pub page: usize,
+    /// What the last frame drew where: lists with their scroll offset, then whole columns.
+    pub clickable: Vec<(Pane, Rect, Option<usize>)>,
     pending: Option<char>,
     pub status: String,
     pub quit: bool,
@@ -352,6 +356,7 @@ impl App {
             visible: Vec::new(),
             sel: 0,
             page: 10,
+            clickable: Vec::new(),
             pending: None,
             status: String::new(),
             quit: false,
@@ -1515,6 +1520,36 @@ impl App {
         if key != self.table_scroll_key {
             self.table_scroll = 0;
             self.table_scroll_key = key;
+        }
+    }
+
+    /// Clicks select and focus; the wheel moves the selection of the column under the pointer.
+    pub fn on_mouse(&mut self, m: MouseEvent) {
+        if self.mode != Mode::Normal {
+            return;
+        }
+        let at = Position::new(m.column, m.row);
+        // Lists are recorded after their columns, so the last hit is the most specific.
+        let Some(&(pane, area, offset)) = self.clickable.iter().rev().find(|(_, r, _)| r.contains(at)) else { return };
+        if pane == Pane::Right && self.right == RightView::Details {
+            return;
+        }
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.pane = pane;
+                if let Some(offset) = offset {
+                    self.move_to(offset + (m.row - area.y) as usize);
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                self.pane = pane;
+                self.step(3);
+            }
+            MouseEventKind::ScrollUp => {
+                self.pane = pane;
+                self.step(-3);
+            }
+            _ => {}
         }
     }
 
