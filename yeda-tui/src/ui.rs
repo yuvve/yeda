@@ -15,6 +15,11 @@ fn block(title: String, focused: bool) -> Block<'static> {
     Block::bordered().title(title).border_style(style)
 }
 
+/// Records a bordered list (with its scroll offset) or column under `pane`, for mouse clicks.
+fn clickable(app: &mut App, pane: Pane, area: Rect, offset: Option<usize>) {
+    app.clickable.push((pane, area.inner(layout::Margin::new(1, 1)), offset));
+}
+
 fn color(c: &str) -> Option<Color> {
     c.parse().ok()
 }
@@ -116,13 +121,15 @@ fn draw_annotations(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let title = format!("Annotations ({})", app.annots.len());
+    let mut state = ListState::default().with_selected(Some(app.annot_sel));
     f.render_stateful_widget(
         List::new(items)
             .block(block(title, focused))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         top,
-        &mut ListState::default().with_selected(Some(app.annot_sel)),
+        &mut state,
     );
+    clickable(app, Pane::Right, top, Some(state.offset()));
 
     let outer = block(String::new(), false);
     let inner = outer.inner(bottom);
@@ -200,15 +207,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.pane = Pane::List;
     }
     app.page = main.height.saturating_sub(2) as usize;
+    app.clickable.clear();
+    clickable(app, Pane::Sidebar, side, None);
+    clickable(app, Pane::List, list, None);
+    clickable(app, Pane::Right, detail, None);
     let hl = Style::new().add_modifier(Modifier::REVERSED);
 
     let items: Vec<ListItem> = app.side_visible.iter().map(|&i| ListItem::new(label(&app.sidebar[i], &app.lib))).collect();
     let title = if app.side_query.is_empty() { "Library".into() } else { format!("Library /{}", app.side_query) };
-    f.render_stateful_widget(
-        List::new(items).block(block(title, app.pane == Pane::Sidebar)).highlight_style(hl),
-        side,
-        &mut ListState::default().with_selected(Some(app.side_sel)),
-    );
+    let mut state = ListState::default().with_selected(Some(app.side_sel));
+    f.render_stateful_widget(List::new(items).block(block(title, app.pane == Pane::Sidebar)).highlight_style(hl), side, &mut state);
+    clickable(app, Pane::Sidebar, side, Some(state.offset()));
 
     let items: Vec<ListItem> = app
         .visible
@@ -223,11 +232,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.visual.is_some() {
         title += " · VISUAL";
     }
-    f.render_stateful_widget(
-        List::new(items).block(block(title, app.pane == Pane::List)).highlight_style(hl),
-        list,
-        &mut ListState::default().with_selected(Some(app.sel)),
-    );
+    let mut state = ListState::default().with_selected(Some(app.sel));
+    f.render_stateful_widget(List::new(items).block(block(title, app.pane == Pane::List)).highlight_style(hl), list, &mut state);
+    clickable(app, Pane::List, list, Some(state.offset()));
 
     if app.right == RightView::Graph && app.graph.is_some() {
         draw_graph(f, app, detail);
@@ -375,7 +382,7 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 
 /// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
 /// selected paper is yellow, its neighbours cyan, and the neighbour highlighted in the list a magenta ◆.
-fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
+fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(v) = &app.graph else { return };
     if area.height < 10 {
         return;
@@ -465,4 +472,5 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     let mut state = ListState::default().with_selected(focused.then_some(v.nbr));
     let list = List::new(items).block(block(title, focused)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, bottom, &mut state);
+    clickable(app, Pane::Right, bottom, Some(state.offset()));
 }

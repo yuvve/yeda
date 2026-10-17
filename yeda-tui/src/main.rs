@@ -103,11 +103,11 @@ fn main() -> Result<()> {
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
     let mut term = ratatui::init();
-    execute!(std::io::stdout(), event::EnableBracketedPaste)?;
+    execute!(std::io::stdout(), event::EnableBracketedPaste, event::EnableMouseCapture)?;
     let picker = detect_picker();
     let mut app = App::new(dir, lib, picker);
     let res = run(&mut term, &mut app);
-    let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
+    let _ = execute!(std::io::stdout(), event::DisableBracketedPaste, event::DisableMouseCapture);
     ratatui::restore();
     res
 }
@@ -271,6 +271,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => app.on_key(k),
                 Event::Paste(text) => app.on_paste(&text),
+                Event::Mouse(m) => app.on_mouse(m),
                 _ => {}
             }
         }
@@ -310,11 +311,11 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Hands the terminal to `f`, then takes it back.
 fn suspend(term: &mut DefaultTerminal, f: impl FnOnce()) -> Result<()> {
-    execute!(std::io::stdout(), event::DisableBracketedPaste)?;
+    execute!(std::io::stdout(), event::DisableBracketedPaste, event::DisableMouseCapture)?;
     ratatui::restore();
     f();
     terminal::enable_raw_mode()?;
-    execute!(std::io::stdout(), terminal::EnterAlternateScreen, event::EnableBracketedPaste)?;
+    execute!(std::io::stdout(), terminal::EnterAlternateScreen, event::EnableBracketedPaste, event::EnableMouseCapture)?;
     term.clear()?;
     Ok(())
 }
