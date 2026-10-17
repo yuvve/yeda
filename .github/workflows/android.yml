@@ -1,10 +1,15 @@
 name: Android APK
 
+# Built for `android-v*` tags, pushed after merging changes to the Android app, and by hand.
 on:
   push:
-    branches: [main]
+    tags: ["android-v*"]
   pull_request:
     paths: [".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
   workflow_dispatch:
 
 jobs:
@@ -72,3 +77,9 @@ jobs:
         with:
           name: yeda-apk
           path: yeda.apk
+
+      - name: Publish the APK as a release
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" yeda.apk --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
