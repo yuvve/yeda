@@ -51,6 +51,8 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
+Data is everything in the library folder except PDFs; it syncs through git or Syncthing. PDFs sync through WebDAV or Syncthing. A library folder shared with Syncthing (it has `.stfolder`) gets a `.stignore` that leaves out `.git` and yeda's temporary `*.tmp` files; a Syncthing-shared PDF location gets one that leaves out `*.tmp`. An existing `.stignore` is kept.
+
 Settings for one machine go in `~/.config/yeda/config.toml`, which uses the same keys as `yeda.toml` and overrides it. On Android, the app's settings play this role.
 
 Secrets are never stored in a file. WebDAV passwords and LLM API keys are kept in the system secret store (see [yeda-secrets](yeda-secrets)), and clients ask for them when missing. On the desktop, an LLM key can also come from the environment variable named by `api_key_env`, which defaults to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
