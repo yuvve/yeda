@@ -3,30 +3,35 @@
 
 use anyhow::{Context, Result};
 use keyring_core::{Entry, Error};
-use std::sync::Once;
+use std::sync::Mutex;
 
 const SERVICE: &str = "yeda";
 
 fn entry(account: &str) -> Result<Entry> {
-    static STORE: Once = Once::new();
-    let mut failed = None;
-    STORE.call_once(|| match store() {
-        Ok(store) => keyring_core::set_default_store(store),
-        Err(e) => failed = Some(e),
-    });
-    if let Some(e) = failed {
-        return Err(e).context("opening the system secret store");
+    // Retried until it works, so starting a provider mid-session is picked up.
+    static READY: Mutex<bool> = Mutex::new(false);
+    let mut ready = READY.lock().unwrap();
+    if !*ready {
+        keyring_core::set_default_store(store().context("opening the system secret store")?);
+        *ready = true;
     }
     Entry::new(SERVICE, account).context("opening the system secret store")
 }
 
 #[cfg(target_os = "android")]
-fn store() -> keyring_core::Result<std::sync::Arc<keyring_core::CredentialStore>> {
+fn store() -> anyhow::Result<std::sync::Arc<keyring_core::CredentialStore>> {
     Ok(android_native_keyring_store::Store::new()?)
 }
 
 #[cfg(not(target_os = "android"))]
-fn store() -> keyring_core::Result<std::sync::Arc<keyring_core::CredentialStore>> {
+fn store() -> anyhow::Result<std::sync::Arc<keyring_core::CredentialStore>> {
+    // Connecting would make D-Bus start the default provider (GNOME Keyring), whose first-use
+    // prompt grabs the whole desktop. Only use a provider that is already running.
+    let bus = zbus::blocking::Connection::session().context("connecting to the session bus")?;
+    let name = zbus::names::BusName::try_from("org.freedesktop.secrets")?;
+    if !zbus::blocking::fdo::DBusProxy::new(&bus)?.name_has_owner(name)? {
+        anyhow::bail!("no secret store is running; enable the Secret Service integration in KeePassXC (or start another provider)");
+    }
     Ok(zbus_secret_service_keyring_store::Store::new()?)
 }
 
@@ -66,4 +71,15 @@ pub fn git_account(url: &str) -> String {
 /// The account name for an LLM API key, named after the environment variable that can also hold it.
 pub fn llm_account(env: &str) -> String {
     format!("llm:{env}")
+}
+
+#[cfg(test)]
+mod tests {
+    /// Run as `dbus-run-session -- cargo test -p yeda-secrets -- --ignored`: a fresh bus has no provider running.
+    #[test]
+    #[ignore = "needs a session bus without a secret store"]
+    fn never_starts_a_provider() {
+        let e = super::get("test").unwrap_err();
+        assert!(format!("{e:#}").contains("no secret store is running"), "{e:#}");
+    }
 }

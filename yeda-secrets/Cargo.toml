@@ -13,3 +13,4 @@ android-native-keyring-store = "1.0.0"
 
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+zbus = "5.19.0"

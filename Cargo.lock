@@ -7729,6 +7729,7 @@ dependencies = [
  "android-native-keyring-store",
  "anyhow",
  "keyring-core",
+ "zbus",
  "zbus-secret-service-keyring-store",
 ]
 
