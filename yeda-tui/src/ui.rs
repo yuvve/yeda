@@ -349,7 +349,7 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
                 .collect();
             (" Guide · j/k Ctrl-d/u scroll · q close ", lines)
         }
-        HelpPage::Failed => (if app.report_copied { " Not added · copied to the clipboard · q close " } else { " Not added · q close " }, app.report.iter().map(|l| Line::from(l.as_str())).collect()),
+        HelpPage::Failed => (if app.report_copied { " Failed · copied to the clipboard · q close " } else { " Failed · q close " }, app.report.iter().map(|l| Line::from(l.as_str())).collect()),
     };
     let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2;
     let area = popup(main, width, lines.len() as u16 + 2);

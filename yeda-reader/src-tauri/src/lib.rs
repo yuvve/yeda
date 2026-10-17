@@ -1,5 +1,8 @@
 //! The reader's Tauri commands; yeda-android registers them next to its own.
 
+#[cfg(desktop)]
+pub mod fetch;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 

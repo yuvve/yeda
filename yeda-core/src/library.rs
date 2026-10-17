@@ -75,6 +75,7 @@ struct Config {
     llm: BTreeMap<String, Profile>,
     default_llm: Option<String>,
     graph: Option<crate::graph::Settings>,
+    fulltext: Option<crate::fulltext::Settings>,
 }
 
 pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not Reading"];
@@ -96,6 +97,8 @@ pub struct Library {
     pub default_llm: Option<String>,
     /// `[graph]`, for citation graphs.
     pub graph: crate::graph::Settings,
+    /// `[fulltext]`, for fetching PDFs.
+    pub fulltext: crate::fulltext::Settings,
     pub refs: Vec<Ref>,
     /// `yeda.toml` as loaded, so config edits keep keys this version doesn't know.
     shared: toml::Table,
@@ -160,6 +163,9 @@ impl Library {
             lib.default_llm = cfg.default_llm.or(lib.default_llm);
             if let Some(g) = cfg.graph {
                 lib.graph = g;
+            }
+            if let Some(f) = cfg.fulltext {
+                lib.fulltext = f;
             }
         }
         for (key, text) in refs {

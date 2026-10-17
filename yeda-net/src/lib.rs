@@ -5,3 +5,4 @@ pub mod llm;
 pub mod wand;
 pub mod webdav;
 pub mod openalex;
+pub mod fulltext;

@@ -1,4 +1,4 @@
-use crate::{citations, poppler};
+use crate::{citations, fetch, poppler};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
@@ -14,6 +14,7 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
+use yeda_core::fulltext;
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::tables::{self, Row};
@@ -78,9 +79,10 @@ pub const HELP: &[(&str, &str)] = &[
     (":sync", "commit, pull and push the library with git"),
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
+    (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
-    (":failed", "the identifiers the last add could not fetch"),
+    (":failed", "what the last add or fetch could not get, with the reasons"),
     (":q", "quit"),
 ];
 
@@ -178,6 +180,14 @@ impl GraphView {
         let (citing, cited) = self.graph.neighbours(self.sel);
         citing.into_iter().map(|i| (true, i)).chain(cited.into_iter().map(|i| (false, i))).collect()
     }
+}
+
+struct FetchJob {
+    rx: Receiver<fetch::Msg>,
+    location: String,
+    password: Option<String>,
+    added: Vec<String>,
+    failed: Vec<(String, String)>,
 }
 
 struct GraphJob {
@@ -300,6 +310,7 @@ pub struct App {
     pub visual: Option<(usize, BTreeSet<String>)>,
     pub graph: Option<GraphView>,
     graph_job: Option<GraphJob>,
+    fetch_job: Option<FetchJob>,
     pub sort: Sort,
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
@@ -346,6 +357,7 @@ impl App {
             visual: None,
             graph: None,
             graph_job: None,
+            fetch_job: None,
             sort: Sort::default(),
             sort_sel: 0,
             form: None,
@@ -939,6 +951,7 @@ impl App {
                 ("attach", args) => self.attach(args, text),
                 ("sync", _) => self.sync = true,
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
+                ("fetch", args) => self.fetch_command(args.trim(), text),
                 ("", _) => {}
                 _ => self.status = format!("unknown command: {text}"),
             },
@@ -1257,20 +1270,23 @@ impl App {
         self.job = Some(Job::Attach { file, location, password });
     }
 
+    /// Copies `file` to a local location, or uploads it to a WebDAV one keeping a cached copy;
+    /// returns reference `i` pointing at it, not yet saved.
+    fn attach_file(&self, i: usize, file: &std::path::Path, location: &str, password: Option<&str>) -> anyhow::Result<Ref> {
+        let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+        let mut r = self.lib.refs[i].clone();
+        r.pdf = Some(self.lib.attach(&r, location, &file.to_string_lossy())?);
+        if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&r), password) {
+            let mtime = fs::metadata(file)?.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis() as i64;
+            yeda_net::webdav::upload(remote.dav, password, &remote.key, &remote.file, &bytes, mtime)?;
+        }
+        yeda_fs::write_atomic(&self.lib.pdf_path(&r)?, &bytes)?;
+        Ok(r)
+    }
+
     fn finish_attach(&mut self, file: &std::path::Path, location: &str, password: Option<&str>) {
         let Some(&i) = self.visible.get(self.sel) else { return };
-        let result = (|| -> anyhow::Result<Ref> {
-            let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
-            let mut r = self.lib.refs[i].clone();
-            r.pdf = Some(self.lib.attach(&r, location, &file.to_string_lossy())?);
-            if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&r), password) {
-                let mtime = fs::metadata(file)?.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_millis() as i64;
-                yeda_net::webdav::upload(remote.dav, password, &remote.key, &remote.file, &bytes, mtime)?;
-            }
-            yeda_fs::write_atomic(&self.lib.pdf_path(&r)?, &bytes)?;
-            Ok(r)
-        })();
-        match result {
+        match self.attach_file(i, file, location, password) {
             Ok(r) => {
                 let path = r.pdf.as_ref().map(|p| format!("{}:{}", p.location, p.path)).unwrap_or_default();
                 if self.apply(self.lib.save(&r).map(|e| vec![e])) {
@@ -1411,15 +1427,7 @@ impl App {
             parts.push(format!("already in library: {}", batch.existed.join(", ")));
         }
         if !batch.failed.is_empty() {
-            let failed: Vec<&str> = batch.failed.iter().map(|(i, _)| i.as_str()).collect();
-            let copy = self.copy(&failed.join("\n"));
-            self.report_copied = copy.is_ok();
-            let copied = match copy {
-                Ok(()) => "copied to the clipboard".to_string(),
-                Err(e) => format!("clipboard: {e}"),
-            };
-            parts.push(format!("{} failed ({copied})", failed.len()));
-            self.report = batch.failed.iter().map(|(i, e)| format!("{i}  {e}")).collect();
+            parts.push(self.report_failures(&batch.failed));
         }
         self.status = parts.join(" · ");
         let Some(key) = batch.added.last().or(batch.existed.last()).cloned() else {
@@ -1439,6 +1447,19 @@ impl App {
         if !batch.failed.is_empty() {
             self.open_help(HelpPage::Failed);
         }
+    }
+
+    /// Copies the failed inputs to the clipboard and keeps them for the `:failed` popup; returns the status part.
+    fn report_failures(&mut self, failed: &[(String, String)]) -> String {
+        let inputs: Vec<&str> = failed.iter().map(|(i, _)| i.as_str()).collect();
+        let copy = self.copy(&inputs.join("\n"));
+        self.report_copied = copy.is_ok();
+        let copied = match copy {
+            Ok(()) => "copied to the clipboard".to_string(),
+            Err(e) => format!("clipboard: {e}"),
+        };
+        self.report = failed.iter().map(|(i, e)| format!("{i}  {e}")).collect();
+        format!("{} failed ({copied})", inputs.len())
     }
 
     /// Keeps the clipboard open for the session: on Linux its contents last only while it is.
@@ -1724,6 +1745,112 @@ impl App {
         let result = Command::new("xdg-open").arg(format!("https://doi.org/{doi}")).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
         if let Err(e) = result {
             self.status = format!("xdg-open: {e}");
+        }
+    }
+}
+
+impl App {
+    /// `args` names the location, else `[fulltext] location`, else the only one there is.
+    fn fetch_command(&mut self, args: &str, command: &str) {
+        if self.fetch_job.is_some() {
+            self.status = "a fetch is already running".into();
+            return;
+        }
+        let names: Vec<String> = self.lib.locations.keys().chain(self.lib.remotes.keys()).cloned().collect();
+        let location = match (args, &self.lib.fulltext.location, names.as_slice()) {
+            ("", Some(l), _) => l.clone(),
+            ("", None, [only]) => only.clone(),
+            ("", None, _) => {
+                self.status = format!("name a location (:fetch <location>, or [fulltext] location in yeda.toml): {}", names.join(", "));
+                return;
+            }
+            (l, _, _) => l.to_string(),
+        };
+        if !names.contains(&location) {
+            self.status = format!("no location named '{location}' (locations: {})", names.join(", "));
+            return;
+        }
+        let password = match self.lib.remotes.get(&location) {
+            Some(dav) => {
+                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+                let label = format!("{}@{}", dav.user, dav.url);
+                match self.secret(&account, &label, Retry::Command(command.into())) {
+                    Some(p) => Some(p),
+                    None => return,
+                }
+            }
+            None => None,
+        };
+        let targets = self.targets();
+        let items: Vec<fetch::Item> = targets
+            .iter()
+            .map(|&i| &self.lib.refs[i])
+            .filter(|r| r.pdf.is_none())
+            .map(|r| fetch::Item { key: r.key.clone(), doi: graph::lookup_doi(r), file: fulltext::file_name(r) })
+            .collect();
+        if items.is_empty() {
+            self.status = if targets.is_empty() { "no reference selected" } else { "they already have PDFs" }.into();
+            return;
+        }
+        let downloads = match (&self.lib.fulltext.downloads, dirs::home_dir()) {
+            (Some(d), Some(home)) if d.starts_with("~") => home.join(d.strip_prefix("~").unwrap()),
+            (Some(d), _) => d.clone(),
+            (None, _) => dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("yeda/downloads"),
+        };
+        let openalex_key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
+        let request = fetch::Request { items, settings: self.lib.fulltext.clone(), downloads, openalex_key };
+        self.status = "fetch: starting…".into();
+        self.fetch_job = Some(FetchJob { rx: fetch::spawn(request), location, password, added: vec![], failed: vec![] });
+    }
+
+    /// Attaches fetched PDFs as they arrive; called from the event loop.
+    pub fn poll_fetch(&mut self) {
+        let Some(mut job) = self.fetch_job.take() else { return };
+        loop {
+            match job.rx.try_recv() {
+                Ok(fetch::Msg::Progress(s)) => self.status = s,
+                Ok(fetch::Msg::Saved { key, file, verify }) => match self.attach_fetched(&key, &file, verify, &job) {
+                    Ok(()) => job.added.push(key),
+                    Err(e) => job.failed.push((key, format!("{e:#}"))),
+                },
+                Ok(fetch::Msg::Failed { key, reason }) => job.failed.push((key, reason)),
+                Ok(fetch::Msg::Done) | Err(TryRecvError::Disconnected) => return self.finish_fetch(job),
+                Err(TryRecvError::Empty) => break,
+            }
+        }
+        self.fetch_job = Some(job);
+    }
+
+    fn attach_fetched(&mut self, key: &str, file: &std::path::Path, verify: bool, job: &FetchJob) -> anyhow::Result<()> {
+        let i = self.lib.refs.iter().position(|r| r.key == key).ok_or_else(|| anyhow::anyhow!("reference deleted meanwhile"))?;
+        if verify {
+            let text = poppler::pdf_text(file).unwrap_or_default();
+            anyhow::ensure!(
+                fulltext::looks_like(&text, &self.lib.refs[i]),
+                "the downloaded PDF doesn't look like this paper (no DOI or title match); it's in {}",
+                file.display()
+            );
+        }
+        let r = self.attach_file(i, file, &job.location, job.password.as_deref())?;
+        yeda_fs::apply(&self.dir, [self.lib.save(&r)?])?;
+        self.lib.refs[i] = r;
+        // Only once it is stored, so a failed upload leaves the download to retry with.
+        let _ = fs::remove_file(file);
+        Ok(())
+    }
+
+    fn finish_fetch(&mut self, job: FetchJob) {
+        let mut parts = Vec::new();
+        if !job.added.is_empty() {
+            parts.push(format!("attached {} PDF{} to {}", job.added.len(), if job.added.len() == 1 { "" } else { "s" }, job.location));
+        }
+        if !job.failed.is_empty() {
+            parts.push(self.report_failures(&job.failed));
+        }
+        self.status = if parts.is_empty() { "fetch: nothing fetched".into() } else { parts.join(" · ") };
+        self.reload();
+        if !job.failed.is_empty() {
+            self.open_help(HelpPage::Failed);
         }
     }
 }

@@ -84,6 +84,27 @@ impl Client {
         }
     }
 
+    /// Open-access PDF URLs for `doi`, OpenAlex's best first; free like `one_by_doi`.
+    pub fn pdf_urls(&self, doi: &str) -> Result<Vec<String>> {
+        let mut req = self.agent.get(format!("{API}/doi:{doi}")).query("select", "best_oa_location,locations");
+        if let Some(k) = &self.key {
+            req = req.query("api_key", k);
+        }
+        let v: Value = match req.call() {
+            Ok(mut resp) => serde_json::from_str(&resp.body_mut().read_to_string()?)?,
+            Err(ureq::Error::StatusCode(404)) => return Ok(vec![]),
+            Err(e) => return Err(anyhow::Error::from(e).context("OpenAlex")),
+        };
+        let locations = std::iter::once(&v["best_oa_location"]).chain(v["locations"].as_array().into_iter().flatten());
+        let mut urls: Vec<String> = Vec::new();
+        for l in locations.filter(|l| l["is_oa"].as_bool() == Some(true)) {
+            if let Some(u) = l["pdf_url"].as_str().filter(|u| !urls.iter().any(|x| x == u)) {
+                urls.push(u.to_string());
+            }
+        }
+        Ok(urls)
+    }
+
     pub fn by_id(&self, ids: &[&str]) -> Result<Vec<Work>> {
         self.by("openalex", ids)
     }
@@ -146,5 +167,9 @@ mod tests {
         let w = c.by_doi(&["10.1038/nature14539"]).unwrap();
         assert_eq!(w[0].id, "W2919115771");
         assert_eq!(c.citing("W2919115771", 3).unwrap().len(), 3);
+        let urls = c.pdf_urls("10.48550/arxiv.1706.03762").unwrap();
+        assert!(urls.iter().any(|u| u.contains("arxiv.org")), "{urls:?}");
+        let pdf = crate::fulltext::download(urls.iter().find(|u| u.contains("arxiv.org")).unwrap(), None).unwrap();
+        assert!(yeda_core::fulltext::is_pdf(&pdf));
     }
 }

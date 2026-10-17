@@ -1,5 +1,6 @@
 mod app;
 mod citations;
+mod fetch;
 mod poppler;
 mod sync;
 mod ui;
@@ -63,6 +64,11 @@ fn main() -> Result<()> {
         yeda_reader_lib::run_with(args.into_iter().skip(1));
         return Ok(());
     }
+    if args.first().map(String::as_str) == Some("fetch") {
+        let job: yeda_reader_lib::fetch::Job = serde_json::from_reader(std::io::stdin()).context("fetch: a job as JSON on stdin")?;
+        yeda_reader_lib::fetch::run(job);
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("import-zotero") {
         let zotero = args.get(1).context(USAGE)?;
         let lib = args.get(2).map_or(".", String::as_str);
@@ -118,6 +124,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
         app.poll_worker();
         app.poll_graph();
+        app.poll_fetch();
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
             app.run_job(job);

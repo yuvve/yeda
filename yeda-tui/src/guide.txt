@@ -101,6 +101,22 @@ CITATION GRAPH  ( :graph )
   and keeps it in the system secret store, never in a file. You are also
   asked when the keyless budget runs out, and OPENALEX_API_KEY works too.
 
+FETCHING PDFS  ( :fetch [location] )
+
+  For the selected or marked references without a PDF, :fetch tries, in order:
+  an open-access copy (arXiv and others, found through OpenAlex), the
+  publisher directly (works on a campus network), and then a browser window
+  that opens each paper through the library proxy. In the window you sign in
+  when the proxy asks, and click through where it stops (a bot check, a page
+  without a PDF link). Its Fetch menu skips a paper or stops. Every PDF is
+  checked against the paper, then copied or uploaded to the location, as with
+  :attach. The ones that fail are listed (:failed) and copied.
+
+    [fulltext]
+    location = "papers"                                  # where PDFs go
+    proxy = "https://proxy.example.edu/login?url={url}"  # the library proxy
+    # downloads = "~/yeda-downloads"   the window's own download folder
+
 TABLES
 
   Define literature tables in yeda.toml under [tables.<name>]. Then
