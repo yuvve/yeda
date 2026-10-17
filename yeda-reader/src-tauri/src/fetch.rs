@@ -156,12 +156,20 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             report(&Outcome::Saved { key: paper.key.clone(), file });
             continue;
         }
+        // Events from the last paper's page (a repeated report, a late download) would be taken as this one's.
+        if !blank_page(window, rx) {
+            for p in &job.papers[n..] {
+                report(&Outcome::Failed { key: p.key.clone(), error: "fetch window closed".into() });
+            }
+            return;
+        }
         let url = fulltext::proxied(&format!("https://doi.org/{}", paper.doi), &job.settings);
         if let Err(e) = url.parse().map_err(anyhow::Error::from).and_then(|u| Ok(window.navigate(u)?)) {
             report(&Outcome::Failed { key: paper.key.clone(), error: format!("{e:#}") });
             continue;
         }
         let target = job.downloads.join(&paper.file);
+        let part = job.downloads.join(format!("{}.part", paper.file));
         let save = |pdf: Vec<u8>| std::fs::write(&target, pdf).ok().map(|()| Outcome::Saved { key: paper.key.clone(), file: target.clone() });
         // The page waiting for its script to report, and the PDF links already tried.
         let mut loaded: Option<String> = None;
@@ -198,12 +206,12 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     }
                 }
                 // Anything but a PDF (an HTML page, a cancelled download) waits for the next one.
-                Ok(Event::Downloaded(Some(part))) => {
+                Ok(Event::Downloaded(Some(done))) if done == part => {
                     if let Some(file) = keep_pdf(&part, &target) {
                         break Outcome::Saved { key: paper.key.clone(), file };
                     }
                 }
-                Ok(Event::Downloaded(None)) => {}
+                Ok(Event::Downloaded(_)) => {}
                 Ok(Event::Skip) => break Outcome::Failed { key: paper.key.clone(), error: "skipped in the browser".into() },
                 Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => {
                     for p in &job.papers[n..] {
@@ -214,6 +222,22 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             }
         };
         report(&outcome);
+    }
+}
+
+/// Loads an empty page and drops every event until it has; false if the window was closed.
+fn blank_page(window: &WebviewWindow, rx: &Receiver<Event>) -> bool {
+    if window.navigate("about:blank".parse().unwrap()).is_err() {
+        return false;
+    }
+    loop {
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(Event::Loaded(url)) if url == "about:blank" => return true,
+            Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => return false,
+            // ponytail: a blank page that never reports loading is waited for once, then ignored.
+            Err(RecvTimeoutError::Timeout) => return true,
+            Ok(_) => {}
+        }
     }
 }
 
