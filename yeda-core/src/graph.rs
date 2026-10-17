@@ -74,6 +74,10 @@ pub struct Node {
     pub doi: Option<String>,
     /// How many seeds it cites or is cited by.
     pub links: usize,
+    /// How many seeds cite it.
+    pub cited_by_seeds: usize,
+    /// How many seeds it cites.
+    pub cites_seeds: usize,
     /// Position in the layout: `x` in 0..=1, `row` indexes `Graph::years`, newest first.
     pub x: f64,
     pub row: usize,
@@ -175,6 +179,11 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
                     .unwrap_or_default(),
                 doi: r.and_then(|r| r.doi.clone()).or(w.and_then(|w| w.doi.clone())),
                 links: links.get(id).copied().unwrap_or(0),
+                cited_by_seeds: seeds.iter().filter(|s| known.works.get(*s).is_some_and(|w| w.references.contains(id))).count(),
+                cites_seeds: seeds
+                    .iter()
+                    .filter(|s| known.citing.get(*s).is_some_and(|c| c.contains(id)) || w.is_some_and(|w| w.references.contains(s)))
+                    .count(),
                 x: 0.0,
                 row: 0,
             }
@@ -281,6 +290,9 @@ mod tests {
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["A", "B", "C", "X", "Y"]);
         assert_eq!(g.nodes[3].links, 2);
+        assert_eq!((g.nodes[3].cited_by_seeds, g.nodes[3].cites_seeds), (2, 0));
+        let c = &g.nodes[g.find("C").unwrap()];
+        assert_eq!((c.cited_by_seeds, c.cites_seeds), (0, 1));
         let a = g.find("A").unwrap();
         let (citing, cited) = g.neighbours(a);
         assert_eq!(citing, [g.find("C").unwrap()]);
