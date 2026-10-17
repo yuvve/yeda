@@ -16,8 +16,23 @@ pub fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Patterns a Syncthing-shared library should never sync: git's internals, which Syncthing and git
+/// would corrupt between them, and the temporary files of atomic writes.
+const STIGNORE: &str = "// Written by yeda.\n.git\n*.tmp\n";
+
+/// Gives a Syncthing folder (one with `.stfolder`) a `.stignore`, unless it has one already.
+fn ensure_stignore(dir: &Path) -> io::Result<()> {
+    let ignore = dir.join(".stignore");
+    if dir.join(".stfolder").exists() && !ignore.exists() {
+        write_atomic(&ignore, STIGNORE.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Loads the library at `dir`, with `machine` as the per-device config overriding `yeda.toml`.
+/// A Syncthing-shared library also gets a `.stignore` (see `STIGNORE`) if it has none.
 pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> Result<Library> {
+    ensure_stignore(dir).with_context(|| dir.join(".stignore").display().to_string())?;
     let shared = read_optional(&dir.join(library::CONFIG))?;
     let machine = machine.map(read_optional).transpose()?.flatten();
     let mut refs = Vec::new();
