@@ -48,6 +48,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 
 | Command | Action |
 |---|---|
+| `:log` | Open the log of status messages and failures (`~/.local/state/yeda/yeda.log`) in `$EDITOR` |
 | `:save <name>` | Save the current search |
 | `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM; `!` overwrites filled cells |
 | `:summarize-all[!] [table] [profile]` | The same for every visible reference |
