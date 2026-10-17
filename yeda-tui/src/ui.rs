@@ -45,10 +45,11 @@ pub fn status_glyph(status: Option<&str>) -> &'static str {
     }
 }
 
-fn row(r: &Ref, lib: &Library) -> Line<'static> {
+fn row(r: &Ref, lib: &Library, marked: bool) -> Line<'static> {
     let year = r.year.map(|y| y.to_string()).unwrap_or_default();
     let author = r.authors.first().and_then(|a| a.split(',').next()).unwrap_or("");
-    let mut spans = vec![Span::raw(format!("{} {year:4}  {author:<16.16} ", status_glyph(r.status.as_deref())))];
+    let mark = if marked { Span::styled("▌", Style::new().fg(Color::Yellow)) } else { Span::raw(" ") };
+    let mut spans = vec![mark, Span::raw(format!("{} {year:4}  {author:<16.16} ", status_glyph(r.status.as_deref())))];
     for t in r.tags.iter().filter(|t| lib.tag_colors.contains_key(*t)) {
         spans.push(Span::styled("●", tag_style(lib, t)));
     }
@@ -192,9 +193,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         &mut ListState::default().with_selected(Some(app.side_sel)),
     );
 
-    let items: Vec<ListItem> = app.visible.iter().map(|&i| ListItem::new(row(&app.lib.refs[i], &app.lib))).collect();
+    let items: Vec<ListItem> = app
+        .visible
+        .iter()
+        .map(|&i| ListItem::new(row(&app.lib.refs[i], &app.lib, app.marked.contains(&app.lib.refs[i].key))))
+        .collect();
     let order = if app.sort.descending { "▼" } else { "▲" };
-    let title = format!("References ({}) {order} {}", app.visible.len(), app.sort.field.name());
+    let mut title = format!("References ({}) {order} {}", app.visible.len(), app.sort.field.name());
+    if !app.marked.is_empty() {
+        title += &format!(" · {} marked", app.marked.len());
+    }
+    if app.visual.is_some() {
+        title += " · VISUAL";
+    }
     f.render_stateful_widget(
         List::new(items).block(block(title, app.pane == Pane::List)).highlight_style(hl),
         list,

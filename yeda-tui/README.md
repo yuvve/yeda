@@ -23,6 +23,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 | `h` `l` `Tab` | Switch column: library, references, right column |
 | `c` | Show only the current column; again to show all |
 | `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
+| `v` / `V` | Mark or unmark the reference / mark a range as you move, until `Esc`; `Esc` again unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference |
 | `f` | Filter by field in a popup (edits the same query as `/`); values the library has are suggested, Ctrl-N/Ctrl-P pick one and `→` completes it |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |

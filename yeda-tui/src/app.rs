@@ -2,6 +2,7 @@ use crate::poppler;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
     ("o", "open the PDF in the reader (yeda read)"),
     ("e  n", "edit the reference file / its note in $EDITOR"),
+    ("v  V", "mark or unmark one / mark a range until Esc; Esc again unmarks all"),
     ("t  m", "edit tags / move to a collection"),
     ("r  R", "next / previous reading status"),
     ("A  T", "show annotations / tables"),
@@ -185,8 +187,9 @@ pub enum Pick {
 /// Dropdown for editing the selected reference's tags or moving it to a collection.
 pub struct Chooser {
     pub kind: PickKind,
-    /// The tags being edited; written back when the chooser closes.
+    /// The tags being edited: those all targets share. Additions and removals are applied to every target on close.
     pub tags: Vec<String>,
+    initial: Vec<String>,
     pub options: Vec<(String, Pick)>,
     pub sel: usize,
     /// Whether the user has moved the highlight, which makes Enter act even on an empty input.
@@ -259,6 +262,10 @@ pub struct App {
     image_for: Option<PathBuf>,
     /// Only the focused column is drawn.
     pub focus: bool,
+    /// Keys of the marked references, which commands act on instead of the one under the cursor.
+    pub marked: BTreeSet<String>,
+    /// `V` range marking: the anchor's index in `visible`, and the marks from before it started.
+    pub visual: Option<(usize, BTreeSet<String>)>,
     pub sort: Sort,
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
@@ -301,6 +308,8 @@ impl App {
             image: None,
             image_for: None,
             focus: false,
+            marked: BTreeSet::new(),
+            visual: None,
             sort: Sort::default(),
             sort_sel: 0,
             form: None,
@@ -320,6 +329,30 @@ impl App {
         self.visible.get(self.sel).map(|&i| &self.lib.refs[i])
     }
 
+    /// Indices into `lib.refs` that commands act on: the marked references, else the one under the cursor.
+    pub fn targets(&self) -> Vec<usize> {
+        if self.marked.is_empty() {
+            return self.visible.get(self.sel).copied().into_iter().collect();
+        }
+        self.lib.refs.iter().enumerate().filter(|(_, r)| self.marked.contains(&r.key)).map(|(i, _)| i).collect()
+    }
+
+    fn toggle_mark(&mut self) {
+        let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
+        if !self.marked.remove(&key) {
+            self.marked.insert(key);
+        }
+        self.step(1);
+    }
+
+    fn extend_visual(&mut self) {
+        let Some((anchor, base)) = &self.visual else { return };
+        let (a, b) = (self.sel.min(*anchor), self.sel.max(*anchor));
+        let mut marked = base.clone();
+        marked.extend(self.visible.iter().take(b + 1).skip(a).map(|&i| self.lib.refs[i].key.clone()));
+        self.marked = marked;
+    }
+
     pub fn current_filter(&self) -> &Filter {
         self.side_visible.get(self.side_sel).map_or(&Filter::All, |&i| &self.sidebar[i])
     }
@@ -329,6 +362,8 @@ impl App {
         self.visible = browse::visible(&mut self.searcher, &self.lib, &filter, &self.query);
         browse::sort(&self.lib, &mut self.visible, self.sort);
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
+        // The anchor is an index into the old `visible`.
+        self.visual = None;
     }
 
     /// Selects the first match when `jump_to_first`, else keeps the current entry if it still matches.
@@ -434,12 +469,17 @@ impl App {
                     self.status = format!("delete saved search '{name}'? (y/n)");
                     self.mode = Mode::ConfirmDelete;
                 }
-                (Pane::List, _) => {
-                    if let Some(r) = self.selected() {
-                        self.status = format!("delete {}? (y/n)", r.key);
+                (Pane::List, _) => match self.targets()[..] {
+                    [] => {}
+                    [i] => {
+                        self.status = format!("delete {}? (y/n)", self.lib.refs[i].key);
                         self.mode = Mode::ConfirmDelete;
                     }
-                }
+                    ref many => {
+                        self.status = format!("delete {} marked references? (y/n)", many.len());
+                        self.mode = Mode::ConfirmDelete;
+                    }
+                },
                 _ => {}
             },
             (KeyCode::Char(c @ ('g' | 'd')), None) => self.pending = Some(c),
@@ -467,7 +507,7 @@ impl App {
             (KeyCode::Char('T'), _) => {
                 self.toggle_right(RightView::Tables);
             }
-            (KeyCode::Char('x'), _) if self.selected().is_some() => {
+            (KeyCode::Char('x'), _) if !self.targets().is_empty() => {
                 self.status = "extracting annotations…".into();
                 self.job = Some(Job::ExtractAnnotations);
             }
@@ -475,6 +515,19 @@ impl App {
             (KeyCode::Char('/'), _) => {
                 self.pane = Pane::List;
                 self.mode = Mode::Search;
+            }
+            (KeyCode::Char('v'), _) if self.pane == Pane::List => self.toggle_mark(),
+            (KeyCode::Char('V'), _) if self.pane == Pane::List => {
+                self.visual = match self.visual {
+                    Some(_) => None,
+                    None => Some((self.sel, self.marked.clone())),
+                };
+                self.extend_visual();
+            }
+            (KeyCode::Esc, _) if self.visual.is_some() => self.visual = None,
+            (KeyCode::Esc, _) if self.pane == Pane::List && !self.marked.is_empty() => {
+                self.status = format!("unmarked {}", self.marked.len());
+                self.marked.clear();
             }
             (KeyCode::Esc, _) if self.pane == Pane::Sidebar => {
                 self.side_query.clear();
@@ -662,11 +715,14 @@ impl App {
     }
 
     fn open_chooser(&mut self, kind: PickKind) {
-        let Some(r) = self.selected() else {
+        let targets = self.targets();
+        let Some(&first) = targets.first() else {
             self.status = "no reference selected".into();
             return;
         };
-        self.chooser = Some(Chooser { kind, tags: r.tags.clone(), options: vec![], sel: 0, moved: false });
+        let refs = &self.lib.refs;
+        let tags: Vec<String> = refs[first].tags.iter().filter(|t| targets.iter().all(|&i| refs[i].tags.contains(t))).cloned().collect();
+        self.chooser = Some(Chooser { kind, initial: tags.clone(), tags, options: vec![], sel: 0, moved: false });
         self.input.clear();
         self.mode = Mode::Pick;
         self.refresh_options();
@@ -766,7 +822,7 @@ impl App {
                             Pick::Existing(p) | Pick::Create(p) => vec![p],
                             Pick::Unfile => vec![],
                         };
-                        self.update_selected(|r| r.collections = collections);
+                        self.update_targets(|r| r.collections = collections.clone());
                         self.close_chooser();
                     }
                     (PickKind::Tags, Pick::Unfile) => {}
@@ -782,18 +838,36 @@ impl App {
         self.input.clear();
         if let Some(c) = self.chooser.take()
             && c.kind == PickKind::Tags
-            && self.selected().is_some_and(|r| r.tags != c.tags)
+            && c.tags != c.initial
         {
-            self.update_selected(|r| r.tags = c.tags);
+            let removed: Vec<_> = c.initial.iter().filter(|t| !c.tags.contains(t)).collect();
+            let added: Vec<_> = c.tags.iter().filter(|t| !c.initial.contains(t)).collect();
+            self.update_targets(|r| {
+                r.tags.retain(|t| !removed.contains(&t));
+                for t in &added {
+                    if !r.tags.contains(t) {
+                        r.tags.push(t.to_string());
+                    }
+                }
+            });
         }
     }
 
-    fn update_selected(&mut self, change: impl FnOnce(&mut Ref)) {
-        let Some(&i) = self.visible.get(self.sel) else { return };
-        change(&mut self.lib.refs[i]);
-        let r = &self.lib.refs[i];
-        let status = format!("{}: tags [{}], collection {}", r.key, r.tags.join(", "), r.collections.first().map_or("none", String::as_str));
-        if self.apply(self.lib.save(r).map(|e| vec![e])) {
+    fn update_targets(&mut self, change: impl Fn(&mut Ref)) {
+        let targets = self.targets();
+        let effects = targets.iter().map(|&i| {
+            change(&mut self.lib.refs[i]);
+            self.lib.save(&self.lib.refs[i])
+        });
+        let effects = effects.collect::<anyhow::Result<Vec<_>>>();
+        let status = match targets[..] {
+            [i] => {
+                let r = &self.lib.refs[i];
+                format!("{}: tags [{}], collection {}", r.key, r.tags.join(", "), r.collections.first().map_or("none", String::as_str))
+            }
+            _ => format!("updated {} references", targets.len()),
+        };
+        if self.apply(effects) {
             self.status = status;
         }
         self.rebuild_sidebar();
@@ -895,11 +969,15 @@ impl App {
         self.after_config_change(result);
     }
 
+    /// Every target gets the status after the current reference's, so marked references end up alike.
     fn cycle_status(&mut self, forward: bool) {
-        let Some(&i) = self.visible.get(self.sel) else { return };
-        library::cycle_status(&mut self.lib.refs[i], forward);
-        self.status = format!("status: {}", self.lib.refs[i].status.as_deref().unwrap_or("none"));
-        self.apply(self.lib.save(&self.lib.refs[i]).map(|e| vec![e]));
+        let targets = self.targets();
+        let cur = self.visible.get(self.sel).copied().filter(|i| targets.contains(i)).or(targets.first().copied());
+        let Some(cur) = cur else { return };
+        let mut probe = self.lib.refs[cur].clone();
+        library::cycle_status(&mut probe, forward);
+        self.update_targets(|r| r.status = probe.status.clone());
+        self.status = format!("status: {}{}", probe.status.as_deref().unwrap_or("none"), plural_suffix(targets.len()));
         self.refilter();
     }
 
@@ -924,8 +1002,7 @@ impl App {
         let table_name = self.table_name(words.next())?;
         let (profile_name, profile) = self.lib.llm_profile(words.next())?;
         let table = self.lib.tables[&table_name].clone();
-        let targets: Vec<usize> =
-            if all { self.visible.clone() } else { self.visible.get(self.sel).copied().into_iter().collect() };
+        let targets: Vec<usize> = if all { self.visible.clone() } else { self.targets() };
         if targets.is_empty() {
             anyhow::bail!("no reference selected");
         }
@@ -1171,7 +1248,29 @@ impl App {
     }
 
     fn extract_annotations(&mut self) {
-        let Some(r) = self.selected() else { return };
+        let targets = self.targets();
+        let mut extracted = 0;
+        let mut failed = Vec::new();
+        for &i in &targets {
+            match self.extract_from(i) {
+                Ok(n) => extracted += n,
+                Err(e) if targets.len() == 1 => failed.push(format!("{e:#}")),
+                Err(e) => failed.push(format!("{}: {e:#}", self.lib.refs[i].key)),
+            }
+        }
+        self.status = match (failed.is_empty(), targets.len()) {
+            (true, 1) => format!("{extracted} annotations extracted from pdf"),
+            (true, n) => format!("{extracted} annotations extracted from {n} pdfs"),
+            (false, _) => failed.join(" · "),
+        };
+        self.annots_key = None;
+        self.image_for = None;
+        self.right = RightView::Annotations;
+        self.pane = Pane::Right;
+    }
+
+    fn extract_from(&mut self, i: usize) -> anyhow::Result<usize> {
+        let r = &self.lib.refs[i];
         let key = r.key.clone();
         let result = self.lib.pdf_path(r).and_then(|pdf| {
             let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
@@ -1180,14 +1279,9 @@ impl App {
             let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
             annotations::sync_from_pdf(&library::annotations_dir(&key), existing.as_deref(), &bytes, Some(&words), &mut render)
         });
-        let n = result.as_ref().map_or(0, |(n, _)| *n);
-        if self.apply(result.map(|(_, effects)| effects)) {
-            self.status = format!("{n} annotations extracted from pdf");
-        }
-        self.annots_key = None;
-        self.image_for = None;
-        self.right = RightView::Annotations;
-        self.pane = Pane::Right;
+        let (n, effects) = result?;
+        yeda_fs::apply(&self.dir, effects)?;
+        Ok(n)
     }
 
     fn load_annotations(&self, key: &str) -> Vec<Annotation> {
@@ -1343,7 +1437,10 @@ impl App {
                 self.side_sel = i.min(self.side_visible.len() - 1);
                 self.refilter();
             }
-            Pane::List => self.sel = i.min(self.visible.len().saturating_sub(1)),
+            Pane::List => {
+                self.sel = i.min(self.visible.len().saturating_sub(1));
+                self.extend_visual();
+            }
             Pane::Right if self.right == RightView::Tables => self.table_scroll = i.min(u16::MAX as usize) as u16,
             Pane::Right => self.annot_sel = i.min(self.annots.len().saturating_sub(1)),
         }
@@ -1393,8 +1490,13 @@ impl App {
     }
 
     fn delete_selected(&mut self) {
-        let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
-        self.apply(Ok(self.lib.delete(&key)));
+        let effects = self.targets().iter().flat_map(|&i| self.lib.delete(&self.lib.refs[i].key)).collect();
+        self.apply(Ok(effects));
+        self.marked.clear();
         self.reload();
     }
+}
+
+fn plural_suffix(n: usize) -> String {
+    if n == 1 { String::new() } else { format!(" ({n} references)") }
 }
