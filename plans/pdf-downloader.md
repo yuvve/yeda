@@ -13,6 +13,14 @@ Of 430 references, 61 have no PDF:
 
 In a sample of 40 library DOIs, OpenAlex listed an open-access PDF for 29: 22 of them on arXiv, 7 elsewhere. 9 were closed. (Fetching a single work from OpenAlex is free.)
 
+## The library proxy
+`proxy.lib.ltu.se` is EZproxy, proxying by host name: `research.ebsco.com` becomes `research-ebsco-com.proxy.lib.ltu.se`. Signing in goes through LTU's CAS (`weblogon.ltu.se`). Any URL can be opened through it as `https://proxy.lib.ltu.se/login?url=<url>`, so a paper is `…?url=https://doi.org/<doi>`. On campus, EZproxy usually recognizes the network and skips the sign-in, so the same link works at work and at home. This goes in the shared config:
+
+```toml
+[fulltext]
+proxy = "https://proxy.lib.ltu.se/login?url={url}"
+```
+
 ## The five options, by source
 | Source | Best option | Why |
 |---|---|---|
@@ -25,6 +33,18 @@ In a sample of 40 library DOIs, OpenAlex listed an open-access PDF for 29: 22 of
 | No DOI (books, mostly) | 4 or 5 | |
 
 So option 1 covers about 30 of the 61. Option 2 adds some of the IEEE, Springer and similar papers if the home proxy is EZproxy, and option 4 catches the rest.
+
+## A bundled browser
+This is the best way to cover the paywalled papers. It's not a modified Firefox or Chromium, which would mean shipping a browser of over 100 MB. It's a yeda window with the system web engine that yeda already uses for the reader: WebKitGTK through Tauri on desktop, and Android's WebView.
+
+- **You sign in once.** The CAS page opens in the window and you sign in as usual. EZproxy's session cookie then stays in the window's own profile, in yeda's app data, not in the library.
+- **yeda opens each paper.** It goes to the paper's DOI through the proxy, then follows the landing page's `citation_pdf_url` meta tag, which most publishers include for Google Scholar.
+- **Downloads are attached.** yeda catches every download in the window (Tauri `on_download`; on Android, the WebView's download listener) and attaches the PDF to the paper being fetched.
+- **Bot checks and odd pages:** the window is a normal visible browser, so you solve the check or click the PDF link yourself, and the download is still caught. yeda doesn't hide what it is or solve checks for you, so the publishers' rules aren't broken. This makes option 3 close to automatic for most sites.
+- **Reusing the session:** with the session cookie (Tauri `cookies_for_url`), the papers with known PDF URLs (the publisher table above) can be downloaded with plain HTTP and no window, until the session expires. That is option 2 without copying cookies by hand.
+- On desktop it runs as `yeda fetch <key>…`, a window from the yeda-reader crate like `yeda read`. On Android it's a screen in the app.
+
+Controlling your own Firefox (through WebDriver) would reuse your existing sign-in, but sites see it as automated (`navigator.webdriver`) and are more likely to block it, so the embedded window is the better choice.
 
 ## Design
 - **yeda-core `fulltext`** (pure):
@@ -43,17 +63,16 @@ So option 1 covers about 30 of the 61. Option 2 adds some of the IEEE, Springer 
   - for the references that failed, `:fetch` can open each one's DOI (through the proxy) in the browser;
   - yeda then watches a dedicated folder (`[fulltext] inbox`, for example `~/Downloads/yeda`, or Download on Android) and attaches each new PDF to the reference it matches;
   - a PDF that matches nothing stays in the folder and is listed.
-- **Option 2, the cookie:** the EZproxy session cookie is pasted into a masked prompt (`:fetch cookie`) and kept in the secret store, never in a file. It is a login credential. Reading it from Firefox's cookie database would be an opt-in alternative.
+- **Option 2, the cookie:** comes from the bundled browser's session (see above), so there's nothing to paste.
 - **Option 5** already exists: `:attach` and Android's Attach PDF.
 
 ## Phases
 1. Open access (option 1), in TUI and Android, with the failure report.
-2. The inbox and opening failed references in the browser (option 4).
-3. Institutional access by IP and through the proxy with a cookie (options 1 and 2), publisher by publisher, after testing each on campus and at home.
-4. The Elsevier API, with an optional key in the secret store.
+2. The bundled browser: sign in to the proxy, go DOI → `citation_pdf_url` → download → attach.
+3. Reusing its session for plain-HTTP downloads of known publisher PDF URLs (option 2).
+4. The inbox for PDFs downloaded in your own browser (option 4), and the Elsevier API.
 
 ## Open questions
-1. At home, is the proxy EZproxy or OpenAthens? What does a proxied link look like?
-2. Which browser do you use, and should the inbox be a dedicated folder or your Downloads folder?
-3. For option 2: paste the cookie, or let yeda read it from your browser (opt-in)?
-4. Does your library give out an Elsevier institution token? Only needed for Elsevier from home.
+1. Does LTU's CAS sign-in remember you, or ask every time the EZproxy session expires (usually after a couple of hours of inactivity)?
+2. For the inbox (phase 4): a dedicated folder, or your Downloads folder?
+3. Does your library give out an Elsevier institution token? Only needed for Elsevier from home.
