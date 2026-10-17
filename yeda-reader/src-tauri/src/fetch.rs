@@ -181,7 +181,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                         continue;
                     }
                     tried.push(pdf.to_string());
-                    match fetch_with_cookies(window, pdf).and_then(&save) {
+                    match fetch_with_cookies(window, pdf).and_then(save) {
                         Some(outcome) => break outcome,
                         // Let the page show what stands in the way: a sign-in or a check.
                         None => drop(pdf.parse().map(|u| window.navigate(u))),
@@ -190,7 +190,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                 // No report: WebKit's PDF viewer, which can be downloaded from like any page.
                 Err(RecvTimeoutError::Timeout) => {
                     let url = loaded.take().unwrap_or_default();
-                    if let Some(outcome) = fetch_with_cookies(window, &url).and_then(&save) {
+                    if let Some(outcome) = fetch_with_cookies(window, &url).and_then(save) {
                         break outcome;
                     }
                 }

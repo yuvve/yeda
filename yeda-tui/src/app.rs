@@ -802,7 +802,7 @@ impl App {
             .iter()
             .filter_map(|t| if query.is_empty() { Some((0, t)) } else { self.searcher.score(&query, t).map(|s| (s, t)) })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|s| std::cmp::Reverse(s.0));
         c.options = scored
             .into_iter()
             .map(|(_, t)| {
