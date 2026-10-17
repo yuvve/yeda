@@ -415,7 +415,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
             }
             ctx.layer();
             for &e in g.edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
-                ctx.draw(&edge(e, Color::Yellow));
+                ctx.draw(&edge(e, Color::LightYellow));
             }
             if let Some(p) = picked {
                 ctx.layer();
@@ -440,7 +440,8 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
             for i in order {
                 let n = &g.nodes[i];
                 let (glyph, style) = match rank(i) {
-                    3 => (None, Style::new().fg(Color::Yellow).bold()),
+                    // Not bold: most terminals turn bold ANSI yellow into the bright yellow of the edges.
+                    3 => (None, Style::new().fg(Color::Yellow)),
                     2 => (Some("◆"), Style::new().fg(Color::Magenta).bold()),
                     1 => (None, Style::new().fg(Color::Cyan)),
                     _ => (None, Style::new().dim()),
