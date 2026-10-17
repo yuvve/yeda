@@ -62,7 +62,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
     ("o", "open the PDF in the reader (yeda read); in annotations, the image in the viewer or the entry in $EDITOR"),
     ("e  n", "edit the reference file / its note in $EDITOR"),
-    ("v  V", "mark or unmark one / mark a range until Esc; Esc again unmarks all"),
+    ("v  V", "mark or unmark one / mark a range; Enter keeps it, Esc cancels; Esc again unmarks all"),
     ("t  m", "edit tags / move to a collection"),
     ("r  R", "next / previous reading status"),
     ("A  T", "show annotations / tables"),
@@ -574,6 +574,7 @@ impl App {
             (KeyCode::Char('h') | KeyCode::Left, _) => {
                 self.pane = if self.pane == Pane::Right { Pane::List } else { Pane::Sidebar }
             }
+            (KeyCode::Enter, _) if self.visual.is_some() => self.visual = None,
             (KeyCode::Enter, _) if self.in_graph() => self.graph_go(),
             (KeyCode::Backspace, _) if self.in_graph() => self.graph_back(),
             (KeyCode::Char('L'), _) if self.in_graph() => {
@@ -619,7 +620,11 @@ impl App {
                 };
                 self.extend_visual();
             }
-            (KeyCode::Esc, _) if self.visual.is_some() => self.visual = None,
+            (KeyCode::Esc, _) if self.visual.is_some() => {
+                if let Some((_, before)) = self.visual.take() {
+                    self.marked = before;
+                }
+            }
             (KeyCode::Esc, _) if self.in_graph() => self.close_graph(),
             (KeyCode::Esc, _) if self.pane == Pane::List && !self.marked.is_empty() => {
                 self.status = format!("unmarked {}", self.marked.len());
