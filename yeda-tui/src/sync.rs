@@ -33,9 +33,10 @@ pub fn run(dir: &Path) -> Result<String> {
     if root.canonicalize()? != dir.canonicalize()? {
         bail!("the library folder is not a git repository of its own (it is inside {}); run git init in it", root.display());
     }
-    let committed = !stdout(dir, &["status", "--porcelain"])?.is_empty();
+    // Git carries the data only: PDFs sync through WebDAV or Syncthing.
+    stdout(dir, &["add", "-A", "--", ".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"])?;
+    let committed = !output(dir, &["diff", "--cached", "--quiet"])?.status.success();
     if committed {
-        stdout(dir, &["add", "-A"])?;
         stdout(dir, &["commit", "-q", "-m", "yeda sync"])?;
     }
     if !interactive(dir, &["pull", "--no-rebase", "--no-edit"])? {

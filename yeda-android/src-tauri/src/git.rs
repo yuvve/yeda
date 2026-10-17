@@ -64,11 +64,16 @@ fn signature(repo: &Repository) -> Result<Signature<'static>> {
     Ok(repo.signature().or_else(|_| Signature::now("yeda", "yeda@localhost"))?)
 }
 
-/// Commits every change in the working tree; false if there was none.
+/// Commits every change to the data in the working tree; false if there was none. PDFs and
+/// atomic-write temporaries are left out: git carries the data, PDFs go through WebDAV or Syncthing.
 fn commit_all(repo: &Repository) -> Result<bool> {
+    let skip = |path: &Path, _: &[u8]| {
+        let name = path.to_string_lossy().to_lowercase();
+        if name.ends_with(".pdf") || name.ends_with(".tmp") { 1 } else { 0 }
+    };
     let mut index = repo.index()?;
-    index.add_all(["*"], IndexAddOption::DEFAULT, None)?;
-    index.update_all(["*"], None)?;
+    index.add_all(["*"], IndexAddOption::DEFAULT, Some(&mut skip.clone()))?;
+    index.update_all(["*"], Some(&mut skip.clone()))?;
     index.write()?;
     let tree = index.write_tree()?;
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
@@ -194,6 +199,14 @@ mod tests {
         assert_eq!(ids(&a), ["A", "C", "B"]);
         assert_eq!(ids(&b), ids(&a));
         assert!(!refused.get());
+        // PDFs are not data: they never reach git.
+        fs::write(a.join("annotations/k/paper.pdf"), "%PDF-1.5").unwrap();
+        append(&a, "D");
+        sync(&a, &login).unwrap();
+        let repo = Repository::open(&a).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        assert!(tree.get_path(Path::new("annotations/k/annotations.toml")).is_ok());
+        assert!(tree.get_path(Path::new("annotations/k/paper.pdf")).is_err());
         // A folder inside a repository is not one of its own.
         fs::create_dir_all(a.join("inner")).unwrap();
         assert!(remote_url(&a).is_some() && remote_url(&a.join("inner")).is_none());
