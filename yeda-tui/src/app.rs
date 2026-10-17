@@ -1586,13 +1586,10 @@ impl App {
         self.pane == Pane::Right && self.right == RightView::Graph && self.graph.is_some()
     }
 
-    /// The OpenAlex key from the secret store, looked up once per session.
+    /// The OpenAlex key known this session. The secret store is only asked once the keyless
+    /// budget runs out, since asking can start a provider with a desktop-wide prompt.
     fn openalex_key(&mut self) -> Option<String> {
-        let key = self
-            .secrets
-            .entry(OPENALEX_ACCOUNT.into())
-            .or_insert_with(|| yeda_secrets::get(OPENALEX_ACCOUNT).ok().flatten().unwrap_or_default());
-        Some(key.clone()).filter(|k| !k.is_empty())
+        self.secrets.get(OPENALEX_ACCOUNT).cloned().filter(|k| !k.is_empty())
     }
 
     /// `args` is `selected` (the default), `filtered` or `prefetch`; `refresh` fetches citing works again.

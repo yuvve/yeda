@@ -125,6 +125,12 @@ fn field_values(r: &Ref, name: &str) -> Vec<String> {
     }
 }
 
+impl Default for Searcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Searcher {
     matcher: Matcher,
     buf: Vec<char>,
