@@ -40,6 +40,14 @@ impl Default for Settings {
     }
 }
 
+/// Whether two titles name the same work: equal letters and digits, or one a prefix of the other
+/// long enough to mean something (a subtitle added or dropped).
+pub fn same_title(a: &str, b: &str) -> bool {
+    let (a, b) = (crate::fulltext::letters(a), crate::fulltext::letters(b));
+    let (short, long) = if a.len() <= b.len() { (&a, &b) } else { (&b, &a) };
+    (short.len() >= 20 && long.starts_with(short.as_str())) || (!a.is_empty() && a == b)
+}
+
 pub fn work_id(r: &Ref) -> Option<&str> {
     r.extra.get(OPENALEX).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
 }
@@ -239,6 +247,14 @@ mod tests {
         let mut r = Ref { key: key.into(), ..Default::default() };
         set_work_id(&mut r, id);
         r
+    }
+
+    #[test]
+    fn matches_titles() {
+        assert!(same_title("Multi-Agent Reinforcement Learning", "Multi-agent reinforcement learning: Foundations and Modern Approaches"));
+        assert!(same_title("Convex optimization", "Convex Optimization"));
+        assert!(!same_title("Convex optimization", "Convex optimization in robotics"));
+        assert!(!same_title("", ""));
     }
 
     #[test]

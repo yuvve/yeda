@@ -1797,7 +1797,7 @@ impl App {
             .iter()
             .map(|&i| &self.lib.refs[i])
             .filter(|r| r.pdf.is_none())
-            .map(|r| fetch::Item { key: r.key.clone(), doi: graph::lookup_doi(r), file: fulltext::file_name(r) })
+            .map(|r| fetch::Item { key: r.key.clone(), doi: graph::lookup_doi(r), openalex: graph::work_id(r).map(String::from), file: fulltext::file_name(r) })
             .collect();
         if items.is_empty() {
             self.status = if targets.is_empty() { "no reference selected" } else { "they already have PDFs" }.into();
