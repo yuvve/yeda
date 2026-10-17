@@ -10,6 +10,8 @@ use yeda_net::openalex::Client;
 pub struct Item {
     pub key: String,
     pub doi: Option<String>,
+    /// For references without a DOI, which OpenAlex may still know by title.
+    pub openalex: Option<String>,
     pub file: String,
 }
 
@@ -53,7 +55,17 @@ fn run(req: Request, tx: &Sender<Msg>) {
     for (n, item) in req.items.iter().enumerate() {
         send(Msg::Progress(format!("fetch {}/{}: {}…", n + 1, req.items.len(), item.key)));
         let Some(doi) = &item.doi else {
-            send(Msg::Failed { key: item.key.clone(), reason: "no DOI to look it up by; attach it with :attach".into() });
+            let urls = item.openalex.as_deref().map(|id| client.pdf_urls_by_id(id).unwrap_or_default()).unwrap_or_default();
+            match urls.iter().find_map(|u| yeda_net::fulltext::download(u, None).ok()) {
+                Some(pdf) => {
+                    let file = req.downloads.join(&item.file);
+                    match std::fs::write(&file, pdf) {
+                        Ok(()) => send(Msg::Saved { key: item.key.clone(), file, verify: false }),
+                        Err(e) => send(Msg::Failed { key: item.key.clone(), reason: format!("{}: {e}", file.display()) }),
+                    }
+                }
+                None => send(Msg::Failed { key: item.key.clone(), reason: "no DOI and no open-access copy; attach it with :attach".into() }),
+            }
             continue;
         };
         // Open-access copies first, then the publisher directly, which works on campus by IP.

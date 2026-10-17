@@ -74,7 +74,7 @@ pub fn file_name(r: &Ref) -> String {
     format!("{}.pdf", clean.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-fn letters(s: &str) -> String {
+pub(crate) fn letters(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 

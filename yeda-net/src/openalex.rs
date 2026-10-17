@@ -86,7 +86,27 @@ impl Client {
 
     /// Open-access PDF URLs for `doi`, OpenAlex's best first; free like `one_by_doi`.
     pub fn pdf_urls(&self, doi: &str) -> Result<Vec<String>> {
-        let mut req = self.agent.get(format!("{API}/doi:{doi}")).query("select", "best_oa_location,locations");
+        self.oa_urls(&format!("doi:{doi}"))
+    }
+
+    /// The same for an OpenAlex work id, for works without a DOI.
+    pub fn pdf_urls_by_id(&self, id: &str) -> Result<Vec<String>> {
+        self.oa_urls(id)
+    }
+
+    /// Works whose title matches `title`, the best match first; `year` narrows the search.
+    pub fn by_title(&self, title: &str, year: Option<i32>) -> Result<Vec<Work>> {
+        // Commas separate filters, so only words go into the search.
+        let words: String = title.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+        let mut filter = format!("title.search:{}", words.split_whitespace().collect::<Vec<_>>().join(" "));
+        if let Some(y) = year {
+            filter += &format!(",publication_year:{}-{}", y - 1, y + 1);
+        }
+        self.page(&filter, None, 5, 1)
+    }
+
+    fn oa_urls(&self, work: &str) -> Result<Vec<String>> {
+        let mut req = self.agent.get(format!("{API}/{work}")).query("select", "best_oa_location,locations");
         if let Some(k) = &self.key {
             req = req.query("api_key", k);
         }

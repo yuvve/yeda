@@ -100,6 +100,18 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
         }
     }
 
+    // ponytail: references OpenAlex doesn't find by title are searched again on every graph; a handful of list requests.
+    let untitled: Vec<usize> = (0..refs.len()).filter(|&i| graph::work_id(&refs[i]).is_none() && graph::lookup_doi(&refs[i]).is_none()).collect();
+    for (n, &i) in untitled.iter().enumerate() {
+        progress(format!("looking up {}/{} references without a DOI by title…", n + 1, untitled.len()));
+        let found = client.by_title(&refs[i].title, refs[i].year)?;
+        if let Some(w) = found.into_iter().find(|w| graph::same_title(&w.title, &refs[i].title)) {
+            cache.put_works(std::slice::from_ref(&w))?;
+            graph::set_work_id(&mut refs[i], &w.id);
+            matched.push((refs[i].key.clone(), w.id));
+        }
+    }
+
     let mut works: HashMap<String, Work> = HashMap::new();
     let library_ids: Vec<String> = refs.iter().filter_map(graph::work_id).map(String::from).collect();
     load_or_fetch(&cache, &client, &library_ids, &mut works, &progress, "library works")?;
