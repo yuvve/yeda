@@ -41,7 +41,11 @@ jobs:
       - name: Install the NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;30.0.16248370" > /dev/null
-          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+          ndk="$ANDROID_HOME/ndk/30.0.16248370"
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          # OpenSSL's build (for git2) looks for aarch64-linux-android-ranlib, which current NDKs no longer ship.
+          echo "AR_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
       - name: Build APK
         working-directory: yeda-android
