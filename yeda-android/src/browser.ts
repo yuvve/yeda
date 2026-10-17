@@ -230,6 +230,22 @@ export function showBrowser(openReader: () => void): () => boolean {
 		atList = true;
 	}
 
+	/** Android's `window.prompt` ignores its default value, so the current colour needs a form. */
+	function showTagColor(tag: string, color: string | null) {
+		const text = h('input', { value: color ?? '', placeholder: '#rrggbb or a name like red' });
+		const picker = h('input', { type: 'color', style: 'padding: 0; width: 3em; height: 2.5em; vertical-align: middle', value: /^#[0-9a-f]{6}$/i.test(color ?? '') ? color! : '#000000' });
+		picker.oninput = () => text.value = picker.value;
+		const save = (value: string) => run(async () => {
+			await invoke('set_tag_color', { tag, color: value });
+			await refresh();
+			showSidebar();
+		});
+		show(h('h2', {}, `Colour for #${tag}`), h('p', {}, picker, ' ', text),
+			h('div', { className: 'actions' }, button('Save', () => save(text.value.trim())), button('Remove colour', () => save('')),
+				button('Cancel', () => showSidebar())));
+		text.focus();
+	}
+
 	function showSidebar() {
 		const entries = overview.sidebar.map(({ filter: f, color }) => {
 			const label = h('span', { style: color ? `color: ${color}` : '' }, filterLabel(f));
@@ -239,13 +255,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 				await showList();
 			});
 			const extra = f.kind === 'tag'
-				? button('colour', () => run(async () => {
-					const c = window.prompt(`Colour for #${f.value} (#rrggbb or a name; empty removes)`, color ?? '');
-					if (c === null) return;
-					await invoke('set_tag_color', { tag: f.value, color: c });
-					await refresh();
-					showSidebar();
-				}))
+				? button('colour', () => showTagColor(f.value, color))
 				: f.kind === 'search' && button('delete', () => run(async () => {
 					if (!window.confirm(`Delete saved search "${f.value[0]}"?`)) return;
 					await invoke('delete_search', { name: f.value[0] });
