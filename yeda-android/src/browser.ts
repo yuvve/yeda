@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
+import { fetchInBrowser, hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
 import { inspect, plainText, Region } from './pdftext';
 
 type Filter =
@@ -16,6 +16,14 @@ interface Overview {
 	sort_fields: [string, string][];
 	locations: string[];
 	git: string | null;
+}
+
+interface FetchPlan {
+	downloads: string;
+	proxy: string | null;
+	proxy_host: string | null;
+	location: string | null;
+	papers: { key: string; doi: string | null; file: string }[];
 }
 
 interface Sort {
@@ -229,7 +237,9 @@ export function showBrowser(openReader: () => void): () => boolean {
 			await refresh();
 			await showList();
 		}));
-		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list);
+		const missing = rows.filter(r => !r.has_pdf).map(r => r.key);
+		const findMissing = missing.length > 0 && button(`Find missing PDFs (${missing.length})`, () => run(() => findPdfs(missing)));
+		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list, findMissing);
 		atList = true;
 	}
 
@@ -314,6 +324,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('div', { className: 'actions' },
 				r.pdf && button('Open PDF', () => run(() => openPdf(key))),
 				button(r.pdf ? 'Replace PDF' : 'Attach PDF', () => run(() => attachPdf(key))),
+				!r.pdf && button('Find PDF', () => run(() => findPdfs([key]))),
 				button(`Annotations (${d.annotations.length})`, () => showAnnotations(d)),
 				button(d.note ? 'Note' : 'Add note', () => showText(d, 'note')),
 				overview.tables.length > 0 && button('Tables', () => showTables(d)),
@@ -479,6 +490,79 @@ export function showBrowser(openReader: () => void): () => boolean {
 	}
 
 	/** Adds each identifier in a pasted list, then lists the ones that failed and copies them. */
+	/** Lists what failed with the reasons, copying the inputs; `done` parts go in the status line. */
+	async function showFailures(title: string, done: (string | 0 | false)[], failed: [string, string][], extra?: Child) {
+		const list = failed.map(([input]) => input).join('\n');
+		// Copying can fail once the tap that started the batch is too long ago; the button retries.
+		const copied = failed.length > 0 && await navigator.clipboard.writeText(list).then(() => true, () => false);
+		say([...done, failed.length && `${failed.length} failed${copied ? ', copied to the clipboard' : ''}`].filter(Boolean).join(' · '));
+		if (failed.length === 0) return showList();
+		show(h('h2', {}, title),
+			h('ul', {}, ...failed.map(([input, e]) => h('li', {}, h('div', {}, input), h('div', { className: 'meta' }, e)))),
+			h('div', { className: 'actions' },
+				button('Copy these', () => navigator.clipboard.writeText(list).then(() => say('copied to the clipboard'), e => say(String(e)))),
+				extra,
+				button('Back to the list', () => run(showList))));
+	}
+
+	function chooseLocation(): Promise<string | null> {
+		return new Promise((resolve) => {
+			const select = h('select', {}, ...overview.locations.map(l => h('option', { value: l }, l)));
+			show(h('h2', {}, 'Find PDFs'), h('p', {}, 'Attach them to: ', select),
+				h('p', { className: 'meta' }, 'Set [fulltext] location in yeda.toml to skip this.'),
+				h('div', { className: 'actions' }, button('Start', () => resolve(select.value)), button('Cancel', () => resolve(null))));
+		});
+	}
+
+	/** Open-access copies and campus downloads first, then the browser through the library proxy. */
+	async function findPdfs(keys: string[]) {
+		const plan = await invoke<FetchPlan>('fetch_plan', { keys });
+		if (plan.papers.length === 0) return say('they already have PDFs');
+		if (overview.locations.length === 0) return say('no locations in yeda.toml to attach to');
+		const location = plan.location ?? (overview.locations.length === 1 ? overview.locations[0] : await chooseLocation());
+		if (!location) return showList();
+		const attached: string[] = [], failed: [string, string][] = [];
+		const attach = async (key: string, path: string, verify: boolean) => {
+			if (verify) {
+				const text = await plainText(new Uint8Array(await invoke<ArrayBuffer>('read_download', { path })));
+				if (!(await invoke<boolean>('pdf_is', { key, text }))) {
+					failed.push([key, `the downloaded PDF doesn't look like this paper; it's in ${path}`]);
+					return;
+				}
+			}
+			if (!(await withPassword(() => invoke<OpenRef>('attach_pdf', { key, path, location })))) {
+				failed.push([key, 'no WebDAV password given; the PDF is in ' + path]);
+				return;
+			}
+			await invoke('remove_download', { path });
+			attached.push(key);
+		};
+		const browser: FetchPlan['papers'] = [];
+		for (const [i, p] of plan.papers.entries()) {
+			say(`fetch ${i + 1}/${plan.papers.length}: ${p.key}…`);
+			try {
+				if (!p.doi) throw new Error('no DOI to look it up by; attach it with Attach PDF');
+				const path = await invoke<string | null>('fetch_direct', { doi: p.doi, file: p.file });
+				if (path) await attach(p.key, path, false);
+				else browser.push(p);
+			} catch (e) {
+				failed.push([p.key, String(e)]);
+			}
+		}
+		if (browser.length > 0) {
+			say(`${browser.length} need the browser…`);
+			const json = await fetchInBrowser(JSON.stringify({ ...plan, papers: browser }));
+			const results: { key: string; file?: string; error?: string }[] = json ? JSON.parse(json) : [];
+			for (const p of browser) {
+				const result = results.find(r => r.key === p.key);
+				if (result?.file) await attach(p.key, result.file, true).catch(e => failed.push([p.key, String(e)]));
+				else failed.push([p.key, result?.error ?? 'fetch window closed']);
+			}
+		}
+		await refresh();
+		await showFailures('Not fetched', [attached.length && `attached ${attached.length} PDFs to ${location}`], failed);
+	}
+
 	function addReference() {
 		const area = h('textarea', { rows: 8, placeholder: 'DOIs, arXiv IDs or ISBNs, one per line or separated by spaces' });
 		const add = () => run(async () => {
@@ -494,19 +578,13 @@ export function showBrowser(openReader: () => void): () => boolean {
 				}
 			}
 			await refresh();
-			const list = failed.map(([input]) => input).join('\n');
-			// Copying can fail once the tap that started the batch is too long ago; the button retries.
-			const copied = failed.length > 0 && await navigator.clipboard.writeText(list).then(() => true, () => false);
-			say([added.length && `added ${added.join(', ')}`, existed.length && `already in library: ${existed.join(', ')}`,
-				failed.length && `${failed.length} failed${copied ? ', copied to the clipboard' : ''}`].filter(Boolean).join(' · '));
 			const last = added.at(-1) ?? existed.at(-1);
-			if (failed.length === 0 && last) return showDetails(last);
-			show(h('h2', {}, 'Not added'),
-				h('ul', {}, ...failed.map(([input, e]) => h('li', {}, h('div', {}, input), h('div', { className: 'meta' }, e)))),
-				h('div', { className: 'actions' },
-					button('Copy these', () => navigator.clipboard.writeText(list).then(() => say('copied to the clipboard'), e => say(String(e)))),
-					last && button('Show the last added', () => run(() => showDetails(last))),
-					button('Back to the list', () => run(showList))));
+			const done = [added.length && `added ${added.join(', ')}`, existed.length && `already in library: ${existed.join(', ')}`];
+			if (failed.length === 0 && last) {
+				say(done.filter(Boolean).join(' · '));
+				return showDetails(last);
+			}
+			await showFailures('Not added', done, failed, last && button('Show the last added', () => run(() => showDetails(last))));
 		});
 		show(h('h2', {}, 'Add references'), area,
 			h('div', { className: 'actions' }, button('Add', add), button('Cancel', () => run(showList))));

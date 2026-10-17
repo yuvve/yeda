@@ -55,6 +55,9 @@ pub fn webdav_account(user: &str, url: &str) -> String {
     format!("webdav:{user}@{url}")
 }
 
+/// The account for the optional OpenAlex API key.
+pub const OPENALEX: &str = "api:openalex";
+
 /// The account name for a git remote's password or access token.
 pub fn git_account(url: &str) -> String {
     format!("git:{url}")

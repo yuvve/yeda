@@ -13,7 +13,7 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
-use yeda_core::{Effect, tables};
+use yeda_core::{Effect, fulltext, graph, tables};
 use yeda_net::llm::{self, Paper, Prompt};
 use yeda_net::wand;
 use yeda_reader_lib::{Current, Doc};
@@ -553,6 +553,100 @@ async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
     Ok(out)
 }
 
+/// Where fetched PDFs wait to be attached.
+fn downloads_dir(app: &AppHandle, settings: &fulltext::Settings) -> anyhow::Result<PathBuf> {
+    match &settings.downloads {
+        Some(dir) => Ok(dir.clone()),
+        None => Ok(app.path().app_data_dir()?.join("downloads")),
+    }
+}
+
+#[derive(Serialize)]
+struct FetchPaper {
+    key: String,
+    doi: Option<String>,
+    file: String,
+}
+
+/// What `FetchActivity` and the browser screen need for fetching PDFs.
+#[derive(Serialize)]
+struct FetchPlan {
+    downloads: PathBuf,
+    proxy: Option<String>,
+    proxy_host: Option<String>,
+    location: Option<String>,
+    papers: Vec<FetchPaper>,
+}
+
+/// The plan for those of `keys` without a PDF.
+#[tauri::command]
+fn fetch_plan(app: AppHandle, state: State<Shared>, keys: Vec<String>) -> Res<FetchPlan> {
+    state.with(&app, |b| {
+        let settings = &b.lib.fulltext;
+        let papers = keys
+            .iter()
+            .filter_map(|k| b.lib.get(k))
+            .filter(|r| r.pdf.is_none())
+            .map(|r| FetchPaper { key: r.key.clone(), doi: graph::lookup_doi(r), file: fulltext::file_name(r) })
+            .collect();
+        let downloads = downloads_dir(&app, settings)?;
+        std::fs::create_dir_all(&downloads)?;
+        Ok(FetchPlan {
+            downloads,
+            proxy: settings.proxy.clone(),
+            proxy_host: fulltext::proxy_host(settings),
+            location: settings.location.clone(),
+            papers,
+        })
+    })
+}
+
+/// Downloads an open-access copy, else the publisher's PDF (which works on a campus network),
+/// into `downloads`; `None` if neither is there and the paper needs the browser.
+#[tauri::command]
+async fn fetch_direct(app: AppHandle, state: State<'_, Shared>, doi: String, file: String) -> Res<Option<PathBuf>> {
+    let settings = state.with(&app, |b| Ok(b.lib.fulltext.clone()))?;
+    let target = downloads_dir(&app, &settings).map_err(err)?.join(&file);
+    let key = yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten();
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = yeda_net::openalex::Client::new(key);
+        let urls = client.pdf_urls(&doi).unwrap_or_default().into_iter().chain(fulltext::publisher_urls(&doi, &settings));
+        let Some(pdf) = urls.into_iter().find_map(|u| yeda_net::fulltext::download(&u, None).ok()) else { return Ok(None) };
+        std::fs::write(&target, pdf).map_err(|e| format!("{}: {e}", target.display()))?;
+        Ok(Some(target))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Only files in the downloads folder may be read or removed through these.
+fn in_downloads(app: &AppHandle, state: &State<Shared>, path: &Path) -> Res<PathBuf> {
+    let dir = state.with(app, |b| downloads_dir(app, &b.lib.fulltext))?;
+    let path = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
+    if !path.starts_with(dir.canonicalize().map_err(|e| e.to_string())?) {
+        return Err(format!("{} is not in the downloads folder", path.display()));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn read_download(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<Response> {
+    let path = in_downloads(&app, &state, &path)?;
+    std::fs::read(&path).map(Response::new).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[tauri::command]
+fn remove_download(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<()> {
+    let path = in_downloads(&app, &state, &path)?;
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Whether a PDF's text (from pdf.js) is reference `key`.
+#[tauri::command]
+fn pdf_is(app: AppHandle, state: State<Shared>, key: String, text: String) -> Res<bool> {
+    state.with(&app, |b| Ok(fulltext::looks_like(&text, b.get(&key)?)))
+}
+
 /// Clones `url` into the empty folder `path` and makes it the library.
 #[tauri::command]
 async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: PathBuf) -> Res<OpenRef> {
@@ -709,6 +803,11 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         set_secret,
         git_sync,
         git_clone,
+        fetch_plan,
+        fetch_direct,
+        read_download,
+        remove_download,
+        pdf_is,
         settings_text,
         save_settings_text,
         open_pdf

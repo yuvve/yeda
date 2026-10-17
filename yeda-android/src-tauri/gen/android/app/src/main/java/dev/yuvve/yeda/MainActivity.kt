@@ -87,6 +87,14 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    /** Fetches PDFs in `FetchActivity` with the plan from `fetch_plan`; replies with its results as JSON. */
+    @JavascriptInterface
+    fun fetchInBrowser(job: String, callback: String) = runOnUiThread {
+      launchActivityForResult(Intent(this@MainActivity, FetchActivity::class.java).putExtra("job", job)) { result ->
+        reply(callback, result?.data?.getStringExtra("results"))
+      }
+    }
+
     /** The PDF passed through "Open with", as a path; consumed by the call. */
     @JavascriptInterface
     fun takeOpenWithPath(): String? {

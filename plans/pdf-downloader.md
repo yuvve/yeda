@@ -60,6 +60,8 @@ A yeda window with the system web engine yeda already ships for the reader: WebK
   - A fetched PDF goes through the same code as `:attach`: it's copied into a local `[locations]` folder, or uploaded to a WebDAV one in Zotero's layout, with a copy in the cache. The file in the downloads folder is removed only after that succeeds. The location is `[fulltext] location`, and `:fetch <location>` overrides it; with neither set, yeda asks.
 
 ## Phases
+Built: all three phases, in yeda-tui (`:fetch`, the `yeda fetch` window) and yeda-android (Find PDF, `FetchActivity`).
+
 1. Open access (option 1), in TUI and Android, with the failure report.
 2. The bundled browser: CAS sign-in, DOI → `citation_pdf_url` → download into yeda's folder → attach.
 3. Reusing its session for plain-HTTP downloads of known publisher PDF URLs (option 2).

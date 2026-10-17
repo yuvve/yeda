@@ -11,6 +11,7 @@ The browser covers what yeda-tui does:
 - editing the Markdown note and the raw reference file;
 - extracting a PDF's embedded annotations;
 - filling literature tables with an LLM, and exporting them to CSV in the Download folder;
+- finding PDFs ("Find PDF" on a reference, "Find missing PDFs" under the list): open-access copies first, then the publisher through the library proxy (`[fulltext] proxy`) in a browser screen where you sign in and tap through; each PDF is checked against the paper and attached to `[fulltext] location`;
 - git sync over HTTPS (⟳): commit everything, merge `origin`'s branch of the same name and push. Conflicting `annotations.toml` files are merged by annotation `id`; any other conflict stops the sync. Settings can also clone a library repository into an empty folder.
 
 The app reads the library through all-files access, and the library folder is chosen with the system folder picker. A PDF location whose folder isn't found on the device is asked for once and remembered. The app also registers for "Open with" on PDFs; annotations then go in a sidecar `<file>.annotations/` folder.

@@ -34,6 +34,10 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
         </activity>
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode"
+            android:name=".FetchActivity"
+            android:exported="false" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

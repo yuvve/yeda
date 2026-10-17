@@ -1,7 +1,6 @@
 # TODO
 
 ## Features
-- **PDF downloader:** fetch missing PDFs from open-access sources, and through the library proxy in a bundled browser. Plan: `plans/pdf-downloader.md`.
 - **Citation graph in yeda-android** (yeda-tui has `:graph`). Also: Semantic Scholar as a second source, and title search for references without a DOI.
 - **Pen and e-ink (yeda-android):**
   - route input by `pointerType`: the pen uses the active tool, a finger pans and zooms, and touch is ignored while the pen is down;
@@ -21,6 +20,7 @@
 - Clippy: `Searcher` lacks `Default`.
 
 ## To test
+- PDF fetching through LTU's proxy (needs your sign-in), on desktop and on the phone.
 - Android on the phone: the batch add, the filter suggestions, git sync and clone.
 - KeePassXC as the Secret Service provider.
 - ViWoods AiPaper: pen and e-ink.

@@ -161,7 +161,7 @@ pub enum RightView {
     Graph,
 }
 
-const OPENALEX_ACCOUNT: &str = "api:openalex";
+const OPENALEX_ACCOUNT: &str = yeda_secrets::OPENALEX;
 
 /// The citation graph shown in the right column; its selected node follows the reference list.
 pub struct GraphView {
