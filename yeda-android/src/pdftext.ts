@@ -99,20 +99,3 @@ export async function inspect(pdf: Uint8Array, regions: Region[]) {
 		await doc.destroy();
 	}
 }
-
-/** The document's plain text, for LLM providers that take text rather than the PDF. */
-export async function plainText(pdf: Uint8Array): Promise<string> {
-	const doc = await open(pdf);
-	try {
-		let text = '';
-		for (let n = 1; n <= doc.numPages; n++) {
-			for (const item of (await (await doc.getPage(n)).getTextContent()).items) {
-				text += (item.str ?? '') + (item.hasEOL ? '\n' : '');
-			}
-			text += '\n\f';
-		}
-		return text;
-	} finally {
-		await doc.destroy();
-	}
-}

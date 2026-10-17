@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
-import { fetchInBrowser, hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
-import { inspect, plainText, Region } from './pdftext';
+import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
+import { inspect, Region } from './pdftext';
 
 type Filter =
 	| { kind: 'all' }
@@ -11,19 +11,10 @@ type Filter =
 interface Overview {
 	sidebar: { filter: Filter; color: string | null }[];
 	statuses: string[];
-	tables: string[];
 	filter_fields: [string, string][];
 	sort_fields: [string, string][];
 	locations: string[];
 	git: string | null;
-}
-
-interface FetchPlan {
-	downloads: string;
-	proxy: string | null;
-	proxy_host: string | null;
-	location: string | null;
-	papers: { key: string; doi: string | null; file: string }[];
 }
 
 interface Sort {
@@ -62,7 +53,6 @@ interface Ref {
 	status?: string;
 	pdf?: { location: string; path: string };
 	extra?: Record<string, unknown>;
-	tables?: Record<string, Record<string, string>>;
 }
 
 interface Details {
@@ -71,7 +61,6 @@ interface Details {
 	raw: string;
 	note: string;
 	annotations: Annotation[];
-	tables: Record<string, string[]>;
 }
 
 type OpenRef =
@@ -142,11 +131,11 @@ export function showBrowser(openReader: () => void): () => boolean {
 	const syncButton = button('⟳', () => run(sync));
 	const root = h('div', { className: 'yeda' },
 		h('div', { className: 'bar' }, filterButton, search, button('Filter', () => run(showFilterForm)),
-			sortButton, syncButton, button('+', () => addReference()), button('⚙', () => showSettings())),
+			sortButton, syncButton, button('⚙', () => showSettings())),
 		main, status);
 	document.body.append(style, root);
 
-	let overview: Overview = { sidebar: [], statuses: [], tables: [], filter_fields: [], sort_fields: [], locations: [], git: null };
+	let overview: Overview = { sidebar: [], statuses: [], filter_fields: [], sort_fields: [], locations: [], git: null };
 	let filter: Filter = { kind: 'all' };
 	let sort: Sort = { field: 'key', descending: false };
 
@@ -237,10 +226,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			await refresh();
 			await showList();
 		}));
-		const missing = rows.filter(r => !r.has_pdf).map(r => r.key);
-		const findMissing = missing.length > 0 && button(`Find missing PDFs (${missing.length})`, () => run(() => findPdfs(missing)));
-		const citeAll = rows.length > 0 && button(`Cite these (${rows.length})`, () => run(() => showCite(rows.map(r => r.key), showList)));
-		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list, h('div', { className: 'actions' }, findMissing, citeAll));
+		show(h('div', { className: 'meta' }, `${rows.length} references`), saveSearch, list);
 		atList = true;
 	}
 
@@ -325,11 +311,8 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('div', { className: 'actions' },
 				r.pdf && button('Open PDF', () => run(() => openPdf(key))),
 				button(r.pdf ? 'Replace PDF' : 'Attach PDF', () => run(() => attachPdf(key))),
-				!r.pdf && button('Find PDF', () => run(() => findPdfs([key]))),
-				button('Cite', () => run(() => showCite([key], () => showDetails(key)))),
 				button(`Annotations (${d.annotations.length})`, () => showAnnotations(d)),
 				button(d.note ? 'Note' : 'Add note', () => showText(d, 'note')),
-				overview.tables.length > 0 && button('Tables', () => showTables(d)),
 				button('Edit file', () => showText(d, 'raw'))),
 			h('p', {}, statusSelect), tags, h('p', {}, collection), table,
 			h('div', { className: 'actions' },
@@ -470,146 +453,6 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('div', { className: 'actions' }, button('Save', save)));
 	}
 
-	function showTables(d: Details) {
-		const sections = Object.entries(d.tables).map(([name, columns]) => {
-			const row = d.ref.tables?.[name] ?? {};
-			const summarize = (overwrite: boolean) => run(async () => {
-				say(`summarizing ${d.key} into '${name}'…`);
-				const pdf = d.ref.pdf && await invoke<ArrayBuffer>('ref_pdf', { key: d.key }).catch(() => null);
-				const text = pdf ? await plainText(new Uint8Array(pdf)).catch(() => null) : null;
-				say(await invoke<string>('summarize', { key: d.key, table: name, overwrite, text }));
-				const fresh = await invoke<Details>('details', { key: d.key });
-				showTables(fresh);
-			});
-			return h('section', {}, h('h2', {}, name),
-				h('table', {}, ...columns.map(c => h('tr', {}, h('td', {}, c), h('td', {}, row[c] ?? '')))),
-				h('div', { className: 'actions' },
-					button('Fill empty cells', () => summarize(false)),
-					button('Regenerate all', () => summarize(true)),
-					button('Export CSV', () => run(async () => say(`exported to ${await invoke<string>('export_table', { table: name })}`)))));
-		});
-		show(button('← Back', () => run(() => showDetails(d.key))), ...sections);
-	}
-
-	/** Adds each identifier in a pasted list, then lists the ones that failed and copies them. */
-	async function showCite(keys: string[], back: () => Promise<void>) {
-		const { default: initial, styles } = await invoke<{ default: string; styles: string[] }>('cite_formats');
-		const formats = [...new Set([initial, 'bibtex', 'ieee', 'apa', ...styles])];
-		const select = h('select', {}, ...formats.map(f => h('option', { value: f, selected: f === initial }, f)));
-		const out = h('textarea', { rows: 12, readOnly: true, className: 'mono' });
-		const copy = async () => {
-			out.value = await invoke<string>('cite', { keys, format: select.value });
-			await navigator.clipboard.writeText(out.value).then(() => say(`copied ${keys.length} as ${select.value}`), e => say(String(e)));
-		};
-		select.onchange = () => run(copy);
-		show(button('← Back', () => run(back)), h('h2', {}, `Cite ${keys.length === 1 ? keys[0] : `${keys.length} references`}`),
-			h('p', {}, 'Format: ', select), out,
-			h('div', { className: 'actions' }, button('Copy', () => run(copy))));
-		await run(copy);
-	}
-
-	/** Lists what failed with the reasons, copying the inputs; `done` parts go in the status line. */
-	async function showFailures(title: string, done: (string | 0 | false)[], failed: [string, string][], extra?: Child) {
-		const list = failed.map(([input]) => input).join('\n');
-		// Copying can fail once the tap that started the batch is too long ago; the button retries.
-		const copied = failed.length > 0 && await navigator.clipboard.writeText(list).then(() => true, () => false);
-		say([...done, failed.length && `${failed.length} failed${copied ? ', copied to the clipboard' : ''}`].filter(Boolean).join(' · '));
-		if (failed.length === 0) return showList();
-		show(h('h2', {}, title),
-			h('ul', {}, ...failed.map(([input, e]) => h('li', {}, h('div', {}, input), h('div', { className: 'meta' }, e)))),
-			h('div', { className: 'actions' },
-				button('Copy these', () => navigator.clipboard.writeText(list).then(() => say('copied to the clipboard'), e => say(String(e)))),
-				extra,
-				button('Back to the list', () => run(showList))));
-	}
-
-	function chooseLocation(): Promise<string | null> {
-		return new Promise((resolve) => {
-			const select = h('select', {}, ...overview.locations.map(l => h('option', { value: l }, l)));
-			show(h('h2', {}, 'Find PDFs'), h('p', {}, 'Attach them to: ', select),
-				h('p', { className: 'meta' }, 'Set [fulltext] location in yeda.toml to skip this.'),
-				h('div', { className: 'actions' }, button('Start', () => resolve(select.value)), button('Cancel', () => resolve(null))));
-		});
-	}
-
-	/** Open-access copies and campus downloads first, then the browser through the library proxy. */
-	async function findPdfs(keys: string[]) {
-		const plan = await invoke<FetchPlan>('fetch_plan', { keys });
-		if (plan.papers.length === 0) return say('they already have PDFs');
-		if (overview.locations.length === 0) return say('no locations in yeda.toml to attach to');
-		const location = plan.location ?? (overview.locations.length === 1 ? overview.locations[0] : await chooseLocation());
-		if (!location) return showList();
-		const attached: string[] = [], failed: [string, string][] = [];
-		const attach = async (key: string, path: string, verify: boolean) => {
-			if (verify) {
-				const text = await plainText(new Uint8Array(await invoke<ArrayBuffer>('read_download', { path })));
-				if (!(await invoke<boolean>('pdf_is', { key, text }))) {
-					failed.push([key, `the downloaded PDF doesn't look like this paper; it's in ${path}`]);
-					return;
-				}
-			}
-			if (!(await withPassword(() => invoke<OpenRef>('attach_pdf', { key, path, location })))) {
-				failed.push([key, 'no WebDAV password given; the PDF is in ' + path]);
-				return;
-			}
-			await invoke('remove_download', { path });
-			attached.push(key);
-		};
-		const browser: FetchPlan['papers'] = [];
-		for (const [i, p] of plan.papers.entries()) {
-			say(`fetch ${i + 1}/${plan.papers.length}: ${p.key}…`);
-			try {
-				if (!p.doi) throw new Error('no DOI to look it up by; attach it with Attach PDF');
-				const path = await invoke<string | null>('fetch_direct', { doi: p.doi, file: p.file });
-				if (path) await attach(p.key, path, false);
-				else browser.push(p);
-			} catch (e) {
-				failed.push([p.key, String(e)]);
-			}
-		}
-		if (browser.length > 0) {
-			say(`${browser.length} need the browser…`);
-			const json = await fetchInBrowser(JSON.stringify({ ...plan, papers: browser }));
-			const results: { key: string; file?: string; error?: string }[] = json ? JSON.parse(json) : [];
-			for (const p of browser) {
-				const result = results.find(r => r.key === p.key);
-				if (result?.file) await attach(p.key, result.file, true).catch(e => failed.push([p.key, String(e)]));
-				else failed.push([p.key, result?.error ?? 'fetch window closed']);
-			}
-		}
-		await refresh();
-		await showFailures('Not fetched', [attached.length && `attached ${attached.length} PDFs to ${location}`], failed);
-	}
-
-	function addReference() {
-		const area = h('textarea', { rows: 8, placeholder: 'DOIs, arXiv IDs or ISBNs, one per line or separated by spaces' });
-		const add = () => run(async () => {
-			const inputs = await invoke<string[]>('split_ids', { text: area.value });
-			const added: string[] = [], existed: string[] = [], failed: [string, string][] = [];
-			for (const [i, input] of inputs.entries()) {
-				say(`fetching ${i + 1}/${inputs.length}: ${input}…`);
-				try {
-					const r = await invoke<{ key: string; existed: boolean }>('add_ref', { input });
-					(r.existed ? existed : added).push(r.key);
-				} catch (e) {
-					failed.push([input, String(e)]);
-				}
-			}
-			await refresh();
-			const last = added.at(-1) ?? existed.at(-1);
-			const done = [added.length && `added ${added.join(', ')}`, existed.length && `already in library: ${existed.join(', ')}`];
-			if (failed.length === 0 && last) {
-				say(done.filter(Boolean).join(' · '));
-				return showDetails(last);
-			}
-			await showFailures('Not added', done, failed, last && button('Show the last added', () => run(() => showDetails(last))));
-		});
-		show(h('h2', {}, 'Add references'), area,
-			h('div', { className: 'actions' }, button('Add', add), button('Cancel', () => run(showList))));
-		area.focus();
-	}
-
-
 	async function showSettings() {
 		if (!hasFileAccess()) {
 			show(h('p', {}, 'yeda needs access to all files to read and write the library folder.'),
@@ -618,15 +461,6 @@ export function showBrowser(openReader: () => void): () => boolean {
 		}
 		const library = await invoke<string | null>('library');
 		const cloneUrl = h('input', { type: 'url', placeholder: 'https://user@host/library.git' });
-		const keys = await run(() => invoke<{ env: string; set: boolean }[]>('llm_keys')) ?? [];
-		const keyRows = keys.map(({ env, set }) => {
-			const input = h('input', { type: 'password', placeholder: set ? 'set (enter to replace)' : 'not set' });
-			return h('p', {}, h('div', {}, env), input, button('Save', () => run(async () => {
-				await invoke('set_key', { env, key: input.value });
-				say(`${env} saved`);
-				await showSettings();
-			})));
-		});
 		show(button('← Back', () => run(showList)), h('h2', {}, 'Library folder'), h('p', {}, library ?? 'None chosen'),
 			button('Choose library folder', () => run(async () => {
 				const path = await pickFolder();
@@ -640,8 +474,6 @@ export function showBrowser(openReader: () => void): () => boolean {
 				? h('div', {}, h('p', {}, overview.git), button('Sync now', () => run(sync)))
 				: h('div', {}, h('p', { className: 'meta' }, 'Clone a library repository over HTTPS into an empty folder; it becomes the library.'),
 					cloneUrl, button('Clone into a folder', () => cloneUrl.value.trim() && run(() => cloneLibrary(cloneUrl.value.trim())))),
-			keyRows.length > 0 && h('h2', {}, 'LLM API keys'), ...keyRows,
-			keyRows.length > 0 && h('p', { className: 'meta' }, 'Keys are kept in the Android Keystore, never in a file.'),
 			h('h2', {}, 'Settings file'),
 			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
 			button('Edit settings.toml', () => run(showSettingsFile)));

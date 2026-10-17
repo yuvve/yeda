@@ -4,7 +4,6 @@ mod git;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::ipc::Response;
@@ -13,9 +12,7 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
-use yeda_core::{Effect, fulltext, graph, tables};
-use yeda_net::llm::{self, Paper, Prompt};
-use yeda_net::wand;
+use yeda_core::Effect;
 use yeda_reader_lib::{Current, Doc};
 
 type Res<T> = Result<T, String>;
@@ -163,35 +160,6 @@ fn save_settings_text(app: AppHandle, state: State<Shared>, text: String) -> Res
     state.change(&app, |_| Ok(()))
 }
 
-#[derive(Serialize)]
-struct KeyStatus {
-    env: String,
-    set: bool,
-}
-
-/// The API key each LLM profile needs, and whether this device has it.
-#[tauri::command]
-fn llm_keys(app: AppHandle, state: State<Shared>) -> Res<Vec<KeyStatus>> {
-    state.with(&app, |b| {
-        let mut envs: Vec<String> = b.lib.llm.values().map(|p| p.key_env().to_string()).collect();
-        envs.dedup();
-        envs.into_iter()
-            .map(|env| Ok(KeyStatus { set: yeda_secrets::get(&yeda_secrets::llm_account(&env))?.is_some(), env }))
-            .collect()
-    })
-}
-
-/// Saves an LLM API key in the Keystore; an empty key removes it.
-#[tauri::command]
-fn set_key(env: String, key: String) -> Res<()> {
-    let account = yeda_secrets::llm_account(&env);
-    match key.trim() {
-        "" => yeda_secrets::delete(&account),
-        k => yeda_secrets::set(&account, k),
-    }
-    .map_err(err)
-}
-
 /// Saves a WebDAV password in the Keystore.
 #[tauri::command]
 fn set_secret(account: String, secret: String) -> Res<()> {
@@ -208,7 +176,6 @@ struct SideEntry {
 struct Overview {
     sidebar: Vec<SideEntry>,
     statuses: &'static [&'static str],
-    tables: Vec<String>,
     /// `(field, label)` for the filter form.
     filter_fields: &'static [(&'static str, &'static str)],
     /// `(field, label)` for sorting.
@@ -237,7 +204,6 @@ fn refresh(app: AppHandle, state: State<Shared>) -> Res<Overview> {
         Ok(Overview {
             sidebar,
             statuses: &library::STATUSES,
-            tables: b.lib.tables.keys().cloned().collect(),
             filter_fields: &FILTER_FIELDS,
             sort_fields: SortField::ALL.iter().map(|f| (*f, f.name())).collect(),
             locations: b.lib.locations.keys().chain(b.lib.remotes.keys()).cloned().collect(),
@@ -312,8 +278,6 @@ struct Details {
     raw: String,
     note: String,
     annotations: Vec<Annotation>,
-    /// Each table's columns, for showing this reference's rows in order.
-    tables: BTreeMap<String, Vec<String>>,
 }
 
 #[tauri::command]
@@ -322,8 +286,7 @@ fn details(app: AppHandle, state: State<Shared>, key: String) -> Res<Details> {
         let reference = b.get(&key)?.clone();
         let raw = yeda_fs::read_optional(&b.path(&library::ref_path(&key))?)?.unwrap_or_default();
         let note = yeda_fs::read_optional(&b.path(&library::note_path(&key))?)?.unwrap_or_default();
-        let tables = b.lib.tables.iter().map(|(n, t)| (n.clone(), t.columns.clone())).collect();
-        Ok(Details { annotations: b.annotations(&key)?, key, reference, raw, note, tables })
+        Ok(Details { annotations: b.annotations(&key)?, key, reference, raw, note })
     })
 }
 
@@ -389,31 +352,6 @@ fn delete_search(app: AppHandle, state: State<Shared>, name: String) -> Res<()> 
     })
 }
 
-#[derive(Serialize)]
-struct Added {
-    key: String,
-    existed: bool,
-}
-
-#[tauri::command]
-fn split_ids(text: String) -> Vec<String> {
-    yeda_core::ids::split_ids(&text).into_iter().map(Into::into).collect()
-}
-
-#[tauri::command]
-async fn add_ref(app: AppHandle, state: State<'_, Shared>, input: String) -> Res<Added> {
-    let fetched = tauri::async_runtime::spawn_blocking(move || wand::fetch(&input)).await.map_err(|e| e.to_string())?;
-    let mut r = fetched.map_err(err)?;
-    state.change(&app, |b| {
-        if let Some(x) = r.doi.as_deref().and_then(|d| b.lib.find_doi(d)) {
-            return Ok(Added { key: x.key.clone(), existed: true });
-        }
-        r.key = b.lib.unique_key(&r);
-        b.apply(vec![b.lib.save(&r)?])?;
-        Ok(Added { key: r.key, existed: false })
-    })
-}
-
 #[tauri::command]
 fn delete_ref(app: AppHandle, state: State<Shared>, key: String) -> Res<()> {
     state.change(&app, |b| b.apply(b.lib.delete(&key)))
@@ -476,44 +414,6 @@ fn extract_annotations(app: AppHandle, state: State<Shared>, key: String, words:
     })
 }
 
-/// Fills `key`'s row of `table` with the default LLM profile; `text` is the paper's text from pdf.js,
-/// for providers that take text rather than the PDF. Returns a note on how it went.
-#[tauri::command]
-async fn summarize(app: AppHandle, state: State<'_, Shared>, key: String, table: String, overwrite: bool, text: Option<String>) -> Res<String> {
-    let (job, profile) = state.with(&app, |b| {
-        let def = b.lib.tables.get(&table).with_context(|| format!("no table named '{table}'"))?;
-        let r = b.get(&key)?;
-        let job = tables::plan(&b.lib, &table, def, r, &b.annotations(&key)?, overwrite)
-            .with_context(|| format!("nothing to fill in '{table}'"))?;
-        Ok((job, b.lib.llm_profile(None)?.1))
-    })?;
-    let api_key = yeda_secrets::get(&yeda_secrets::llm_account(profile.key_env())).map_err(err)?;
-    let reply = tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<_> {
-        let bytes = job.pdf.as_ref().and_then(|p| std::fs::read(p).ok());
-        let text = || text.clone().context("the PDF's text could not be extracted");
-        let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
-        let prompt = Prompt { system: job.system, text: job.text, paper, schema: job.schema };
-        let reply = llm::complete(&profile, &prompt, api_key.as_deref())?;
-        Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note))
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let (row, note) = reply.map_err(err)?;
-    state.with(&app, |b| b.edit(&key, |r| tables::merge(r, &table, row, overwrite)))?;
-    Ok(note.unwrap_or_else(|| format!("filled '{table}'")))
-}
-
-/// Writes the table as CSV to the device's Download folder; returns the file's path.
-#[tauri::command]
-fn export_table(app: AppHandle, state: State<Shared>, table: String) -> Res<String> {
-    state.with(&app, |b| {
-        let (csv, _) = tables::export_csv(&b.lib, &table)?;
-        let path = app.path().download_dir()?.join(format!("{table}.csv"));
-        yeda_fs::write_atomic(&path, csv.as_bytes()).with_context(|| path.display().to_string())?;
-        Ok(path.display().to_string())
-    })
-}
-
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 enum OpenRef {
@@ -551,122 +451,6 @@ async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
     let out = with_git_login(url, move |login| git::sync(&dir, login)).await?;
     state.change(&app, |_| Ok(()))?;
     Ok(out)
-}
-
-/// Where fetched PDFs wait to be attached.
-fn downloads_dir(app: &AppHandle, settings: &fulltext::Settings) -> anyhow::Result<PathBuf> {
-    match &settings.downloads {
-        Some(dir) => Ok(dir.clone()),
-        None => Ok(app.path().app_data_dir()?.join("downloads")),
-    }
-}
-
-#[derive(Serialize)]
-struct FetchPaper {
-    key: String,
-    doi: Option<String>,
-    file: String,
-}
-
-/// What `FetchActivity` and the browser screen need for fetching PDFs.
-#[derive(Serialize)]
-struct FetchPlan {
-    downloads: PathBuf,
-    proxy: Option<String>,
-    proxy_host: Option<String>,
-    location: Option<String>,
-    papers: Vec<FetchPaper>,
-}
-
-/// The plan for those of `keys` without a PDF.
-#[tauri::command]
-fn fetch_plan(app: AppHandle, state: State<Shared>, keys: Vec<String>) -> Res<FetchPlan> {
-    state.with(&app, |b| {
-        let settings = &b.lib.fulltext;
-        let papers = keys
-            .iter()
-            .filter_map(|k| b.lib.get(k))
-            .filter(|r| r.pdf.is_none())
-            .map(|r| FetchPaper { key: r.key.clone(), doi: graph::lookup_doi(r), file: fulltext::file_name(r) })
-            .collect();
-        let downloads = downloads_dir(&app, settings)?;
-        std::fs::create_dir_all(&downloads)?;
-        Ok(FetchPlan {
-            downloads,
-            proxy: settings.proxy.clone(),
-            proxy_host: fulltext::proxy_host(settings),
-            location: settings.location.clone(),
-            papers,
-        })
-    })
-}
-
-/// Downloads an open-access copy, else the publisher's PDF (which works on a campus network),
-/// into `downloads`; `None` if neither is there and the paper needs the browser.
-#[tauri::command]
-async fn fetch_direct(app: AppHandle, state: State<'_, Shared>, doi: String, file: String) -> Res<Option<PathBuf>> {
-    let settings = state.with(&app, |b| Ok(b.lib.fulltext.clone()))?;
-    let target = downloads_dir(&app, &settings).map_err(err)?.join(&file);
-    let key = yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten();
-    tauri::async_runtime::spawn_blocking(move || {
-        let client = yeda_net::openalex::Client::new(key);
-        let urls = client.pdf_urls(&doi).unwrap_or_default().into_iter().chain(fulltext::publisher_urls(&doi, &settings));
-        let Some(pdf) = urls.into_iter().find_map(|u| yeda_net::fulltext::download(&u, None).ok()) else { return Ok(None) };
-        std::fs::write(&target, pdf).map_err(|e| format!("{}: {e}", target.display()))?;
-        Ok(Some(target))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Only files in the downloads folder may be read or removed through these.
-fn in_downloads(app: &AppHandle, state: &State<Shared>, path: &Path) -> Res<PathBuf> {
-    let dir = state.with(app, |b| downloads_dir(app, &b.lib.fulltext))?;
-    let path = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
-    if !path.starts_with(dir.canonicalize().map_err(|e| e.to_string())?) {
-        return Err(format!("{} is not in the downloads folder", path.display()));
-    }
-    Ok(path)
-}
-
-#[tauri::command]
-fn read_download(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<Response> {
-    let path = in_downloads(&app, &state, &path)?;
-    std::fs::read(&path).map(Response::new).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-#[tauri::command]
-fn remove_download(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<()> {
-    let path = in_downloads(&app, &state, &path)?;
-    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Whether a PDF's text (from pdf.js) is reference `key`.
-#[tauri::command]
-fn pdf_is(app: AppHandle, state: State<Shared>, key: String, text: String) -> Res<bool> {
-    state.with(&app, |b| Ok(fulltext::looks_like(&text, b.get(&key)?)))
-}
-
-#[derive(Serialize)]
-struct CiteFormats {
-    default: String,
-    styles: Vec<&'static str>,
-}
-
-#[tauri::command]
-fn cite_formats(app: AppHandle, state: State<Shared>) -> Res<CiteFormats> {
-    let default = state.with(&app, |b| Ok(b.lib.cite.format.clone().unwrap_or_else(|| "bibtex".into())))?;
-    Ok(CiteFormats { default, styles: yeda_core::cite::style_names() })
-}
-
-/// The references `keys` as `format` (see `cite::export`); a `.csl` path is relative to the library.
-#[tauri::command]
-fn cite(app: AppHandle, state: State<Shared>, keys: Vec<String>, format: String) -> Res<String> {
-    state.with(&app, |b| {
-        let refs: Vec<Ref> = keys.iter().filter_map(|k| b.lib.get(k).cloned()).collect();
-        let dir = b.dir()?.to_path_buf();
-        yeda_core::cite::export(&refs, &format, |path| Ok(std::fs::read_to_string(dir.join(path))?))
-    })
 }
 
 /// Clones `url` into the empty folder `path` and makes it the library.
@@ -794,8 +578,6 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         library,
         set_library,
         set_location,
-        llm_keys,
-        set_key,
         refresh,
         list,
         parse_query,
@@ -809,28 +591,17 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         set_tag_color,
         save_search,
         delete_search,
-        add_ref,
-        split_ids,
         delete_ref,
         save_raw,
         save_note,
         ref_pdf,
         pdf_image_regions,
         extract_annotations,
-        summarize,
-        export_table,
         open_ref,
         attach_pdf,
         set_secret,
         git_sync,
         git_clone,
-        cite_formats,
-        cite,
-        fetch_plan,
-        fetch_direct,
-        read_download,
-        remove_download,
-        pdf_is,
         settings_text,
         save_settings_text,
         open_pdf
