@@ -367,7 +367,7 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     }
     let g = &v.graph;
     let focused = app.pane == Pane::Right;
-    let near = v.neighbours();
+    let near = v.entries();
     let list_height = (near.len() as u16 + 3).clamp(5, area.height / 2);
     let [top, bottom] = Layout::vertical([Constraint::Min(6), Constraint::Length(list_height)]).areas(area);
     let rows = g.years.len().max(1) as f64;
@@ -440,9 +440,13 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     };
     let items: Vec<ListItem> = near
         .iter()
-        .map(|&(citing, i)| ListItem::new(format!("{} {}", if citing { "←" } else { "→" }, label(&g.nodes[i]))))
+        .map(|(mark, i)| ListItem::new(format!("{mark:<3} {}", label(&g.nodes[*i]))))
         .collect();
-    let title = format!("{} · ← cites it, → it cites", label(node));
+    let title = if v.lists {
+        "▲ cited by the most seeds · ▼ citing the most seeds · L: neighbours".to_string()
+    } else {
+        format!("{} · ← cites it, → it cites · L: top lists", label(node))
+    };
     let mut state = ListState::default().with_selected(focused.then_some(v.nbr));
     let list = List::new(items).block(block(title, focused)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, bottom, &mut state);

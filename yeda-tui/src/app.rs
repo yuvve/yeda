@@ -168,18 +168,33 @@ const OPENALEX_ACCOUNT: &str = yeda_secrets::OPENALEX;
 pub struct GraphView {
     pub graph: Graph,
     pub sel: usize,
-    /// The highlighted entry of `neighbours()`.
+    /// The highlighted entry of `entries()`.
     pub nbr: usize,
     pub scope: String,
+    /// Show the top cited and top citing outside papers instead of the selected paper's neighbours.
+    pub lists: bool,
     /// Nodes navigated away from, for Backspace.
     back: Vec<usize>,
 }
 
 impl GraphView {
-    /// The selected node's neighbours: `(true, i)` for those citing it, then `(false, i)` for those it cites.
-    pub fn neighbours(&self) -> Vec<(bool, usize)> {
-        let (citing, cited) = self.graph.neighbours(self.sel);
-        citing.into_iter().map(|i| (true, i)).chain(cited.into_iter().map(|i| (false, i))).collect()
+    /// The list under the graph, as `(mark, node)`: the selected paper's neighbours (`←` citing
+    /// it, `→` cited by it), or in `lists` mode the outside papers cited by the most seeds (`▲n`)
+    /// then those citing the most seeds (`▼n`).
+    pub fn entries(&self) -> Vec<(String, usize)> {
+        let nodes = &self.graph.nodes;
+        if !self.lists {
+            let (citing, cited) = self.graph.neighbours(self.sel);
+            return citing.into_iter().map(|i| ("←".into(), i)).chain(cited.into_iter().map(|i| ("→".into(), i))).collect();
+        }
+        let ranked = |count: fn(&graph::Node) -> usize, mark: &str| {
+            let mut ids: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).collect();
+            ids.sort_by_key(|&i| std::cmp::Reverse(count(&nodes[i])));
+            ids.into_iter().map(move |i| (format!("{mark}{}", count(&nodes[i])), i)).collect::<Vec<_>>()
+        };
+        let mut out = ranked(|n| n.cited_by_seeds, "▲");
+        out.extend(ranked(|n| n.cites_seeds, "▼"));
+        out
     }
 }
 
@@ -542,6 +557,12 @@ impl App {
             }
             (KeyCode::Enter, _) if self.in_graph() => self.graph_go(),
             (KeyCode::Backspace, _) if self.in_graph() => self.graph_back(),
+            (KeyCode::Char('L'), _) if self.in_graph() => {
+                if let Some(g) = &mut self.graph {
+                    g.lists = !g.lists;
+                    g.nbr = 0;
+                }
+            }
             (KeyCode::Char('a'), _) if self.in_graph() => self.graph_add(),
             (KeyCode::Char('o'), _) if self.in_graph() => self.graph_open(),
             (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
@@ -1517,7 +1538,7 @@ impl App {
             }
             Pane::Right if self.right == RightView::Graph => {
                 if let Some(g) = &mut self.graph {
-                    g.nbr = i.min(g.neighbours().len().saturating_sub(1));
+                    g.nbr = i.min(g.entries().len().saturating_sub(1));
                 }
             }
             Pane::Right if self.right == RightView::Tables => self.table_scroll = i.min(u16::MAX as usize) as u16,
@@ -1691,7 +1712,8 @@ impl App {
         }
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
         let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
-        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, back: Vec::new() });
+        let lists = self.graph.as_ref().is_some_and(|g| g.lists);
+        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, lists, back: Vec::new() });
         self.right = RightView::Graph;
     }
 
@@ -1721,7 +1743,7 @@ impl App {
 
     fn graph_go(&mut self) {
         let Some(g) = &mut self.graph else { return };
-        let Some(&(_, target)) = g.neighbours().get(g.nbr) else { return };
+        let Some(&(_, target)) = g.entries().get(g.nbr) else { return };
         g.back.push(g.sel);
         self.graph_select(target);
     }
@@ -1735,7 +1757,7 @@ impl App {
     /// The highlighted neighbour, else the selected node.
     fn graph_target(&self) -> Option<&graph::Node> {
         let g = self.graph.as_ref()?;
-        let i = g.neighbours().get(g.nbr).map_or(g.sel, |&(_, i)| i);
+        let i = g.entries().get(g.nbr).map_or(g.sel, |&(_, i)| i);
         g.graph.nodes.get(i)
     }
 
