@@ -34,6 +34,8 @@ pub struct Paper {
 pub enum Outcome {
     Saved { key: String, file: PathBuf },
     Failed { key: String, error: String },
+    /// A page the window loaded, for the log.
+    Visited { key: String, page: String },
 }
 
 enum Event {
@@ -171,6 +173,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             };
             match event {
                 Ok(Event::Loaded(url)) => {
+                    report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
                     let _ = window.eval(&script);
                     loaded = Some(url);
                 }
@@ -212,6 +215,11 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
         };
         report(&outcome);
     }
+}
+
+/// `url` without its query and fragment, which can hold sign-in tickets.
+fn without_query(url: &str) -> String {
+    url.split(['?', '#']).next().unwrap_or_default().to_string()
 }
 
 /// Renames a finished download to `target` if it is a PDF; anything else is deleted.
