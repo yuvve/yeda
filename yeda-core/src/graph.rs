@@ -158,7 +158,8 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
         }
     }
     let ranked = outside_links(refs, seeds, known);
-    ids.extend(ranked.iter().take(outside).map(|(id, _)| id.clone()));
+    // Works OpenAlex no longer has stay in other works' references; they'd be blank nodes.
+    ids.extend(ranked.iter().filter(|(id, _)| known.works.contains_key(id)).take(outside).map(|(id, _)| id.clone()));
     let links: HashMap<String, usize> = ranked.into_iter().collect();
 
     let mut nodes: Vec<Node> = ids
@@ -299,5 +300,11 @@ mod tests {
         assert_eq!(cited, [g.find("X").unwrap(), g.find("Y").unwrap()]);
         assert_eq!(g.years[0], Some(2022));
         assert!(g.nodes[g.find("C").unwrap()].row < g.nodes[a].row);
+
+        let mut without_x = works.clone();
+        without_x.remove("X");
+        let g = build(&refs, &seeds, &Known { works: &without_x, citing: known.citing }, 2);
+        let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["A", "B", "C", "Y", "Z"]);
     }
 }
