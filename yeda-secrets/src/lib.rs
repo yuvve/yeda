@@ -82,4 +82,16 @@ mod tests {
         let e = super::get("test").unwrap_err();
         assert!(format!("{e:#}").contains("no secret store is running"), "{e:#}");
     }
+
+    /// Run as `cargo test -p yeda-secrets -- --ignored round_trip` with the provider unlocked.
+    #[test]
+    #[ignore = "writes to the real secret store"]
+    fn round_trip() {
+        for account in [super::webdav_account("yeda-test", "https://example.invalid/dav"), super::llm_account("YEDA_TEST_KEY")] {
+            super::set(&account, "s3cret").unwrap();
+            assert_eq!(super::get(&account).unwrap().as_deref(), Some("s3cret"));
+            super::delete(&account).unwrap();
+            assert_eq!(super::get(&account).unwrap(), None);
+        }
+    }
 }
