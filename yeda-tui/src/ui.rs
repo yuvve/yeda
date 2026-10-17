@@ -358,7 +358,8 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(title.into(), true)), area);
 }
 
-/// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it.
+/// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
+/// selected paper is yellow, its neighbours cyan, and the neighbour highlighted in the list a magenta ◆.
 fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     let Some(v) = &app.graph else { return };
     if area.height < 10 {
@@ -371,6 +372,9 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     let [top, bottom] = Layout::vertical([Constraint::Min(6), Constraint::Length(list_height)]).areas(area);
     let rows = g.years.len().max(1) as f64;
     let pos = |i: usize| (g.nodes[i].x, rows - g.nodes[i].row as f64 - 0.5);
+    let picked = near.get(v.nbr).map(|&(_, j)| j).filter(|_| focused);
+    // Two character cells, in canvas units, between a node and its label.
+    let gap = 2.0 * 1.15 / top.width.saturating_sub(2).max(1) as f64;
     let edge = |(a, b): (usize, usize), color| {
         let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
         CanvasLine { x1, y1, x2, y2, color }
@@ -391,6 +395,10 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
             for &e in g.edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
                 ctx.draw(&edge(e, Color::Yellow));
             }
+            if let Some(p) = picked {
+                ctx.layer();
+                ctx.draw(&edge((v.sel, p), Color::Magenta));
+            }
             ctx.layer();
             // Label only as many year rows as fit.
             let step = (rows / top.height.saturating_sub(2).max(1) as f64).ceil().max(1.0) as usize;
@@ -398,17 +406,28 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
                 let label = year.map_or("?".to_string(), |y| y.to_string());
                 ctx.print(-0.15, rows - row as f64 - 0.5, Span::raw(label).dim());
             }
-            for (i, n) in g.nodes.iter().enumerate() {
-                let glyph = if n.seed { "◉" } else if n.key.is_some() { "●" } else { "○" };
-                let style = if i == v.sel {
-                    Style::new().fg(Color::Yellow).bold()
-                } else if near.iter().any(|&(_, j)| j == i) {
-                    Style::new().fg(Color::Cyan)
-                } else {
-                    Style::new()
+            // Later prints cover earlier ones, so the papers that matter most go last.
+            let rank = |i: usize| match i {
+                _ if i == v.sel => 3,
+                _ if Some(i) == picked => 2,
+                _ if near.iter().any(|&(_, j)| j == i) => 1,
+                _ => 0,
+            };
+            let mut order: Vec<usize> = (0..g.nodes.len()).collect();
+            order.sort_by_key(|&i| rank(i));
+            for i in order {
+                let n = &g.nodes[i];
+                let (glyph, style) = match rank(i) {
+                    3 => (None, Style::new().fg(Color::Yellow).bold()),
+                    2 => (Some("◆"), Style::new().fg(Color::Magenta).bold()),
+                    1 => (None, Style::new().fg(Color::Cyan)),
+                    _ => (None, Style::new().dim()),
                 };
+                let glyph = glyph.unwrap_or(if n.seed { "◉" } else if n.key.is_some() { "●" } else { "○" });
+                let label = format!("{} {}", n.first_author, n.year.map(|y| y.to_string()).unwrap_or_default());
                 let (x, y) = pos(i);
                 ctx.print(x, y, Span::styled(glyph, style));
+                ctx.print(x + gap, y, Span::styled(label, style));
             }
         });
     f.render_widget(canvas, top);
