@@ -176,14 +176,29 @@ fn draw_tables(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+/// Narrower windows drop the right column, then the library column.
+const THREE_COLUMNS: u16 = 120;
+const TWO_COLUMNS: u16 = 80;
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(f.area());
     let [side, list, detail] = match (app.focus, app.pane) {
         (true, Pane::Sidebar) => [main, Rect::ZERO, Rect::ZERO],
         (true, Pane::List) => [Rect::ZERO, main, Rect::ZERO],
         (true, Pane::Right) => [Rect::ZERO, Rect::ZERO, main],
-        (false, _) => Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(40), Constraint::Percentage(40)]).areas(main),
+        (false, _) if main.width >= THREE_COLUMNS => {
+            Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(40), Constraint::Percentage(40)]).areas(main)
+        }
+        (false, _) if main.width >= TWO_COLUMNS => {
+            let [side, list] = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).areas(main);
+            [side, list, Rect::ZERO]
+        }
+        (false, _) => [Rect::ZERO, main, Rect::ZERO],
     };
+    // A hidden column can't keep the focus; `c` still shows any column on its own.
+    if !app.focus && [(Pane::Sidebar, side), (Pane::Right, detail)].iter().any(|&(p, r)| app.pane == p && r.is_empty()) {
+        app.pane = Pane::List;
+    }
     app.page = main.height.saturating_sub(2) as usize;
     let hl = Style::new().add_modifier(Modifier::REVERSED);
 
