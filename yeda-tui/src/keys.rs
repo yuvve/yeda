@@ -124,9 +124,9 @@ mod tests {
 
     #[test]
     fn overrides_unbinds_and_falls_back() {
-        let map = Keymap::load(Some("[keys.normal]\n\"x\" = \"\"\n\"Ctrl-G\" = \"graph filtered\"\n[keys.graph]\n\"j\" = \"graph-scroll-down\"")).unwrap();
+        let map = Keymap::load(Some("[keys.normal]\n\"x\" = \"\"\n\"Ctrl-G\" = \"cite ieee\"\n[keys.graph]\n\"j\" = \"graph-scroll-down\"")).unwrap();
         assert!(matches!(map.lookup("normal", &seq("x")), Lookup::None));
-        assert!(matches!(map.lookup("normal", &seq("ctrl-G")), Lookup::Run(c) if c == "graph filtered"));
+        assert!(matches!(map.lookup("normal", &seq("ctrl-G")), Lookup::Run(c) if c == "cite ieee"));
         assert!(matches!(map.lookup("graph", &seq("j")), Lookup::Run(c) if c == "graph-scroll-down"));
         assert!(matches!(map.lookup("graph", &seq("k")), Lookup::Run(c) if c == "up"));
         assert!(matches!(map.lookup("library", &seq("g")), Lookup::Prefix));
