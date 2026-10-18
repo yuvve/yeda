@@ -1,6 +1,7 @@
 use crate::{citations, fetch, poppler};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
+use crate::keys::{self, Keymap, Lookup};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use std::collections::BTreeSet;
@@ -39,7 +40,7 @@ pub enum Mode {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum HelpPage {
-    /// `HELP`, from `?` or `:keys`.
+    /// The key bindings and commands, from `?` or `:keys`.
     Keys,
     /// `GUIDE`, from `:help`.
     Guide,
@@ -50,29 +51,51 @@ pub enum HelpPage {
 pub const GUIDE: &str = include_str!("guide.txt");
 
 /// Every key and command, as `:help` lists them.
-pub const HELP: &[(&str, &str)] = &[
-    ("j k Ctrl-d Ctrl-u gg G", "move"),
-    ("h l Tab", "switch column"),
-    ("c", "show only the current column; again to show all. Below 120 columns the right column is hidden, below 80 the library column too"),
-    ("mouse", "click selects and focuses; the wheel moves the selection"),
-    ("/", "search; in the library column, filter it (:help explains the syntax)"),
-    ("f", "filter by field, with suggestions from the library"),
-    ("s", "sort"),
-    ("Esc", "clear the search"),
-    ("a", "add by DOI, arXiv ID or ISBN; paste a list to add several"),
-    ("o", "open the PDF in the reader (yeda read); in annotations, the image in the viewer or the entry in $EDITOR"),
-    ("e  n", "edit the reference file / its note in $EDITOR"),
-    ("v  V", "mark or unmark one / mark a range; Enter keeps it, Esc cancels; Esc again unmarks all"),
-    ("t  m", "edit tags / move to a collection"),
-    ("r  R", "next / previous reading status"),
-    ("A  T", "show annotations / tables"),
-    ("x", "extract the annotations embedded in the PDF"),
-    ("C", "colour the selected tag (library column)"),
-    ("dd", "delete the reference or saved search"),
-    (":  ↑ ↓", "command line; Up/Down recall earlier commands"),
-    ("?", "this list"),
-    ("q", "quit"),
-    ("", ""),
+/// The actions keys are bound to, also run as `:<name>`.
+pub const ACTIONS: &[(&str, &str)] = &[
+    ("down", "move down"),
+    ("up", "move up"),
+    ("half-down", "move half a page down"),
+    ("half-up", "move half a page up"),
+    ("top", "go to the first entry"),
+    ("bottom", "go to the last entry"),
+    ("left", "focus the column to the left"),
+    ("right", "focus the column to the right"),
+    ("next-column", "focus the next column"),
+    ("confirm", "end a range (keeping its marks), else focus the column to the right"),
+    ("column", "show only the current column; again to show all"),
+    ("search", "search; in the library column, filter it (:help explains the syntax)"),
+    ("filter", "filter by field, with suggestions from the library"),
+    ("sort", "sort"),
+    ("clear", "cancel a range, else unmark all, else clear the search"),
+    ("add", "add by DOI, arXiv ID or ISBN; a pasted list adds each"),
+    ("open", "open the PDF in the reader (yeda read)"),
+    ("edit", "edit the reference file in $EDITOR"),
+    ("note", "edit the reference's note in $EDITOR"),
+    ("mark", "mark or unmark the reference"),
+    ("range", "mark a range as you move"),
+    ("tags", "edit tags"),
+    ("move", "move to a collection"),
+    ("status-next", "next reading status"),
+    ("status-prev", "previous reading status"),
+    ("annotations", "show annotations"),
+    ("tables", "show tables"),
+    ("extract", "extract the annotations embedded in the PDF"),
+    ("tag-color", "colour the selected tag (library column)"),
+    ("delete", "delete the reference or saved search"),
+    ("command", "command line; Up/Down recall earlier commands"),
+    ("graph-go", "go to the picked neighbour"),
+    ("graph-back", "go back"),
+    ("graph-lists", "switch between neighbours and the top cited/citing lists"),
+    ("graph-add", "add the picked paper by DOI"),
+    ("graph-open", "open the picked paper's DOI in the browser"),
+    ("neighbourhood", "show only the selected paper and its direct links"),
+    ("graph-scroll-down", "scroll the graph down"),
+    ("graph-scroll-up", "scroll the graph up"),
+    ("open-annotation", "open the image in the viewer, or the entry in $EDITOR"),
+];
+
+pub const COMMANDS: &[(&str, &str)] = &[
     (":save <name>", "save the current search"),
     (":summarize[!] [table] [profile]", "fill the reference's table row with an LLM; ! overwrites"),
     (":summarize-all[!] [table] [profile]", "the same for every visible reference"),
@@ -82,8 +105,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":sync", "commit, pull and push the library with git"),
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
-    (":graph close", "close the graph (Esc in the graph does too)"),
-    ("N  Ctrl-e Ctrl-y", "in the graph: only the selected paper's links / scroll (or the mouse wheel)"),
+    (":graph close", "close the graph"),
     (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -91,6 +113,13 @@ pub const HELP: &[(&str, &str)] = &[
     (":failed", "what the last add or fetch could not get, with the reasons"),
     (":log", "every status message and failure, with times, in $EDITOR"),
     (":q", "quit"),
+    (":<action>", "any action above, such as :annotations"),
+];
+
+pub const NOTES: &[(&str, &str)] = &[
+    ("mouse", "a click selects and focuses; the wheel moves the selection, or scrolls the graph"),
+    ("narrow", "below 120 columns the right column is hidden, below 80 the library column too"),
+    ("keys", "change them under [keys.<context>] in ~/.config/yeda/config.toml (:help shows how)"),
 ];
 
 /// The `f` popup: one value per `search::FILTER_FIELDS` entry, then free text.
@@ -313,7 +342,9 @@ pub struct App {
     pub page: usize,
     /// What the last frame drew where: lists with their scroll offset, then whole columns.
     pub clickable: Vec<(Pane, Rect, Option<usize>)>,
-    pending: Option<char>,
+    /// Keys typed so far of a longer binding, such as the first `g` of `g g`.
+    pending: Vec<String>,
+    pub keymap: Keymap,
     pub status: String,
     pub quit: bool,
     /// A file for $EDITOR, and the line to start at.
@@ -354,7 +385,7 @@ pub struct App {
 const HISTORY_LEN: usize = 200;
 
 impl App {
-    pub fn new(dir: PathBuf, lib: Library, picker: Picker) -> Self {
+    pub fn new(dir: PathBuf, lib: Library, picker: Picker, keymap: Keymap) -> Self {
         let history = lib.cache.as_ref().and_then(|c| fs::read_to_string(c.join("history")).ok()).unwrap_or_default();
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
@@ -375,7 +406,8 @@ impl App {
             sel: 0,
             page: 10,
             clickable: Vec::new(),
-            pending: None,
+            pending: Vec::new(),
+            keymap,
             status: String::new(),
             quit: false,
             edit: None,
@@ -548,18 +580,49 @@ impl App {
     }
 
     fn normal_key(&mut self, k: KeyEvent) {
-        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(key) = keys::name(&k) else { return };
+        let mut seq = std::mem::take(&mut self.pending);
+        seq.push(key.clone());
+        let context = self.context();
+        match self.keymap.lookup(context, &seq) {
+            Lookup::Run(command) => self.submit(Prompt::Command, &command),
+            Lookup::Prefix => self.pending = seq,
+            // Like vim: a key that doesn't continue a sequence starts over on its own.
+            Lookup::None if seq.len() > 1 => match self.keymap.lookup(context, std::slice::from_ref(&key)) {
+                Lookup::Run(command) => self.submit(Prompt::Command, &command),
+                Lookup::Prefix => self.pending = vec![key],
+                Lookup::None => {}
+            },
+            Lookup::None => {}
+        }
+    }
+
+    /// The keymap context of the focused column.
+    fn context(&self) -> &'static str {
+        match self.pane {
+            Pane::Sidebar => "library",
+            Pane::Right if self.in_graph() => "graph",
+            Pane::Right if self.right == RightView::Annotations => "annotations",
+            _ => "normal",
+        }
+    }
+
+    /// Runs the action `name` from `ACTIONS`; false if there is none.
+    fn action(&mut self, name: &str, args: &str) -> bool {
         let half = (self.page / 2).max(1) as isize;
-        match (k.code, self.pending.take()) {
-            (KeyCode::Char('d'), _) if ctrl => self.step(half),
-            (KeyCode::Char('u'), _) if ctrl => self.step(-half),
-            (KeyCode::Char(c @ ('e' | 'y')), _) if ctrl && self.right == RightView::Graph => {
+        match name {
+            "down" => self.step(1),
+            "up" => self.step(-1),
+            "half-down" => self.step(half),
+            "half-up" => self.step(-half),
+            "top" => self.move_to(0),
+            "bottom" => self.move_to(usize::MAX),
+            "graph-scroll-down" | "graph-scroll-up" => {
                 if let Some(g) = &mut self.graph {
-                    g.scroll = if c == 'e' { g.scroll + 1 } else { g.scroll.saturating_sub(1) };
+                    g.scroll = if name == "graph-scroll-down" { g.scroll + 1 } else { g.scroll.saturating_sub(1) };
                 }
             }
-            (KeyCode::Char('g'), Some('g')) => self.move_to(0),
-            (KeyCode::Char('d'), Some('d')) => match (self.pane, self.current_filter()) {
+            "delete" => match (self.pane, self.current_filter()) {
                 (Pane::Sidebar, Filter::Search(name, _)) => {
                     self.status = format!("delete saved search '{name}'? (y/n)");
                     self.mode = Mode::ConfirmDelete;
@@ -577,109 +640,98 @@ impl App {
                 },
                 _ => {}
             },
-            (KeyCode::Char(c @ ('g' | 'd')), None) => self.pending = Some(c),
-            (KeyCode::Char('q'), _) => self.quit = true,
-            (KeyCode::Char('j') | KeyCode::Down, _) => self.step(1),
-            (KeyCode::Char('k') | KeyCode::Up, _) => self.step(-1),
-            (KeyCode::Char('G'), _) => self.move_to(usize::MAX),
-            (KeyCode::Char('h') | KeyCode::Left, _) => {
-                self.pane = if self.pane == Pane::Right { Pane::List } else { Pane::Sidebar }
-            }
-            (KeyCode::Enter, _) if self.visual.is_some() => self.visual = None,
-            (KeyCode::Enter, _) if self.in_graph() => self.graph_go(),
-            (KeyCode::Backspace, _) if self.in_graph() => self.graph_back(),
-            (KeyCode::Char('L'), _) if self.in_graph() => {
-                if let Some(g) = &mut self.graph {
-                    g.lists = !g.lists;
-                    g.nbr = 0;
-                }
-            }
-            (KeyCode::Char('a'), _) if self.in_graph() => self.graph_add(),
-            (KeyCode::Char('N'), _) if self.in_graph() => {
-                if let Some(g) = &mut self.graph {
-                    g.ego = !g.ego;
-                    g.scroll_for = None;
-                }
-            }
-            (KeyCode::Char('o'), _) if self.in_graph() => self.graph_open(),
-            (KeyCode::Char('o'), _) if self.pane == Pane::Right && self.right == RightView::Annotations => self.open_annotation(),
-            (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
+            "left" => self.pane = if self.pane == Pane::Right { Pane::List } else { Pane::Sidebar },
+            "right" => {
                 let right_focusable = self.right != RightView::Details;
                 self.pane = if self.pane == Pane::Sidebar || !right_focusable { Pane::List } else { Pane::Right }
             }
-            (KeyCode::Tab, _) => {
+            "confirm" if self.visual.is_some() => self.visual = None,
+            "confirm" => return self.action("right", ""),
+            "next-column" => {
                 self.pane = match self.pane {
                     Pane::Sidebar => Pane::List,
                     Pane::List if self.right != RightView::Details => Pane::Right,
                     _ => Pane::Sidebar,
                 }
             }
-            (KeyCode::Char('A'), _) => {
-                self.toggle_right(RightView::Annotations);
+            "graph-go" => self.graph_go(),
+            "graph-back" => self.graph_back(),
+            "graph-lists" => {
+                if let Some(g) = &mut self.graph {
+                    g.lists = !g.lists;
+                    g.nbr = 0;
+                }
             }
-            (KeyCode::Char('T'), _) => {
-                self.toggle_right(RightView::Tables);
+            "graph-add" => self.graph_add(),
+            "graph-open" => self.graph_open(),
+            "neighbourhood" => {
+                if let Some(g) = &mut self.graph {
+                    g.ego = !g.ego;
+                    g.scroll_for = None;
+                }
             }
-            (KeyCode::Char('x'), _) if !self.targets().is_empty() => {
+            "open-annotation" => self.open_annotation(),
+            "annotations" => self.toggle_right(RightView::Annotations),
+            "tables" => self.toggle_right(RightView::Tables),
+            "extract" if !self.targets().is_empty() => {
                 self.status = "extracting annotations…".into();
                 self.job = Some(Job::ExtractAnnotations);
             }
-            (KeyCode::Char('/'), _) if self.pane == Pane::Sidebar => self.mode = Mode::SideSearch,
-            (KeyCode::Char('/'), _) => {
+            "extract" => {}
+            "search" if self.pane == Pane::Sidebar => self.mode = Mode::SideSearch,
+            "search" => {
                 self.pane = Pane::List;
                 self.mode = Mode::Search;
             }
-            (KeyCode::Char('v'), _) if self.pane == Pane::List => self.toggle_mark(),
-            (KeyCode::Char('V'), _) if self.pane == Pane::List => {
+            "mark" if self.pane == Pane::List => self.toggle_mark(),
+            "range" if self.pane == Pane::List => {
                 self.visual = match self.visual {
                     Some(_) => None,
                     None => Some((self.sel, self.marked.clone())),
                 };
                 self.extend_visual();
             }
-            (KeyCode::Esc, _) if self.visual.is_some() => {
+            "mark" | "range" => {}
+            "clear" => {
                 if let Some((_, before)) = self.visual.take() {
                     self.marked = before;
+                } else if self.pane == Pane::List && !self.marked.is_empty() {
+                    self.status = format!("unmarked {}", self.marked.len());
+                    self.marked.clear();
+                } else if self.pane == Pane::Sidebar {
+                    self.side_query.clear();
+                    self.refilter_sidebar(false);
+                } else {
+                    self.query.clear();
+                    self.refilter();
                 }
             }
-            (KeyCode::Esc, _) if self.in_graph() => self.close_graph(),
-            (KeyCode::Esc, _) if self.pane == Pane::List && !self.marked.is_empty() => {
-                self.status = format!("unmarked {}", self.marked.len());
-                self.marked.clear();
-            }
-            (KeyCode::Esc, _) if self.pane == Pane::Sidebar => {
-                self.side_query.clear();
-                self.refilter_sidebar(false);
-            }
-            (KeyCode::Esc, _) => {
-                self.query.clear();
-                self.refilter();
-            }
-            (KeyCode::Char('r'), _) => self.cycle_status(true),
-            (KeyCode::Char('R'), _) => self.cycle_status(false),
-            (KeyCode::Char('c'), _) => self.focus = !self.focus,
-            (KeyCode::Char('?'), _) => self.open_help(HelpPage::Keys),
-            (KeyCode::Char('f'), _) => self.open_filter(),
-            (KeyCode::Char('s'), _) => {
+            "status-next" => self.cycle_status(true),
+            "status-prev" => self.cycle_status(false),
+            "column" => self.focus = !self.focus,
+            "filter" => self.open_filter(),
+            "sort" => {
                 self.sort_sel = SortField::ALL.iter().position(|f| *f == self.sort.field).unwrap_or(0);
                 self.mode = Mode::Sort;
             }
-            (KeyCode::Char('C'), _) => match self.current_filter() {
+            "tag-color" => match self.current_filter() {
                 Filter::Tag(t) if self.pane == Pane::Sidebar => {
                     self.input = self.lib.tag_colors.get(t).cloned().unwrap_or_default();
                     self.mode = Mode::Prompt(Prompt::TagColor);
                 }
                 _ => self.status = "select a tag in the library pane to color it".into(),
             },
-            (KeyCode::Char('o'), _) => self.open_pdf(),
-            (KeyCode::Char('e'), _) => self.edit = self.selected().map(|r| (self.path(&library::ref_path(&r.key)), None)),
-            (KeyCode::Char('n'), _) => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
-            (KeyCode::Char('t'), _) => self.open_chooser(PickKind::Tags),
-            (KeyCode::Char('m'), _) => self.open_chooser(PickKind::Move),
-            (KeyCode::Char(':'), _) => self.mode = Mode::Prompt(Prompt::Command),
-            (KeyCode::Char('a'), _) => self.mode = Mode::Prompt(Prompt::Add),
-            _ => {}
+            "open" => self.open_pdf(),
+            "edit" => self.edit = self.selected().map(|r| (self.path(&library::ref_path(&r.key)), None)),
+            "note" => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
+            "tags" => self.open_chooser(PickKind::Tags),
+            "move" => self.open_chooser(PickKind::Move),
+            "command" => self.mode = Mode::Prompt(Prompt::Command),
+            "add" if args.is_empty() => self.mode = Mode::Prompt(Prompt::Add),
+            "add" => self.submit(Prompt::Add, args),
+            _ => return false,
         }
+        true
     }
 
     /// Types pasted text into the open prompt; ignored in modes where letters are commands.
@@ -1057,7 +1109,11 @@ impl App {
                 ("fetch", args) => self.fetch_command(args.trim(), text),
                 ("cite", args) => self.cite(args.trim()),
                 ("", _) => {}
-                _ => self.status = format!("unknown command: {text}"),
+                (name, args) => {
+                    if !self.action(name, args.trim()) {
+                        self.status = format!("unknown command: {text}");
+                    }
+                }
             },
             Prompt::TagColor => {
                 let Filter::Tag(tag) = self.current_filter().clone() else { return };

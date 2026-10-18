@@ -20,6 +20,14 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 
 ## Keys
 
+These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a command line, and every action is also a command (`:annotations`, `:down`). Rebind keys under `[keys.<context>]` in `~/.config/yeda/config.toml`. The contexts are `normal`, plus `library`, `graph` and `annotations`, which take precedence in their column. `""` unbinds a key. `?` shows the bindings in effect.
+
+```toml
+[keys.normal]
+"F" = "graph filtered"
+"x" = ""
+```
+
 | Key | Action |
 |---|---|
 | `j` `k` `Ctrl-d` `Ctrl-u` `gg` `G` | Move |
