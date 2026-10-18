@@ -1181,12 +1181,22 @@ impl App {
                 self.pane = Pane::List;
                 self.refilter();
             }
-            KeyCode::Down | KeyCode::Tab => form.select((form.sel + 1) % n, &self.lib.refs),
-            KeyCode::Up | KeyCode::BackTab => form.select((form.sel + n - 1) % n, &self.lib.refs),
+            KeyCode::Down => form.select((form.sel + 1) % n, &self.lib.refs),
+            KeyCode::Char('d') if ctrl => form.select((form.sel + 1) % n, &self.lib.refs),
+            KeyCode::Up => form.select((form.sel + n - 1) % n, &self.lib.refs),
+            KeyCode::Char('u') if ctrl => form.select((form.sel + n - 1) % n, &self.lib.refs),
             KeyCode::Char('n') if ctrl => form.pick = (form.pick + 1).min(form.suggestions().len().saturating_sub(1)),
             KeyCode::Char('p') if ctrl => form.pick = form.pick.saturating_sub(1),
-            KeyCode::Right => form.accept(),
-            KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
+            KeyCode::Tab | KeyCode::Right => form.accept(),
+            KeyCode::Char('x') if ctrl => {
+                form.values[form.sel].clear();
+                form.pick = 0;
+            }
+            KeyCode::Char('l') if ctrl => {
+                form.values.iter_mut().for_each(String::clear);
+                form.other.clear();
+                form.pick = 0;
+            }
             KeyCode::Backspace => {
                 form.values[form.sel].pop();
                 form.pick = 0;

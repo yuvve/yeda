@@ -42,12 +42,13 @@ FILTER  ( f )
 
   A form with one box per field (author, title, year, tag, collection,
   status, type, DOI) plus free text. It edits the same query as /, so
-  everything above works inside the boxes, | and ! included. Tab moves
-  between boxes, Enter applies, Esc cancels.
+  everything above works inside the boxes, | and ! included. Ctrl-D and
+  Ctrl-U move between boxes, Ctrl-X clears a box and Ctrl-L every box,
+  Enter applies, Esc cancels.
 
   Below the boxes, values the library already has for that field are
   suggested as you type (after the last |, if any). Ctrl-N and Ctrl-P pick
-  one, and → puts it in the box.
+  one, and Tab puts it in the box.
 
 SORT  ( s )
 

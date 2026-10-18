@@ -36,7 +36,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | Mouse | A click selects and focuses; the wheel moves the selection in the column under the pointer |
 | `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
 | `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference |
-| `f` | Filter by field in a popup (edits the same query as `/`); values the library has are suggested, Ctrl-N/Ctrl-P pick one and `→` completes it |
+| `f` | Filter by field in a popup (edits the same query as `/`); Ctrl-D/Ctrl-U move between boxes; values the library has are suggested, Ctrl-N/Ctrl-P pick one and Tab completes it; Ctrl-X clears the box, Ctrl-L every box |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
 | `a` | Add by DOI, arXiv ID or ISBN; a pasted list adds each, and the ones that fail are listed and copied to the clipboard (`:failed` shows them again) |
