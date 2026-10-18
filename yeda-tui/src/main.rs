@@ -1,6 +1,7 @@
 mod app;
 mod citations;
 mod fetch;
+mod keys;
 mod log;
 mod poppler;
 mod sync;
@@ -103,10 +104,13 @@ fn main() -> Result<()> {
     let dir = args.first().map(PathBuf::from).unwrap_or_else(|| ".".into());
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
+    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
+    let user = config.as_deref().map(yeda_fs::read_optional).transpose()?.flatten();
+    let keymap = keys::Keymap::load(user.as_deref())?;
     let mut term = ratatui::init();
     execute!(std::io::stdout(), event::EnableBracketedPaste, event::EnableMouseCapture)?;
     let picker = detect_picker();
-    let mut app = App::new(dir, lib, picker);
+    let mut app = App::new(dir, lib, picker, keymap);
     let res = run(&mut term, &mut app);
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste, event::DisableMouseCapture);
     ratatui::restore();

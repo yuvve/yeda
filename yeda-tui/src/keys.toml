@@ -1,0 +1,58 @@
+# The default key bindings. Override or add any of them under [keys.<context>] in
+# ~/.config/yeda/config.toml; "" unbinds a key. A binding is a command line, as typed after ':'.
+# The library, graph and annotations contexts take precedence over normal in their column.
+
+[keys.normal]
+"j" = "down"
+"Down" = "down"
+"k" = "up"
+"Up" = "up"
+"ctrl-d" = "half-down"
+"ctrl-u" = "half-up"
+"g g" = "top"
+"G" = "bottom"
+"h" = "left"
+"Left" = "left"
+"l" = "right"
+"Right" = "right"
+"Enter" = "confirm"
+"Tab" = "next-column"
+"c" = "column"
+"/" = "search"
+"f" = "filter"
+"s" = "sort"
+"Esc" = "clear"
+"a" = "add"
+"o" = "open"
+"e" = "edit"
+"n" = "note"
+"v" = "mark"
+"V" = "range"
+"t" = "tags"
+"m" = "move"
+"r" = "status-next"
+"R" = "status-prev"
+"A" = "annotations"
+"T" = "tables"
+"x" = "extract"
+"C" = "tag-color"
+"d d" = "delete"
+":" = "command"
+"?" = "keys"
+"q" = "quit"
+"ctrl-e" = "graph-scroll-down"
+"ctrl-y" = "graph-scroll-up"
+
+[keys.library]
+
+[keys.graph]
+"Enter" = "graph-go"
+"Backspace" = "graph-back"
+"L" = "graph-lists"
+"N" = "neighbourhood"
+"a" = "graph-add"
+"o" = "graph-open"
+"Esc" = "graph close"
+
+[keys.annotations]
+"o" = "open-annotation"

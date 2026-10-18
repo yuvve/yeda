@@ -1,4 +1,5 @@
-use crate::app::{App, FilterForm, GUIDE, HELP, HelpPage, Mode, Pane, PickKind, Prompt, RightView};
+use crate::app::{ACTIONS, App, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
+use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
 use yeda_core::annotations::Annotation;
@@ -355,16 +356,46 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
     );
 }
 
+/// The keymap as it is, grouped by command, then the commands.
+fn key_help(keymap: &Keymap) -> Vec<Line<'static>> {
+    let describe = |command: &str| {
+        let name = command.split_whitespace().next().unwrap_or_default();
+        let found = ACTIONS.iter().find(|(a, _)| *a == name).map(|(_, d)| *d);
+        let found = found.or_else(|| COMMANDS.iter().find(|(c, _)| c.trim_start_matches(':').split([' ', '[', '!']).next() == Some(name)).map(|(_, d)| *d));
+        found.map_or_else(|| format!(":{command}"), |d| if command.contains(' ') { format!("{d} (:{command})") } else { d.to_string() })
+    };
+    let mut rows: Vec<(String, String)> = Vec::new();
+    for context in keys::CONTEXTS {
+        let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+        for (seq, command) in keymap.bindings(context) {
+            let key: String = seq.concat();
+            match grouped.iter_mut().find(|(c, _)| c == command) {
+                Some((_, keys)) => keys.push(key),
+                None => grouped.push((command.clone(), vec![key])),
+            }
+        }
+        if grouped.is_empty() {
+            continue;
+        }
+        rows.push((String::new(), String::new()));
+        rows.push((format!("[{context}]"), if context == "normal" { "everywhere".into() } else { format!("in the {context} column") }));
+        rows.extend(grouped.into_iter().map(|(command, keys)| (keys.join(" "), describe(&command))));
+    }
+    rows.push((String::new(), String::new()));
+    rows.extend(COMMANDS.iter().chain(NOTES).map(|(k, v)| (k.to_string(), v.to_string())));
+    let width = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+    rows.into_iter()
+        .skip(1)
+        .map(|(k, v)| {
+            let style = if k.starts_with('[') { Style::new().fg(Color::Cyan).bold() } else { Style::new().fg(Color::Cyan) };
+            Line::from(vec![Span::styled(format!("{k:<width$}  "), style), Span::raw(v)])
+        })
+        .collect()
+}
+
 fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     let (title, lines): (&str, Vec<Line>) = match page {
-        HelpPage::Keys => {
-            let width = HELP.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
-            let lines = HELP
-                .iter()
-                .map(|(k, v)| Line::from(vec![Span::styled(format!("{k:<width$}  "), Style::new().fg(Color::Cyan)), Span::raw(*v)]))
-                .collect();
-            (" Keys · j/k scroll · q close · :help for the guide ", lines)
-        }
+        HelpPage::Keys => (" Keys · j/k scroll · q close · :help for the guide ", key_help(&app.keymap)),
         HelpPage::Guide => {
             // Headings are the unindented lines.
             let lines = GUIDE

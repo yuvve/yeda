@@ -137,6 +137,24 @@ FETCHING PDFS  ( :fetch [location] )
     proxy = "https://proxy.example.edu/login?url={url}"  # the library proxy
     # downloads = "~/yeda-downloads"   the window's own download folder
 
+KEY BINDINGS
+
+  Every key runs a command line, and every action is a command, so :down
+  and :annotations work like j and A. Rebind keys in ~/.config/yeda/config.toml:
+
+    [keys.normal]                 # everywhere
+    "F" = "graph filtered"        # any command line, with arguments
+    "ctrl-g" = "fetch"
+    "x" = ""                      # unbinds x
+    [keys.graph]                  # in the graph column, before normal
+    "J" = "graph-scroll-down"
+
+  Contexts: normal, library, graph, annotations. Keys are written as typed
+  (j, G, ?, :), with ctrl- and alt- prefixes, or by name: Enter, Esc, Tab,
+  Backspace, Space, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1.
+  Space separates the keys of a sequence: "g g". :keys lists every binding
+  in effect and every action.
+
 TABLES
 
   Define literature tables in yeda.toml under [tables.<name>]. Then
