@@ -15,6 +15,10 @@ pub struct Request {
     pub key: Option<String>,
     /// Fetch citing works again even if cached.
     pub refresh: bool,
+    /// Work ids of papers opened in the graph that aren't seeds yet; they become seeds too.
+    pub explored: Vec<String>,
+    /// Work ids of the opened papers, whose full lists come back in `Fetched::lists`.
+    pub opened: Vec<String>,
 }
 
 pub struct Fetched {
@@ -23,6 +27,8 @@ pub struct Fetched {
     pub matched: Vec<(String, String)>,
     /// Seeds OpenAlex doesn't know: no DOI, or a DOI it has no work for.
     pub unknown: Vec<String>,
+    /// Each opened paper's references and citing works.
+    pub lists: Vec<(String, Lists)>,
 }
 
 pub enum Msg {
@@ -160,6 +166,12 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
             None => unknown.push(key.clone()),
         }
     }
+    for id in &req.explored {
+        if !seeds.contains(id) {
+            seeds.push(id.clone());
+        }
+    }
+    load_or_fetch(&cache, &client, &mut misses, &req.explored, &mut works, &progress, "explored works")?;
 
     let mut citing: HashMap<String, Vec<String>> = HashMap::new();
     let todo: Vec<&String> = seeds.iter().filter(|s| req.refresh || cache.get::<Vec<String>>("citing", s).is_none()).collect();
@@ -178,52 +190,20 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
     let candidates = graph::candidates(&refs, &seeds, &Known { works: &works, citing: &citing }, req.settings.outside);
     load_or_fetch(&cache, &client, &mut misses, &candidates, &mut works, &progress, "outside works")?;
     let graph = graph::build(&refs, &seeds, &Known { works: &works, citing: &citing }, req.settings.outside);
-    Ok(Fetched { graph, matched, unknown })
+    let mut lists = Vec::new();
+    for id in &req.opened {
+        let references = works.get(id).map(|w| w.references.clone()).unwrap_or_default();
+        load_or_fetch(&cache, &client, &mut misses, &references, &mut works, &progress, "references")?;
+        let pick = |ids: &[String]| ids.iter().filter_map(|i| works.get(i).cloned()).collect();
+        lists.push((id.clone(), Lists { cites: pick(&references), cited_by: pick(citing.get(id).map_or(&[][..], Vec::as_slice)) }));
+    }
+    Ok(Fetched { graph, matched, unknown, lists })
 }
 
 /// All references of a work and its most cited citing works, as `Graph::extend` takes them.
 pub struct Lists {
     pub cites: Vec<Work>,
     pub cited_by: Vec<Work>,
-}
-
-/// How many citing works a paper's own list shows; the seeds' graph uses `Settings::citing`.
-const LISTED_CITING: usize = 20;
-
-/// Fetches `id`'s lists in the background; the result is an error message on failure.
-pub fn spawn_lists(id: String, cache: PathBuf, key: Option<String>) -> Receiver<Result<Lists, String>> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = lists(&id, &Cache(cache.join("openalex")), &Client::new(key)).map_err(|e| match () {
-            _ if openalex::is_over_budget(&e) => "OpenAlex's daily budget is used up; :secrets sets an API key".to_string(),
-            _ => format!("{e:#}"),
-        });
-        let _ = tx.send(result);
-    });
-    rx
-}
-
-fn lists(id: &str, cache: &Cache, client: &Client) -> Result<Lists> {
-    let mut misses = Misses::load(cache, false);
-    let mut works = HashMap::new();
-    let noop = |_: String| {};
-    load_or_fetch(cache, client, &mut misses, &[id.to_string()], &mut works, &noop, "work")?;
-    let references = works.get(id).map(|w: &Work| w.references.clone()).unwrap_or_default();
-    load_or_fetch(cache, client, &mut misses, &references, &mut works, &noop, "references")?;
-    // A seed's longer list is already ordered most cited first; it is kept apart so it isn't cut short.
-    let citing: Vec<String> = match cache.get::<Vec<String>>("citing", id).or_else(|| cache.get("citing-top", id)) {
-        Some(ids) => ids.into_iter().take(LISTED_CITING).collect(),
-        None => {
-            let found = client.citing(id, LISTED_CITING)?;
-            cache.put_works(&found)?;
-            let ids: Vec<String> = found.iter().map(|w| w.id.clone()).collect();
-            cache.put("citing-top", id, &ids)?;
-            ids
-        }
-    };
-    load_or_fetch(cache, client, &mut misses, &citing, &mut works, &noop, "citing works")?;
-    let pick = |ids: &[String]| ids.iter().filter_map(|i| works.get(i).cloned()).collect();
-    Ok(Lists { cites: pick(&references), cited_by: pick(&citing) })
 }
 
 /// Puts the works for `ids` into `works`, from the cache or else from OpenAlex.

@@ -222,16 +222,18 @@ pub struct GraphView {
     pub tab: GraphTab,
     /// Sort the per-paper tabs by year instead of global citation count.
     pub by_year: bool,
-    /// Nodes navigated away from, for Backspace.
-    back: Vec<usize>,
+    /// Work ids navigated away from, for Backspace; ids, as a rebuild renumbers the nodes.
+    back: Vec<String>,
     /// Show only the selected paper and its direct links.
     pub ego: bool,
     /// The first text row shown, and the node it was last moved to show.
     pub scroll: usize,
     pub scroll_for: Option<usize>,
-    /// Nodes whose full lists were fetched (opened with Enter), and the fetch under way.
-    full: HashSet<usize>,
-    fetching: Option<(usize, Receiver<Result<citations::Lists, String>>)>,
+    /// Library keys of the starting seeds, work ids of the papers opened with Enter, and of those
+    /// among them that weren't seeds.
+    seeds: Vec<String>,
+    opened: Vec<String>,
+    explored: Vec<String>,
 }
 
 /// What the list under the graph shows.
@@ -298,6 +300,9 @@ struct GraphJob {
     command: String,
     scope: String,
     keyless: bool,
+    seeds: Vec<String>,
+    /// For a rebuild after opening a paper: the paper to select.
+    focus: Option<String>,
 }
 
 pub struct Batch {
@@ -1936,23 +1941,30 @@ impl App {
             self.status = "no reference selected".into();
             return;
         }
+        let seeds = seeds.iter().map(|&i| self.lib.refs[i].key.clone()).collect();
+        self.start_graph(seeds, Vec::new(), Vec::new(), refresh, command, scope, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_graph(&mut self, seeds: Vec<String>, explored: Vec<String>, opened: Vec<String>, refresh: bool, command: &str, scope: &str, focus: Option<String>) {
         let key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
         let keyless = key.is_none();
         let rx = citations::spawn(citations::Request {
             refs: self.lib.refs.clone(),
-            seeds: seeds.iter().map(|&i| self.lib.refs[i].key.clone()).collect(),
+            seeds: seeds.clone(),
             settings: self.lib.graph.clone(),
             cache: self.lib.cache.clone().unwrap_or_else(std::env::temp_dir),
             key,
             refresh,
+            explored,
+            opened,
         });
         self.status = "graph: starting…".into();
-        self.graph_job = Some(GraphJob { rx, command: command.into(), scope: scope.into(), keyless });
+        self.graph_job = Some(GraphJob { rx, command: command.into(), scope: scope.into(), keyless, seeds, focus });
     }
 
     /// Applies a finished graph fetch; called from the event loop.
     pub fn poll_graph(&mut self) {
-        self.poll_lists();
         let Some(job) = &self.graph_job else { return };
         loop {
             match job.rx.try_recv() {
@@ -1962,7 +1974,7 @@ impl App {
                 }
                 Ok(citations::Msg::Done(result)) => {
                     let job = self.graph_job.take().unwrap();
-                    return self.finish_graph(result, job.scope);
+                    return self.finish_graph(result, job);
                 }
                 Ok(citations::Msg::OverBudget) => {
                     let job = self.graph_job.take().unwrap();
@@ -1987,7 +1999,8 @@ impl App {
         }
     }
 
-    fn finish_graph(&mut self, result: Result<citations::Fetched, String>, scope: String) {
+    fn finish_graph(&mut self, result: Result<citations::Fetched, String>, job: GraphJob) {
+        let scope = job.scope;
         let f = match result {
             Ok(f) => f,
             Err(e) => {
@@ -2012,21 +2025,38 @@ impl App {
             return;
         }
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
-        let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
+        let mut graph = f.graph;
         let (tab, by_year, ego) = self.graph.as_ref().map_or((GraphTab::Cites, false, false), |g| (g.tab, g.by_year, g.ego));
+        // A rebuild after opening a paper keeps the exploration; a new :graph starts over.
+        let old = self.graph.take().filter(|_| job.focus.is_some());
+        let (opened, explored, back) = old.as_ref().map_or_else(Default::default, |g| (g.opened.clone(), g.explored.clone(), g.back.clone()));
+        let keys = self.lib.refs.iter().filter_map(|r| Some((graph::work_id(r)?.to_string(), r.key.clone()))).collect();
+        for (id, lists) in &f.lists {
+            if let Some(i) = graph.find(id) {
+                graph.extend(i, &lists.cites, &lists.cited_by, &keys);
+            }
+        }
+        for n in graph.nodes.iter_mut() {
+            n.explored = explored.contains(&n.id);
+        }
+        let sel = match &job.focus {
+            Some(id) => graph.find(id),
+            None => self.selected().and_then(|r| graph.find_key(&r.key)),
+        };
         self.graph = Some(GraphView {
-            graph: f.graph,
-            sel,
+            graph,
+            sel: sel.unwrap_or(0),
             nbr: 0,
             scope,
             tab,
             by_year,
-            back: Vec::new(),
+            back,
             ego,
             scroll: 0,
             scroll_for: None,
-            full: HashSet::new(),
-            fetching: None,
+            seeds: job.seeds,
+            opened,
+            explored,
         });
         self.right = RightView::Graph;
     }
@@ -2055,46 +2085,31 @@ impl App {
         }
     }
 
-    /// Opens the picked paper, fetching all its references and citing works the first time.
+    /// Opens the picked paper: the first time, it becomes a seed (if it isn't one) and the graph is
+    /// rebuilt with it and its full reference and citing lists.
     fn graph_go(&mut self) {
-        let key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
-        let cache = self.lib.cache.clone().unwrap_or_else(std::env::temp_dir);
         let Some(g) = &mut self.graph else { return };
         let Some(&(_, target)) = g.entries().get(g.nbr) else { return };
-        g.back.push(g.sel);
-        if !g.full.contains(&target) && g.fetching.is_none() {
-            let node = &g.graph.nodes[target];
-            self.status = format!("graph: fetching what {} {} cites and is cited by…", node.first_author, node.year.map(|y| y.to_string()).unwrap_or_default());
-            g.fetching = Some((target, citations::spawn_lists(node.id.clone(), cache, key)));
+        let node = &g.graph.nodes[target];
+        let id = node.id.clone();
+        g.back.push(g.graph.nodes[g.sel].id.clone());
+        if g.opened.contains(&id) || self.graph_job.is_some() {
+            return self.graph_select(target);
         }
+        g.opened.push(id.clone());
+        if !node.seed {
+            g.explored.push(id.clone());
+        }
+        let label = format!("{} {}", node.first_author, node.year.map(|y| y.to_string()).unwrap_or_default());
+        let (seeds, explored, opened, scope) = (g.seeds.clone(), g.explored.clone(), g.opened.clone(), g.scope.clone());
         self.graph_select(target);
-    }
-
-    /// Adds a fetched paper's lists to the graph; called from the event loop.
-    fn poll_lists(&mut self) {
-        let Some(g) = &mut self.graph else { return };
-        let Some((i, rx)) = &g.fetching else { return };
-        let i = *i;
-        let result = match rx.try_recv() {
-            Ok(r) => r,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("the fetch stopped".into()),
-        };
-        g.fetching = None;
-        match result {
-            Ok(lists) => {
-                let keys = self.lib.refs.iter().filter_map(|r| Some((graph::work_id(r)?.to_string(), r.key.clone()))).collect();
-                g.graph.open(i, &lists.cites, &lists.cited_by, &keys);
-                g.full.insert(i);
-                g.scroll_for = None;
-                self.status = format!("graph: {} references, {} citing works", lists.cites.len(), lists.cited_by.len());
-            }
-            Err(e) => self.status = format!("graph: {e}"),
-        }
+        self.start_graph(seeds, explored, opened, false, "", &scope, Some(id));
+        self.status = format!("graph: opening {label}…");
     }
 
     fn graph_back(&mut self) {
-        if let Some(prev) = self.graph.as_mut().and_then(|g| g.back.pop()) {
+        let Some(g) = &mut self.graph else { return };
+        if let Some(prev) = g.back.pop().and_then(|id| g.graph.find(&id)) {
             self.graph_select(prev);
         }
     }

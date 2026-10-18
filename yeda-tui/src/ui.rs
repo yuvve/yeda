@@ -496,9 +496,11 @@ fn place(g: &Graph, shown: &[usize], rank: &dyn Fn(usize) -> u8, col: &dyn Fn(us
     Placement { at: out, years: starts, rows: next }
 }
 
-/// Seeds ⊚, other library papers ◎, outside papers ○.
+/// Starting seeds ⊚, seeds added while exploring ⊙, other library papers ◎, outside papers ○.
 fn marker(n: &yeda_core::graph::Node) -> &'static str {
-    if n.seed {
+    if n.explored {
+        "⊙"
+    } else if n.seed {
         "⊚"
     } else if n.key.is_some() {
         "◎"
