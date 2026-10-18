@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
+import { einkMode, setEinkMode } from '../../yeda-reader/src/pen';
 import { inspect, Region } from './pdftext';
 
 type Filter =
@@ -487,7 +488,15 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('h2', {}, 'Settings file'),
 			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
 			button('Edit settings.toml', () => run(showSettingsFile)),
+			h('h2', {}, 'Display'), einkToggle(),
 			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp));
+	}
+
+	function einkToggle() {
+		const box = h('input', { type: 'checkbox', checked: einkMode() });
+		box.addEventListener('change', () => setEinkMode(box.checked));
+		return h('label', { className: 'check' }, box,
+			' E-ink screen: in the reader, pages turn instead of scrolling, nothing animates, and ink is black.');
 	}
 
 	function showHelp() {

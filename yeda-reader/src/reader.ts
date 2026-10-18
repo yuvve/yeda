@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Annotation, AnnotationStore } from './annotations';
+import { installPen, PenReader, settleEink } from './pen';
 import { installVim, VimReader } from './vim';
 
-interface Reader extends VimReader {
+interface Reader extends Omit<VimReader, '_state'>, Omit<PenReader, '_state'> {
+	_state: VimReader['_state'] & PenReader['_state'];
 	initializedPromise: Promise<unknown>;
 	setAnnotations(annotations: Annotation[]): void;
 }
@@ -82,7 +84,9 @@ export async function openReader(): Promise<boolean> {
 	});
 
 	hookVimIntoView(reader);
+	installPen(reader);
 
+	settleEink(reader).catch(reportError('Setting up e-ink mode'));
 	reader.initializedPromise
 		.then(() => store.renderMissing(annotations, showImage))
 		.catch(reportError('Rendering annotation images'));
