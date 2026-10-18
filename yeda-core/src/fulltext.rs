@@ -120,9 +120,37 @@ pub fn looks_like(text: &str, r: &Ref) -> bool {
     doi.is_some_and(|d| text.contains(&d)) || (title.len() >= 12 && text.contains(&title))
 }
 
+/// The most pages a PDF of `r` should have, or `None` for books and theses: a whole journal
+/// issue passes `looks_like`, since it contains the article.
+pub fn max_pages(r: &Ref) -> Option<u32> {
+    if matches!(r.kind.as_str(), "book" | "phdthesis" | "mastersthesis" | "thesis" | "techreport" | "report") {
+        return None;
+    }
+    let range = r.extra.get("pages").and_then(|p| p.as_str()).and_then(|p| p.split_once(['-', '–']));
+    let count = range.and_then(|(a, b)| Some(b.trim().parse::<u32>().ok()?.checked_sub(a.trim().parse::<u32>().ok()?)? + 1));
+    // ponytail: 100 pages for an article of unknown length; [fulltext] could set it if surveys hit it.
+    Some(count.map_or(100, |n| (2 * n).max(n + 10)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limits_pages() {
+        let r = |kind: &str, pages: Option<&str>| {
+            let mut r = Ref { kind: kind.into(), ..Default::default() };
+            if let Some(p) = pages {
+                r.extra.insert("pages".into(), p.into());
+            }
+            r
+        };
+        assert_eq!(max_pages(&r("article", Some("0074-0081"))), Some(18));
+        assert_eq!(max_pages(&r("article", Some("3897-3935"))), Some(78));
+        assert_eq!(max_pages(&r("article", Some("9042"))), Some(100));
+        assert_eq!(max_pages(&r("inproceedings", None)), Some(100));
+        assert_eq!(max_pages(&r("book", Some("1-20"))), None);
+    }
 
     #[test]
     fn finds_sciencedirect_pdfs() {
