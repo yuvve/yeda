@@ -250,28 +250,25 @@ impl GraphTab {
 }
 
 impl GraphView {
-    /// The current tab's papers, as `(mark, node)`; the top lists mark how many seeds each links to.
+    /// The current tab's papers, as `(mark, node)`, by global citations or year; the top lists
+    /// mark how many seeds each is cited by (▲) or cites (▼).
     pub fn entries(&self) -> Vec<(String, usize)> {
         let nodes = &self.graph.nodes;
         let (citing, cited) = self.graph.neighbours(self.sel);
-        let top = |count: fn(&graph::Node) -> usize, mark: &str| {
-            let mut ids: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).collect();
-            ids.sort_by_key(|&i| std::cmp::Reverse(count(&nodes[i])));
-            ids.into_iter().map(|i| (format!("{mark}{}", count(&nodes[i])), i)).collect::<Vec<_>>()
-        };
-        let mut ids = match self.tab {
-            GraphTab::Seeds => (0..nodes.len()).filter(|&i| nodes[i].seed).collect(),
-            GraphTab::Cites => cited,
-            GraphTab::CitedBy => citing,
-            GraphTab::TopCited => return top(|n| n.cited_by_seeds, "▲"),
-            GraphTab::TopCiting => return top(|n| n.cites_seeds, "▼"),
+        let outside = |count: fn(&graph::Node) -> usize| (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).collect();
+        let (mut ids, mark): (Vec<usize>, fn(&graph::Node) -> String) = match self.tab {
+            GraphTab::Seeds => ((0..nodes.len()).filter(|&i| nodes[i].seed).collect(), |_| String::new()),
+            GraphTab::Cites => (cited, |_| String::new()),
+            GraphTab::CitedBy => (citing, |_| String::new()),
+            GraphTab::TopCited => (outside(|n| n.cited_by_seeds), |n| format!("▲{}", n.cited_by_seeds)),
+            GraphTab::TopCiting => (outside(|n| n.cites_seeds), |n| format!("▼{}", n.cites_seeds)),
         };
         if self.by_year {
             ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].year));
         } else {
             ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].cited_by));
         }
-        ids.into_iter().map(|i| (String::new(), i)).collect()
+        ids.into_iter().map(|i| (mark(&nodes[i]), i)).collect()
     }
 }
 
