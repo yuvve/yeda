@@ -58,8 +58,8 @@ fn report(outcome: &Outcome) {
 
 const HTML: &str = "yeda:html ";
 
-/// Reports the landing page's `citation_pdf_url` in the title, through the proxy when the page
-/// came through it. WebKit's PDF viewer runs no scripts, so a page that never reports is a PDF.
+/// Reports the page and its `citation_pdf_url` in the title, the link through the proxy when the
+/// page came through it. WebKit's PDF viewer runs no scripts, so a page that never reports is a PDF.
 fn report_script(settings: &Settings) -> String {
     let proxy = serde_json::to_string(&settings.proxy).unwrap();
     let host = serde_json::to_string(&fulltext::proxy_host(settings)).unwrap();
@@ -69,7 +69,7 @@ fn report_script(settings: &Settings) -> String {
   let url = m && m.content ? new URL(m.content, location.href).href : '';
   const proxy = {proxy}, host = {host};
   if (url && host && location.hostname.endsWith('.' + host) && !new URL(url).hostname.endsWith('.' + host)) url = proxy.replace('{{url}}', url);
-  document.title = '{HTML}' + url;
+  document.title = '{HTML}' + location.href + ' ' + url;
 }})()"#
     )
 }
@@ -227,8 +227,11 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     loaded = Some(url);
                 }
                 Ok(Event::Title(title)) => {
-                    let Some(pdf) = title.strip_prefix(HTML) else { continue };
-                    loaded = None;
+                    let Some((page, pdf)) = title.strip_prefix(HTML).and_then(|t| t.split_once(' ')) else { continue };
+                    // A report from a page already left (a redirect) mustn't cancel the wait for this one.
+                    if loaded.as_deref().is_some_and(|l| without_fragment(l) == without_fragment(page)) {
+                        loaded = None;
+                    }
                     if pdf.is_empty() || tried.iter().any(|t| t == pdf) {
                         continue;
                     }
@@ -250,6 +253,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     // download, as from the viewer's button, carries the browser's session.
                     if !url.is_empty() && !tried.contains(&url) {
                         tried.push(url.clone());
+                        report(&Outcome::Visited { key: paper.key.clone(), page: format!("WebKit download of {}", without_query(&url)) });
                         download_natively(window, &url);
                     }
                 }
@@ -288,6 +292,10 @@ fn blank_page(window: &WebviewWindow, rx: &Receiver<Event>) -> bool {
             Ok(_) => {}
         }
     }
+}
+
+fn without_fragment(url: &str) -> &str {
+    url.split('#').next().unwrap_or_default()
 }
 
 /// `url` without its query and fragment, which can hold sign-in tickets.
