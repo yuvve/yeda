@@ -16,6 +16,10 @@ interface View {
 	_tool: { type: string };
 	_iframeWindow: (Window & { PDFViewerApplication: { pdfViewer: PdfViewer } }) | null;
 	setTool(tool: { type: string }): void;
+	/** Redraws every page's annotation layer. */
+	_render(): void;
+	/** The gesture in progress; an ink stroke knows its page once it has started. */
+	action: { annotation?: { position: { pageIndex: number } } } | null;
 	_handlePointerDown: Handler;
 	_handlePointerMove: Handler;
 	_handlePointerUp: Handler;
@@ -91,6 +95,48 @@ export function installPen(reader: PenReader) {
 	let penDown = false;
 	let penUpAt = 0;
 	let lastPen: PointerEvent | null = null;
+	/**
+	 * The ink stroke being drawn, on a canvas of its own in the page. The reader re-serializes and
+	 * redraws the whole page, stroke included, on every move, which takes most of a frame on the
+	 * AiPaper and grows with the stroke; it redraws once, when the pen lifts.
+	 */
+	let stroke: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; page: HTMLElement; render: () => void } | null = null;
+
+	const startStroke = (e: PointerEvent) => {
+		const v = viewer();
+		const win = view._iframeWindow;
+		const pageIndex = view.action?.annotation?.position.pageIndex;
+		const page = pageIndex === undefined ? undefined : v?._pages[pageIndex]?.div;
+		const ink = reader._tools.ink;
+		if (!v || !win || !page || !ink) return;
+		const canvas = win.document.createElement('canvas');
+		const dpr = win.devicePixelRatio;
+		Object.assign(canvas.style, { position: 'absolute', left: '0', top: '0', width: '100%', height: '100%', pointerEvents: 'none', zIndex: '100' });
+		canvas.width = page.clientWidth * dpr;
+		canvas.height = page.clientHeight * dpr;
+		page.append(canvas);
+		const ctx = canvas.getContext('2d')!;
+		ctx.scale(dpr, dpr);
+		ctx.strokeStyle = ink.color ?? '#000000';
+		// The tool's size is in PDF points, which pdf.js draws at 96/72 CSS pixels per point at scale 1.
+		ctx.lineWidth = (ink.size ?? 2) * v.currentScale * 96 / 72;
+		ctx.lineCap = ctx.lineJoin = 'round';
+		const r = page.getBoundingClientRect();
+		ctx.beginPath();
+		ctx.moveTo(e.clientX - r.left, e.clientY - r.top);
+		stroke = { canvas, ctx, page, render: view._render };
+		view._render = () => {};
+	};
+
+	const endStroke = () => {
+		if (!stroke) return;
+		const { canvas, render } = stroke;
+		view._render = render;
+		stroke = null;
+		// Until the reader's own ink has been painted.
+		requestAnimationFrame(() => requestAnimationFrame(() => canvas.remove()));
+	};
+
 	/** The tool to go back to after a stroke with the eraser button. */
 	let restoreTool: string | null = null;
 	const touches = new Map<number, { x: number; y: number; start: PointerEvent }>();
@@ -115,6 +161,8 @@ export function installPen(reader: PenReader) {
 
 	view._handlePointerDown = (e) => {
 		if (e.pointerType === 'pen') {
+			// A cancelled stroke never sees its pointerup.
+			endStroke();
 			if (!penSeen && reader._tools.eraser?.size === DEFAULT_ERASER) reader._tools.eraser.size = PEN_ERASER;
 			penSeen = penDown = true;
 			lastPen = e;
@@ -134,6 +182,7 @@ export function installPen(reader: PenReader) {
 			return;
 		}
 		down(e);
+		if (e.pointerType === 'pen' && view.action?.annotation && view._tool.type === 'ink') startStroke(e);
 	};
 
 	view._handlePointerMove = (e) => {
@@ -164,21 +213,38 @@ export function installPen(reader: PenReader) {
 		// The WebView delivers pen moves in batches; every point in between makes the stroke smooth.
 		if (e.pointerType === 'pen' && e.buttons && ['ink', 'eraser'].includes(view._tool.type)) {
 			const points = e.getCoalescedEvents?.() ?? [];
-			for (const p of [...points.slice(0, -1), e]) {
-				// The eraser only removes ink within its circle, so a fast pass needs points in between.
-				if (view._tool.type === 'eraser' && lastPen) {
-					const steps = Math.floor(Math.hypot(p.clientX - lastPen.clientX, p.clientY - lastPen.clientY) / ERASE_STEP);
-					for (let i = 1; i < steps; i++) {
-						const f = i / steps;
-						move(new PointerEvent('pointermove', {
-							pointerId: p.pointerId, pointerType: 'pen', buttons: p.buttons,
-							clientX: lastPen.clientX + (p.clientX - lastPen.clientX) * f,
-							clientY: lastPen.clientY + (p.clientY - lastPen.clientY) * f,
-						}));
+			// Each move redraws every page; one redraw, after the batch's last point, is enough.
+			const render = view._render;
+			view._render = () => {};
+			const page = stroke?.page.getBoundingClientRect();
+			try {
+				for (const p of [...points.slice(0, -1), e]) {
+					// The eraser only removes ink within its circle, so a fast pass needs points in between.
+					if (view._tool.type === 'eraser' && lastPen) {
+						const steps = Math.floor(Math.hypot(p.clientX - lastPen.clientX, p.clientY - lastPen.clientY) / ERASE_STEP);
+						for (let i = 1; i < steps; i++) {
+							const f = i / steps;
+							move(new PointerEvent('pointermove', {
+								pointerId: p.pointerId, pointerType: 'pen', buttons: p.buttons,
+								clientX: lastPen.clientX + (p.clientX - lastPen.clientX) * f,
+								clientY: lastPen.clientY + (p.clientY - lastPen.clientY) * f,
+							}));
+						}
 					}
+					if (p === e && !stroke) view._render = render;
+					move(p);
+					lastPen = p;
+					if (stroke && page) stroke.ctx.lineTo(p.clientX - page.left, p.clientY - page.top);
 				}
-				move(p);
-				lastPen = p;
+				if (stroke && page) {
+					const { ctx } = stroke;
+					ctx.stroke();
+					ctx.beginPath();
+					ctx.moveTo(e.clientX - page.left, e.clientY - page.top);
+				}
+			}
+			finally {
+				if (!stroke) view._render = render;
 			}
 			return;
 		}
@@ -207,8 +273,10 @@ export function installPen(reader: PenReader) {
 			return;
 		}
 		if (ours(e)) return;
+		if (e.pointerType === 'pen' && stroke) view._render = stroke.render;
 		up(e);
 		if (e.pointerType === 'pen') {
+			endStroke();
 			penDown = false;
 			penUpAt = performance.now();
 			if (restoreTool) {
