@@ -21,6 +21,7 @@ use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use crate::cluster::ClusterView;
 use crate::complete::Completion;
+use crate::setup::{self, SetupForm};
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
 use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
@@ -37,6 +38,8 @@ pub enum Mode {
     /// The `:secrets` menu.
     Secrets,
     Filter,
+    /// The `:setup` form.
+    Setup,
     Sort,
     /// Picking the table a command runs on.
     TablePick,
@@ -124,6 +127,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
+    (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
@@ -145,6 +149,14 @@ pub const NOTES: &[(&str, &str)] = &[
 ];
 
 /// The `f` popup: one value per `search::FILTER_FIELDS` entry, then free text.
+/// A `:setup` connection test running; saved when it passes.
+struct SetupJob {
+    rx: Receiver<anyhow::Result<()>>,
+    section: toml::Table,
+    setup: setup::Setup,
+    secret: Option<String>,
+}
+
 pub struct FilterForm {
     pub values: Vec<String>,
     pub sel: usize,
@@ -454,6 +466,8 @@ pub struct App {
     pub sort: Sort,
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
+    pub setup: Option<SetupForm>,
+    setup_job: Option<SetupJob>,
     pub help_scroll: u16,
     pub log: crate::log::Log,
     /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
@@ -521,6 +535,8 @@ impl App {
             sort: Sort::default(),
             sort_sel: 0,
             form: None,
+            setup: None,
+            setup_job: None,
             help_scroll: 0,
             secrets: Default::default(),
             rejected: Default::default(),
@@ -649,6 +665,7 @@ impl App {
             }
             Mode::Pick => self.pick_key(k),
             Mode::Filter => self.filter_key(k),
+            Mode::Setup => self.setup_key(k),
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
             Mode::Help(_) => self.help_key(k),
@@ -1034,6 +1051,87 @@ impl App {
         self.mode = Mode::Filter;
     }
 
+    fn setup_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(form) = &mut self.setup else { return };
+        if form.testing {
+            return;
+        }
+        let n = form.values.len();
+        match k.code {
+            KeyCode::Esc => {
+                self.setup = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => match form.section() {
+                Ok((section, setup)) => {
+                    let secret = form.secret();
+                    let (tx, rx) = mpsc::channel();
+                    let (probe, test_secret) = (setup.clone(), secret.clone());
+                    std::thread::spawn(move || {
+                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()));
+                    });
+                    form.testing = true;
+                    self.status = "testing the connection…".into();
+                    self.setup_job = Some(SetupJob { rx, section, setup, secret });
+                }
+                Err(e) => self.status = format!("{e:#}"),
+            },
+            KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
+            KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
+            KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
+            KeyCode::Backspace => {
+                form.values[form.sel].pop();
+            }
+            KeyCode::Char(c) if !ctrl => form.values[form.sel].push(c),
+            _ => {}
+        }
+    }
+
+    /// Saves a `:setup` form whose connection test passed: the secret to the secret store, the rest to yeda.toml.
+    pub fn poll_setup(&mut self) {
+        let Some(job) = &self.setup_job else { return };
+        let result = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!("the connection test stopped")),
+        };
+        let job = self.setup_job.take().unwrap();
+        let Some(form) = &mut self.setup else { return };
+        form.testing = false;
+        if let Err(e) = result {
+            self.status = format!("not saved: {e:#}");
+            return;
+        }
+        let (name, kind) = (form.name().to_string(), form.kind);
+        let mut stored = String::new();
+        if let Some(secret) = &job.secret {
+            let account = setup::account(&job.setup);
+            if let Err(e) = yeda_secrets::set(&account, secret) {
+                stored = format!(" (secret kept for this session only: {e:#})");
+            }
+            self.secrets.insert(account.clone(), secret.clone());
+            self.rejected.remove(&account);
+        }
+        let section = if kind == setup::Kind::Llm { "llm" } else { "locations" };
+        let result = self.lib.update_config(|t| {
+            let entry = config_section(t, section)?.entry(name.clone()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            if !entry.is_table() {
+                *entry = toml::Value::Table(toml::Table::new());
+            }
+            let table = entry.as_table_mut().unwrap();
+            if kind == setup::Kind::Llm {
+                table.remove("base_url");
+            }
+            table.extend(job.section);
+            Ok(())
+        });
+        self.after_config_change(result);
+        self.setup = None;
+        self.mode = Mode::Normal;
+        self.status = format!("saved [{section}.{name}] to yeda.toml{stored}");
+    }
+
     fn filter_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let Some(form) = &mut self.form else { return };
@@ -1323,6 +1421,19 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
+                ("setup", rest) => {
+                    let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+                    let kind = match kind {
+                        "llm" => setup::Kind::Llm,
+                        "webdav" => setup::Kind::Webdav,
+                        _ => {
+                            self.status = "usage: :setup llm|webdav [name]".into();
+                            return;
+                        }
+                    };
+                    self.setup = Some(SetupForm::new(kind, name.trim(), &self.lib));
+                    self.mode = Mode::Setup;
+                }
                 ("failed", _) if self.report.is_empty() => self.status = "nothing failed".into(),
                 ("failed", _) => self.open_help(HelpPage::Failed),
                 ("log", _) => match self.log.path.clone() {

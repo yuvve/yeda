@@ -137,3 +137,12 @@ fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let text = v["choices"][0]["message"]["content"].as_str().context("no message content in response")?;
     Ok(Reply { text: text.to_string(), note })
 }
+
+/// A minimal request, to test the profile and key.
+pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
+    let mut p = p.clone();
+    p.effort = Some("low".into());
+    let schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": false});
+    let prompt = Prompt { system: "Set ok to true.".into(), text: "Connection test.".into(), paper: None, schema };
+    complete(&p, &prompt, key).map(|_| ())
+}

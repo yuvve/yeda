@@ -82,3 +82,11 @@ pub fn upload(dav: &Dav, password: &str, path: &str, bytes: &[u8]) -> Result<()>
     let resp = agent().put(&url).header("Authorization", authorization(dav, password)).send(bytes).with_context(|| url.clone())?;
     check(&url, resp.status())
 }
+
+/// Logs in and lists the server's folder, to test the URL, user and password.
+pub fn login(dav: &Dav, password: &str) -> Result<()> {
+    let url = dav.file_url("");
+    let req = ureq::http::Request::builder().method("PROPFIND").uri(&url).header("Authorization", authorization(dav, password)).header("Depth", "0").body(())?;
+    let resp = agent().run(req).with_context(|| url.clone())?;
+    check(&url, resp.status())
+}

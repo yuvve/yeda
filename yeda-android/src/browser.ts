@@ -485,11 +485,25 @@ export function showBrowser(openReader: () => void): () => boolean {
 				? h('div', {}, h('p', {}, overview.git), button('Sync now', () => run(sync)))
 				: h('div', {}, h('p', { className: 'meta' }, 'Clone a library repository over HTTPS into an empty folder; it becomes the library.'),
 					cloneUrl, button('Clone into a folder', () => cloneUrl.value.trim() && run(() => cloneLibrary(cloneUrl.value.trim())))),
+			h('h2', {}, 'WebDAV location'), webdavForm(),
 			h('h2', {}, 'Settings file'),
 			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
 			button('Edit settings.toml', () => run(showSettingsFile)),
 			h('h2', {}, 'Display'), einkToggle(),
 			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp));
+	}
+
+	function webdavForm() {
+		const field = (placeholder: string, type = 'text') => h('input', { type, placeholder, autocapitalize: 'off' });
+		const name = field('name, e.g. dav'), url = field('https://dav.example.com/pdfs/', 'url'), user = field('user'), password = field('password', 'password');
+		return h('div', {}, h('p', { className: 'meta' }, 'Adds or replaces [locations.<name>] in yeda.toml after a test login; the password goes to the Keystore.'),
+			name, url, user, password,
+			button('Test and save', () => run(async () => {
+				await invoke('setup_webdav', { name: name.value, url: url.value, user: user.value, password: password.value });
+				say(`saved location ${name.value.trim()}`);
+				await refresh();
+				await showSettings();
+			})));
 	}
 
 	function einkToggle() {

@@ -66,6 +66,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `:export <table> <file.csv>` | Export a table |
 | `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
 | `:sync` | Commit all changes, pull with `git pull --no-rebase` and push; conflicting `annotations.toml` files are merged by annotation `id`, any other conflict aborts the merge |
+| `:setup llm\|webdav [name]` | A form for an LLM profile or WebDAV location (a name that exists is filled in). Enter tests the connection, then saves the API key or password to the secret store and the rest to `yeda.toml` |
 | `:secrets` | Every password and API key the configuration uses (WebDAV locations, LLM profiles, OpenAlex), with where each is set; Enter sets or replaces one, `d` removes it. A secret a feature asks for is saved to the secret store |
 | `:graph tags`, `:graph col <column>` | The selected or marked references with their tags, or a table column's values (`:graph col group`), clustered: papers sharing a value sit around it. `Enter` selects the picked node, `Backspace` goes back, `Tab` lists every node |
 | `:graph[!] [citations]` | Citation graph of the selected (or marked) references, from OpenAlex; see `:help`. `!` fetches citing papers again and retries what OpenAlex didn't have. An optional OpenAlex API key is set with `:secrets`. `:graph close` (or `q`, or Esc in the graph) closes it |

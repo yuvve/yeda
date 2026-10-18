@@ -453,6 +453,28 @@ async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
     Ok(out)
 }
 
+/// Tests a WebDAV login, then keeps the password in the Keystore and `[locations.<name>]` in yeda.toml.
+#[tauri::command]
+async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, url: String, user: String, password: String) -> Res<()> {
+    let (name, url, user) = (name.trim().to_string(), url.trim().to_string(), user.trim().to_string());
+    if name.is_empty() || user.is_empty() || password.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("give a name, an https:// URL, the user name and the password".into());
+    }
+    let dav = library::Dav { url, user };
+    let login = dav.clone();
+    let pw = password.clone();
+    tauri::async_runtime::spawn_blocking(move || yeda_net::webdav::login(&login, &pw)).await.map_err(|e| e.to_string())?.map_err(err)?;
+    yeda_secrets::set(&yeda_secrets::webdav_account(&dav.user, &dav.url), &password).map_err(err)?;
+    state.change(&app, |b| {
+        let effect = b.lib.update_config(|t| {
+            let section = toml::Table::from_iter([("url".to_string(), dav.url.into()), ("user".to_string(), dav.user.into())]);
+            config_section(t, "locations")?.insert(name, section.into());
+            Ok(())
+        })?;
+        b.apply(vec![effect])
+    })
+}
+
 /// Clones `url` into the empty folder `path` and makes it the library.
 #[tauri::command]
 async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: PathBuf) -> Res<OpenRef> {
@@ -578,6 +600,7 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         library,
         set_library,
         set_location,
+        setup_webdav,
         refresh,
         list,
         parse_query,
