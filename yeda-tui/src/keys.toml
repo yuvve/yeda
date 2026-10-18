@@ -48,7 +48,9 @@
 [keys.graph]
 "Enter" = "graph-go"
 "Backspace" = "graph-back"
-"L" = "graph-lists"
+"Tab" = "graph-tab"
+"shift-Tab" = "graph-tab-back"
+"s" = "graph-sort"
 "N" = "neighbourhood"
 "a" = "graph-add"
 "o" = "graph-open"

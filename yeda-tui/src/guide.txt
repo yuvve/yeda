@@ -78,20 +78,23 @@ CITATION GRAPH  ( :graph )
   :graph graphs the selected reference, or the marked ones (v, V; V G
   marks the whole list).
 
-  The graph shows the seeds (◉), other library papers citing or cited by
-  them (●), and the 20 papers outside the library linked to the most seeds
-  (○). Rows are years, newest at the top. Arrows point at the cited paper;
-  the selected paper's citations are yellow, the one to the picked
-  neighbour bright yellow, the rest faint. It stays in the right column and
-  follows the reference list. In it, j/k pick a neighbour (← cites the
-  selected paper, → is cited by it), Enter goes there, Backspace goes back,
-  a adds the paper by DOI, o opens its DOI in the browser, N shows only the
-  selected paper and its direct links (again for all), and Esc (or :graph
-  close) closes the graph.
+  The graph shows the seeds (⊚), other library papers citing or cited by
+  them (◎), and the 20 papers outside the library linked to the most seeds
+  (○). Rows are years, newest at the top. Only the selected paper's
+  citations are drawn, the one to the picked paper bright. It stays in the
+  right column and follows the reference list.
+
+  The list under it has tabs, switched with Tab and shift-Tab: Seeds,
+  Cites → (what the selected paper cites), ← Cited by, ▲ Top cited and
+  ▼ Top citing (outside papers cited by or citing the most seeds). Rows
+  show the year and OpenAlex's citation count; s sorts by either. j/k pick
+  a paper, Enter goes there, Backspace goes back, a adds it by DOI, o opens
+  its DOI in the browser, N shows only the selected paper and its direct
+  links (again for all), and Esc (or :graph close) closes the graph.
 
   A busy year takes up to four rows, and labels go to the most important
-  papers first: the selected one, the picked neighbour, the listed ones,
-  the seeds. Papers left without room show just their marker. A graph
+  papers first: the selected one, the picked one, the listed ones, the
+  seeds. Papers left without room show just their marker. A graph
   taller than the column scrolls with Ctrl-e/Ctrl-y or the mouse wheel, and
   follows the picked neighbour.
 
