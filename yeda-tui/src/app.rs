@@ -1087,6 +1087,7 @@ impl App {
                 }
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
+                ("failed", _) if self.report.is_empty() => self.status = "nothing failed".into(),
                 ("failed", _) => self.open_help(HelpPage::Failed),
                 ("log", _) => match self.log.path.clone() {
                     Some(path) => {
