@@ -90,7 +90,8 @@ CITATION GRAPH  ( :graph )
   show the year and OpenAlex's citation count; s sorts by either. Cites
   and Cited by list only papers in the graph until a paper is opened with
   Enter: that fetches all its references and its 20 most cited citing
-  works (once; they are cached), in the graph or not. j/k pick a paper,
+  works (once; they are cached), in the graph or not. The opened paper
+  becomes a seed and is drawn, with the library papers in its lists. j/k pick a paper,
   Enter opens it, Backspace goes back, a adds it by DOI, o opens
   its DOI in the browser, N shows only the selected paper and its direct
   links (again for all), and Esc (or q anywhere, or :graph close) closes the graph.
