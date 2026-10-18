@@ -26,7 +26,7 @@ pub fn export(refs: &[Ref], format: &str, read_csl: impl FnOnce(&str) -> Result<
 
 /// The names of the styles hayagriva ships, such as `ieee` and `apa`.
 pub fn style_names() -> Vec<&'static str> {
-    ArchivedStyle::all().iter().map(|s| s.names()[0]).collect()
+    ArchivedStyle::all().iter().flat_map(|s| s.names().iter().copied()).collect()
 }
 
 fn extra<'a>(r: &'a Ref, key: &str) -> Option<&'a str> {

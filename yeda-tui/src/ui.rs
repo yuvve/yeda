@@ -309,7 +309,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         _ if !app.query.is_empty() => format!("/{}", app.query),
         _ => String::new(),
     };
-    f.render_widget(Paragraph::new(status), bar);
+    match &app.completion {
+        Some(c) if app.mode == Mode::Prompt(Prompt::Command) => {
+            let mut spans = vec![Span::raw(status), Span::raw("   ")];
+            // A few earlier candidates stay in view for context.
+            for (i, candidate) in c.candidates.iter().enumerate().skip(c.at.saturating_sub(3)) {
+                let span = Span::raw(candidate.clone());
+                spans.push(if i == c.at { span.reversed() } else { span.dim() });
+                spans.push(Span::raw(" "));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), bar);
+        }
+        _ => f.render_widget(Paragraph::new(status), bar),
+    }
     let anchor = if list.is_empty() { main } else { list };
     if let Some(c) = &app.chooser {
         let height = (c.options.len().min(10) as u16 + 2).min(bar.y);
