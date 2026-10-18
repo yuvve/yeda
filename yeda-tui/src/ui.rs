@@ -353,6 +353,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
+        Mode::Setup => draw_setup(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
@@ -391,6 +392,29 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, 60, height);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(" Filter · Tab/↓ next · Enter apply · Esc cancel ".into(), true)), area);
+}
+
+fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
+    let Some(form) = &app.setup else { return };
+    let fields = form.fields();
+    let mut lines: Vec<Line> = fields
+        .iter()
+        .zip(&form.values)
+        .enumerate()
+        .map(|(i, ((label, _), value))| {
+            let value = if i == fields.len() - 1 { "•".repeat(value.chars().count()) } else { value.clone() };
+            let cursor = if i == form.sel { "▏" } else { "" };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            if i == form.sel { line.reversed() } else { line }
+        })
+        .collect();
+    lines.push(Line::raw(""));
+    let hint = if form.testing { "testing the connection…" } else { fields[form.sel].1 };
+    lines.push(Line::raw(format!("{:>10}  {hint}", "")).dim());
+    let what = if form.kind == crate::setup::Kind::Llm { "LLM profile" } else { "WebDAV location" };
+    let area = popup(main, 76, fields.len() as u16 + 4);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter test and save · Esc cancel "), true)), area);
 }
 
 fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {

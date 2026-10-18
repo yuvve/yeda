@@ -42,6 +42,9 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
         ("graph", 1) if args[0] == "col" => lib.tables.values().flat_map(|t| t.columns.clone()).collect(),
         ("fetch", 0) | ("attach", 1) => locations(),
+        ("setup", 0) => ["llm", "webdav"].map(String::from).to_vec(),
+        ("setup", 1) if args[0] == "llm" => lib.llm.keys().cloned().collect(),
+        ("setup", 1) if args[0] == "webdav" => lib.remotes.keys().cloned().collect(),
         ("cite", 0) => ["bibtex", "ident"].into_iter().chain(cite::style_names()).map(String::from).collect(),
         _ => Vec::new(),
     };
@@ -75,6 +78,7 @@ mod tests {
         assert_eq!(Completion::new(&lib, "table ").unwrap().candidates, ["close", "lab", "lit"]);
         assert!(Completion::new(&lib, "cite ie").unwrap().candidates.contains(&"ieee".to_string()));
         assert_eq!(Completion::new(&lib, "graph c").unwrap().candidates, ["citations", "close", "col"]);
+        assert_eq!(Completion::new(&lib, "setup llm ").unwrap().candidates, ["claude"]);
         assert!(Completion::new(&lib, "zzz").is_none());
         assert!(Completion::new(&lib, "save x").is_none());
     }
