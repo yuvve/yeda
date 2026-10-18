@@ -37,6 +37,8 @@ pub enum Mode {
     Secrets,
     Filter,
     Sort,
+    /// Picking the table a command runs on.
+    TablePick,
     Help(HelpPage),
 }
 
@@ -118,7 +120,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph"),
-    (":table", "every table's columns for the selected or marked references (:help explains it)"),
+    (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
     (":table close", "close the table"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
@@ -450,6 +452,9 @@ pub struct App {
     history_at: Option<usize>,
     /// Tab completion in progress on the command line.
     pub completion: Option<Completion>,
+    /// The command waiting for a table from the picker, and the arguments after the table's name.
+    table_pick: Option<(String, String)>,
+    pub table_sel: usize,
 }
 
 const HISTORY_LEN: usize = 200;
@@ -461,6 +466,8 @@ impl App {
             history: history.lines().map(String::from).collect(),
             history_at: None,
             completion: None,
+            table_pick: None,
+            table_sel: 0,
             log: crate::log::Log::open(),
             dir,
             sidebar: browse::sidebar(&lib),
@@ -633,6 +640,7 @@ impl App {
             Mode::Pick => self.pick_key(k),
             Mode::Filter => self.filter_key(k),
             Mode::Sort => self.sort_key(k),
+            Mode::TablePick => self.table_pick_key(k),
             Mode::Help(_) => self.help_key(k),
             Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
         }
@@ -745,7 +753,7 @@ impl App {
                 _ => self.pane = Pane::List,
             },
             "table-right" => {
-                let n = table::columns(&self.lib).len();
+                let n = self.table.as_ref().map_or(0, |t| table::columns(&self.lib, &t.name).len());
                 if let Some(t) = &mut self.table {
                     t.col = (t.col + 1).min(n.saturating_sub(1));
                 }
@@ -1048,6 +1056,42 @@ impl App {
         }
     }
 
+    /// Runs `command <table> rest`: with the only table, else the one picked in a modal.
+    fn pick_table(&mut self, command: &str, rest: &str) {
+        match self.lib.tables.len() {
+            0 => self.status = "no tables defined: add [tables.<name>] to yeda.toml or run import-table".into(),
+            1 => {
+                let name = self.lib.tables.keys().next().unwrap().clone();
+                self.submit(Prompt::Command, format!("{command} {name} {rest}").trim());
+            }
+            _ => {
+                self.table_pick = Some((command.to_string(), rest.to_string()));
+                self.table_sel = self.table.as_ref().and_then(|t| self.lib.tables.keys().position(|n| *n == t.name)).unwrap_or(0);
+                self.mode = Mode::TablePick;
+            }
+        }
+    }
+
+    fn table_pick_key(&mut self, k: KeyEvent) {
+        let n = self.lib.tables.len().max(1);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.table_pick = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.table_sel = (self.table_sel + 1) % n,
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.table_sel = (self.table_sel + n - 1) % n,
+            KeyCode::Enter => {
+                self.mode = Mode::Normal;
+                let name = self.lib.tables.keys().nth(self.table_sel).cloned();
+                if let (Some((command, rest)), Some(name)) = (self.table_pick.take(), name) {
+                    self.submit(Prompt::Command, format!("{command} {name} {rest}").trim());
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn open_help(&mut self, page: HelpPage) {
         self.help_scroll = 0;
         self.mode = Mode::Help(page);
@@ -1233,6 +1277,9 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
+                (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) if args.trim().is_empty() && self.lib.tables.len() > 1 => {
+                    self.pick_table(cmd, "")
+                }
                 (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) => {
                     if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!'), text) {
                         self.status = format!("{e:#}");
@@ -1875,14 +1922,18 @@ impl App {
         if args == "close" {
             return self.close_table();
         }
-        if !args.is_empty() {
-            return self.status = "usage: :table [close]".into();
+        if args.is_empty() {
+            return self.pick_table("table", "");
         }
+        let name = match self.table_name(Some(args)) {
+            Ok(n) => n,
+            Err(e) => return self.status = format!("{e:#}"),
+        };
         let keys: Vec<String> = self.targets().iter().map(|&i| self.lib.refs[i].key.clone()).collect();
         if keys.is_empty() {
             return self.status = "no reference selected".into();
         }
-        self.table = Some(TableView::new(keys));
+        self.table = Some(TableView::new(name, keys));
         self.right = RightView::Tables;
         self.pane = Pane::Right;
     }
@@ -1905,7 +1956,7 @@ impl App {
         let rows = self.table_rows();
         let Some(t) = &self.table else { return };
         let Some(key) = rows.get(t.row).map(|r| r[0].clone()) else { return };
-        let Some(table::Column { table: Some(name), name: column, .. }) = table::columns(&self.lib).into_iter().nth(t.col) else {
+        let Some(table::Column { table: Some(name), name: column }) = table::columns(&self.lib, &t.name).into_iter().nth(t.col) else {
             self.edit = Some((self.path(&library::ref_path(&key)), None));
             return;
         };

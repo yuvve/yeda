@@ -158,7 +158,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = app.table_rows();
     let focused = app.pane == Pane::Right;
     let Some(t) = &mut app.table else { return };
-    let columns: Vec<String> = table::columns(&app.lib).into_iter().map(|c| c.label).collect();
+    let columns: Vec<String> = table::columns(&app.lib, &t.name).into_iter().map(|c| c.name).collect();
     t.row = t.row.min(rows.len().saturating_sub(1));
     t.col = t.col.min(columns.len().saturating_sub(1));
     let widths: Vec<u16> = columns
@@ -183,7 +183,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     while right < columns.len() && fits(t.left, right) {
         right += 1;
     }
-    let mut title = format!("Table ({})", rows.len());
+    let mut title = format!("Table {} ({})", t.name, rows.len());
     if let Some((c, descending)) = t.sort {
         title += &format!(" {} {}", if descending { "▼" } else { "▲" }, columns[c]);
     }
@@ -296,7 +296,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
         Mode::Prompt(Prompt::TableSearch) => format!("table /{}", app.input),
         Mode::Prompt(Prompt::TableFilter) => {
-            let column = app.table.as_ref().and_then(|t| table::columns(&app.lib).into_iter().nth(t.col)).map(|c| c.label).unwrap_or_default();
+            let column = app.table.as_ref().and_then(|t| table::columns(&app.lib, &t.name).into_iter().nth(t.col)).map(|c| c.name).unwrap_or_default();
             format!("{column} (!x: not x, \"\": empty): {}", app.input)
         }
         Mode::Prompt(Prompt::Add) => format!("add DOIs / arXiv IDs / ISBNs: {}", app.input.replace('\n', "  ")),
@@ -343,6 +343,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
+        Mode::TablePick => draw_table_pick(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
         Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
@@ -423,6 +424,23 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.sort_sel)),
+    );
+}
+
+fn draw_table_pick(f: &mut Frame, app: &App, main: Rect) {
+    let width = main.width.saturating_sub(4).min(80);
+    let items: Vec<ListItem> = app
+        .lib
+        .tables
+        .iter()
+        .map(|(name, t)| ListItem::new(vec![Line::from(name.clone()).bold(), Line::from(format!("  {}", t.columns.join(", "))).dim()]))
+        .collect();
+    let area = popup(main, width, items.len() as u16 * 2 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items).block(block(" Table · Enter picks ".into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.table_sel)),
     );
 }
 
