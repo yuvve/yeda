@@ -24,7 +24,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 
 ```toml
 [keys.normal]
-"F" = "graph filtered"
+"F" = "cite ieee"
 "x" = ""
 ```
 
@@ -64,7 +64,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `:export <table> <file.csv>` | Export a table |
 | `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
 | `:sync` | Commit all changes, pull with `git pull --no-rebase` and push; conflicting `annotations.toml` files are merged by annotation `id`, any other conflict aborts the merge |
-| `:graph[!] [selected\|filtered\|prefetch]` | Citation graph of the selected (or marked) references, the list, or the whole library, from OpenAlex; see `:help`. `!` fetches citing papers again and retries what OpenAlex didn't have. `:graph key` sets an optional OpenAlex API key, kept in the secret store. `:graph close` (or Esc in the graph) closes it |
+| `:graph[!]` | Citation graph of the selected (or marked) references, from OpenAlex; see `:help`. `!` fetches citing papers again and retries what OpenAlex didn't have. `:graph key` sets an optional OpenAlex API key, kept in the secret store. `:graph close` (or Esc in the graph) closes it |
 | `:cite [format]` | Copy the selected or marked references to the clipboard as `bibtex` (the default, or `[cite] format`), a citation style shipped with hayagriva (`ieee`, `apa`, `chicago-author-date`, …), or a `.csl` file |
 | `:fetch [location]` | Find PDFs for the selected or marked references and attach them to `location` (default `[fulltext] location`): open-access copies first, then the publisher through the library proxy in a browser window; see `:help` |
 | `:keys` | List every key and command |

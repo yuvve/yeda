@@ -103,7 +103,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":sync", "commit, pull and push the library with git"),
-    (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
+    (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
     (":graph close", "close the graph"),
     (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
@@ -1801,7 +1801,7 @@ impl App {
         self.secrets.get(OPENALEX_ACCOUNT).cloned().filter(|k| !k.is_empty())
     }
 
-    /// `args` is `selected` (the default), `filtered` or `prefetch`; `refresh` fetches citing works again.
+    /// Graphs the selected or marked references; `args` may be `key` or `close`; `refresh` fetches citing works again.
     fn graph_command(&mut self, args: &str, refresh: bool, command: &str) {
         if self.graph_job.is_some() {
             self.status = "a graph is already being fetched".into();
@@ -1816,11 +1816,9 @@ impl App {
                 self.mode = Mode::Prompt(Prompt::Secret);
                 return;
             }
-            "" | "selected" => ("the selection", self.targets()),
-            "filtered" => ("the list", self.visible.clone()),
-            "prefetch" => ("the library", (0..self.lib.refs.len()).collect()),
+            "" => ("the selection", self.targets()),
             _ => {
-                self.status = "usage: :graph[!] [selected|filtered|prefetch|key|close]".into();
+                self.status = "usage: :graph[!] [key|close]".into();
                 return;
             }
         };

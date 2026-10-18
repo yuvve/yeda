@@ -75,9 +75,8 @@ SAVED (CUSTOM) SEARCHES
 
 CITATION GRAPH  ( :graph )
 
-  :graph            the selected reference, or the marked ones (v, V)
-  :graph filtered   every reference in the list
-  :graph prefetch   the whole library; fetches everything once
+  :graph graphs the selected reference, or the marked ones (v, V; V G
+  marks the whole list).
 
   The graph shows the seeds (◉), other library papers citing or cited by
   them (●), and the 20 papers outside the library linked to the most seeds
@@ -143,7 +142,7 @@ KEY BINDINGS
   and :annotations work like j and A. Rebind keys in ~/.config/yeda/config.toml:
 
     [keys.normal]                 # everywhere
-    "F" = "graph filtered"        # any command line, with arguments
+    "F" = "cite ieee"             # any command line, with arguments
     "ctrl-g" = "fetch"
     "x" = ""                      # unbinds x
     [keys.graph]                  # in the graph column, before normal
