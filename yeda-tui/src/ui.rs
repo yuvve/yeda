@@ -9,6 +9,8 @@ use ratatui::symbols::Marker;
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui_image::StatefulImage;
+use std::collections::HashMap;
+use yeda_core::graph::Graph;
 
 fn block(title: String, focused: bool) -> Block<'static> {
     let style = if focused { Style::new().fg(Color::Cyan) } else { Style::new() };
@@ -382,75 +384,181 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 
 /// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
 /// selected paper is yellow, its neighbours cyan, and the neighbour highlighted in the list a magenta ◆.
+/// Text rows a year may take before its least important nodes lose their labels.
+const MAX_LANES: usize = 4;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Label {
+    None,
+    Right,
+    /// Near the right edge.
+    Left,
+}
+
+struct Placement {
+    /// Node → its text row and where its label goes.
+    at: HashMap<usize, (usize, Label)>,
+    /// Each year's first row.
+    years: Vec<(usize, Option<i32>)>,
+    rows: usize,
+}
+
+/// Splits years into lanes, filled most important node first, so labels never overlap.
+fn place(g: &Graph, shown: &[usize], rank: &dyn Fn(usize) -> u8, col: &dyn Fn(usize) -> i32, width: i32) -> Placement {
+    let mut out = HashMap::new();
+    let mut starts = Vec::new();
+    let mut next = 0;
+    for (row, year) in g.years.iter().enumerate() {
+        let mut members: Vec<usize> = shown.iter().copied().filter(|&i| g.nodes[i].row == row).collect();
+        if members.is_empty() {
+            continue;
+        }
+        members.sort_by_key(|&i| (std::cmp::Reverse(rank(i)), col(i)));
+        let mut lanes: Vec<Vec<(i32, i32)>> = Vec::new();
+        let free = |lane: &[(i32, i32)], (a, b): (i32, i32)| lane.iter().all(|&(s, e)| b <= s || e <= a);
+        for i in members {
+            let (c, len) = (col(i), node_label(&g.nodes[i]).chars().count() as i32);
+            // A cell of margin on each side absorbs rounding in where the canvas prints.
+            let (text, side) = if c + 3 + len <= width { ((c - 1, c + 4 + len), Label::Right) } else { ((c - 3 - len, c + 2), Label::Left) };
+            let glyph = (c - 1, c + 2);
+            let (lane, label) = match lanes.iter().position(|l| free(l, text)) {
+                Some(l) => (l, side),
+                None if lanes.len() < MAX_LANES => {
+                    lanes.push(Vec::new());
+                    (lanes.len() - 1, side)
+                }
+                None => (lanes.iter().position(|l| free(l, glyph)).unwrap_or(0), Label::None),
+            };
+            lanes[lane].push(if label == Label::None { glyph } else { text });
+            out.insert(i, (next + lane, label));
+        }
+        starts.push((next, *year));
+        next += lanes.len();
+    }
+    Placement { at: out, years: starts, rows: next }
+}
+
+fn node_label(n: &yeda_core::graph::Node) -> String {
+    format!("{} {}", n.first_author, n.year.map(|y| y.to_string()).unwrap_or_default())
+}
+
 fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
-    let Some(v) = &app.graph else { return };
-    if area.height < 10 {
+    if area.height < 10 || app.graph.is_none() {
         return;
     }
-    let g = &v.graph;
     let focused = app.pane == Pane::Right;
+    let v = app.graph.as_mut().unwrap();
     let near = v.entries();
     let list_height = (near.len() as u16 + 3).clamp(5, area.height / 2);
     let [top, bottom] = Layout::vertical([Constraint::Min(6), Constraint::Length(list_height)]).areas(area);
-    let rows = g.years.len().max(1) as f64;
-    let pos = |i: usize| (g.nodes[i].x, rows - g.nodes[i].row as f64 - 0.5);
+    let g = &v.graph;
     let picked = near.get(v.nbr).map(|&(_, j)| j).filter(|_| focused);
+    let shown: Vec<usize> = if v.ego {
+        let (citing, cited) = g.neighbours(v.sel);
+        let mut s: Vec<usize> = std::iter::once(v.sel).chain(citing).chain(cited).collect();
+        s.sort();
+        s.dedup();
+        s
+    } else {
+        (0..g.nodes.len()).collect()
+    };
+    let rank = |i: usize| match i {
+        _ if i == v.sel => 4,
+        _ if Some(i) == picked => 3,
+        _ if near.iter().any(|&(_, j)| j == i) => 2,
+        _ if g.nodes[i].seed => 1,
+        _ => 0,
+    };
+    let ranks: Vec<u8> = (0..g.nodes.len()).map(rank).collect();
+    let rank = |i: usize| ranks[i];
+    let width = top.width.saturating_sub(2).max(1) as f64;
+    // As the canvas maps x to a column.
+    let col = |i: usize| ((g.nodes[i].x + 0.15) / 1.15 * (width - 1.0)).round() as i32;
+    let Placement { at: placed, years: starts, rows: total } = place(g, &shown, &rank, &col, width as i32);
+    let height = top.height.saturating_sub(2).max(1) as usize;
+    // Follows the paper picked in the list, and otherwise stays where Ctrl-e/Ctrl-y put it.
+    let target = picked.unwrap_or(v.sel);
+    if v.scroll_for != Some(target) {
+        if let Some(&(r, _)) = placed.get(&target) {
+            v.scroll = v.scroll.min(r).max((r + 1).saturating_sub(height));
+        }
+        v.scroll_for = Some(target);
+    }
+    v.scroll = v.scroll.min(total.saturating_sub(height));
+    let v = app.graph.as_ref().unwrap();
+    let g = &v.graph;
+    let rows = height as f64;
+    // The canvas spreads y over height - 1 rows, so these bounds put text row r exactly on screen row r.
+    let y = |r: usize| rows - 1.0 - (r as f64 - v.scroll as f64);
+    let pos = |i: usize| (g.nodes[i].x, y(placed[&i].0));
+    let is_shown = |i: usize| placed.contains_key(&i);
     // Two character cells, in canvas units, between a node and its label.
-    let gap = 2.0 * 1.15 / top.width.saturating_sub(2).max(1) as f64;
+    let gap = 2.0 * 1.15 / (width - 1.0);
     let edge = |(a, b): (usize, usize), color| {
         let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
         CanvasLine { x1, y1, x2, y2, color }
     };
+    let edges: Vec<(usize, usize)> = g.edges.iter().copied().filter(|&(a, b)| is_shown(a) && is_shown(b)).collect();
+    let mut title = format!("Graph of {} ({} papers)", v.scope, g.nodes.len());
+    if v.ego {
+        title += &format!(" · neighbourhood: {} · N: all", shown.len());
+    } else {
+        title += " · N: neighbourhood";
+    }
+    if total > height {
+        title += &format!(" · rows {}–{} of {} · Ctrl-e/y", v.scroll + 1, (v.scroll + height).min(total), total);
+    }
     let canvas = Canvas::default()
-        .block(block(format!("Graph of {} ({} papers)", v.scope, g.nodes.len()), focused))
+        .block(block(title, focused))
         .marker(Marker::Braille)
         .x_bounds([-0.15, 1.0])
-        .y_bounds([0.0, rows])
+        .y_bounds([0.0, (rows - 1.0).max(1.0)])
         .paint(|ctx| {
             // ponytail: past this many edges braille lines merge into a solid block, so only the selection's are drawn.
-            if g.edges.len() <= 60 {
-                for &e in g.edges.iter().filter(|e| e.0 != v.sel && e.1 != v.sel) {
+            if edges.len() <= 60 {
+                for &e in edges.iter().filter(|e| e.0 != v.sel && e.1 != v.sel) {
                     ctx.draw(&edge(e, Color::DarkGray));
                 }
             }
             ctx.layer();
-            for &e in g.edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
+            for &e in edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
                 ctx.draw(&edge(e, Color::LightYellow));
             }
-            if let Some(p) = picked {
+            if let Some(p) = picked.filter(|&p| is_shown(p)) {
                 ctx.layer();
                 ctx.draw(&edge((v.sel, p), Color::Magenta));
             }
             ctx.layer();
-            // Label only as many year rows as fit.
-            let step = (rows / top.height.saturating_sub(2).max(1) as f64).ceil().max(1.0) as usize;
-            for (row, year) in g.years.iter().enumerate().step_by(step) {
-                let label = year.map_or("?".to_string(), |y| y.to_string());
-                ctx.print(-0.15, rows - row as f64 - 0.5, Span::raw(label).dim());
+            for &(r, year) in &starts {
+                if (v.scroll..v.scroll + height).contains(&r) {
+                    ctx.print(-0.15, y(r), Span::raw(year.map_or("?".to_string(), |y| y.to_string())).dim());
+                }
             }
             // Later prints cover earlier ones, so the papers that matter most go last.
-            let rank = |i: usize| match i {
-                _ if i == v.sel => 3,
-                _ if Some(i) == picked => 2,
-                _ if near.iter().any(|&(_, j)| j == i) => 1,
-                _ => 0,
-            };
-            let mut order: Vec<usize> = (0..g.nodes.len()).collect();
-            order.sort_by_key(|&i| rank(i));
+            let mut order = shown.clone();
+            order.sort_by_key(|&i| ranks[i]);
             for i in order {
+                let (r, label) = placed[&i];
+                if !(v.scroll..v.scroll + height).contains(&r) {
+                    continue;
+                }
                 let n = &g.nodes[i];
-                let (glyph, style) = match rank(i) {
+                let (glyph, style) = match ranks[i] {
                     // Not bold: most terminals turn bold ANSI yellow into the bright yellow of the edges.
-                    3 => (None, Style::new().fg(Color::Yellow)),
-                    2 => (Some("◆"), Style::new().fg(Color::Magenta).bold()),
-                    1 => (None, Style::new().fg(Color::Cyan)),
+                    4 => (None, Style::new().fg(Color::Yellow)),
+                    3 => (Some("◆"), Style::new().fg(Color::Magenta).bold()),
+                    2 => (None, Style::new().fg(Color::Cyan)),
                     _ => (None, Style::new().dim()),
                 };
                 let glyph = glyph.unwrap_or(if n.seed { "◉" } else if n.key.is_some() { "●" } else { "○" });
-                let label = format!("{} {}", n.first_author, n.year.map(|y| y.to_string()).unwrap_or_default());
                 let (x, y) = pos(i);
                 ctx.print(x, y, Span::styled(glyph, style));
-                ctx.print(x + gap, y, Span::styled(label, style));
+                let text = node_label(n);
+                match label {
+                    Label::Right => ctx.print(x + gap, y, Span::styled(text, style)),
+                    Label::Left => ctx.print(x - gap / 2.0 * (text.chars().count() + 1) as f64, y, Span::styled(text, style)),
+                    Label::None => {}
+                }
             }
         });
     f.render_widget(canvas, top);

@@ -83,6 +83,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
     (":graph close", "close the graph (Esc in the graph does too)"),
+    ("N  Ctrl-e Ctrl-y", "in the graph: only the selected paper's links / scroll"),
     (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -180,6 +181,11 @@ pub struct GraphView {
     pub lists: bool,
     /// Nodes navigated away from, for Backspace.
     back: Vec<usize>,
+    /// Show only the selected paper and its direct links.
+    pub ego: bool,
+    /// The first text row shown, and the node it was last moved to show.
+    pub scroll: usize,
+    pub scroll_for: Option<usize>,
 }
 
 impl GraphView {
@@ -547,6 +553,11 @@ impl App {
         match (k.code, self.pending.take()) {
             (KeyCode::Char('d'), _) if ctrl => self.step(half),
             (KeyCode::Char('u'), _) if ctrl => self.step(-half),
+            (KeyCode::Char(c @ ('e' | 'y')), _) if ctrl && self.right == RightView::Graph => {
+                if let Some(g) = &mut self.graph {
+                    g.scroll = if c == 'e' { g.scroll + 1 } else { g.scroll.saturating_sub(1) };
+                }
+            }
             (KeyCode::Char('g'), Some('g')) => self.move_to(0),
             (KeyCode::Char('d'), Some('d')) => match (self.pane, self.current_filter()) {
                 (Pane::Sidebar, Filter::Search(name, _)) => {
@@ -584,6 +595,12 @@ impl App {
                 }
             }
             (KeyCode::Char('a'), _) if self.in_graph() => self.graph_add(),
+            (KeyCode::Char('N'), _) if self.in_graph() => {
+                if let Some(g) = &mut self.graph {
+                    g.ego = !g.ego;
+                    g.scroll_for = None;
+                }
+            }
             (KeyCode::Char('o'), _) if self.in_graph() => self.graph_open(),
             (KeyCode::Char('o'), _) if self.pane == Pane::Right && self.right == RightView::Annotations => self.open_annotation(),
             (KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter, _) => {
@@ -1824,8 +1841,8 @@ impl App {
         }
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
         let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
-        let lists = self.graph.as_ref().is_some_and(|g| g.lists);
-        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, lists, back: Vec::new() });
+        let (lists, ego) = self.graph.as_ref().map_or((false, false), |g| (g.lists, g.ego));
+        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, lists, back: Vec::new(), ego, scroll: 0, scroll_for: None });
         self.right = RightView::Graph;
     }
 
