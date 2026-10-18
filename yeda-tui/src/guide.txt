@@ -138,7 +138,8 @@ FETCHING PDFS  ( :fetch [location] )
   publisher directly (works on a campus network), and then a browser window
   that opens each paper through the library proxy. In the window you sign in
   when the proxy asks, and click through where it stops (a bot check, a page
-  without a PDF link). Its Fetch menu skips a paper or stops. Every PDF is
+  without a PDF link). Its Fetch menu skips a paper or stops; with several
+  proxies, it also tries the paper through the next one. Every PDF is
   checked against the paper, then copied or uploaded to the location, as with
   :attach. One from the window that is far longer than the paper (a whole
   issue?) stays in the downloads folder for :attach. The ones that fail are
@@ -146,7 +147,7 @@ FETCHING PDFS  ( :fetch [location] )
 
     [fulltext]
     location = "papers"                                  # where PDFs go
-    proxy = "https://proxy.example.edu/login?url={url}"  # the library proxy
+    proxies = ["https://proxy.example.edu/login?url={url}"]  # in order
     # downloads = "~/yeda-downloads"   the window's own download folder
 
 KEY BINDINGS

@@ -44,8 +44,16 @@ enum Event {
     NewWindow(String),
     /// The page's title; the script reports through it, as pages from the web get no IPC.
     Title(String),
-    Downloaded(Option<PathBuf>),
+    Downloaded(PathBuf),
+    NextProxy,
     Skip,
+    Stop,
+}
+
+/// How trying a paper through one proxy ended.
+enum Step {
+    Done(Outcome),
+    NextProxy,
     Stop,
 }
 
@@ -60,9 +68,9 @@ const HTML: &str = "yeda:html ";
 
 /// Reports the page and its `citation_pdf_url` in the title, the link through the proxy when the
 /// page came through it. WebKit's PDF viewer runs no scripts, so a page that never reports is a PDF.
-fn report_script(settings: &Settings) -> String {
-    let proxy = serde_json::to_string(&settings.proxy).unwrap();
-    let host = serde_json::to_string(&fulltext::proxy_host(settings)).unwrap();
+fn report_script(proxy: Option<&str>) -> String {
+    let host = serde_json::to_string(&proxy.and_then(fulltext::proxy_host)).unwrap();
+    let proxy = serde_json::to_string(&proxy).unwrap();
     format!(
         r#"(() => {{
   const m = document.querySelector('meta[name="citation_pdf_url"]');
@@ -112,15 +120,16 @@ pub fn run(job: Job) {
     tauri::Builder::default()
         .setup(move |app| {
             std::fs::create_dir_all(&downloads)?;
-            let menu = Menu::with_items(
+            let fetch = Submenu::with_items(
                 app,
-                &[&Submenu::with_items(
-                    app,
-                    "Fetch",
-                    true,
-                    &[&MenuItem::with_id(app, "skip", "Skip this paper", true, None::<&str>)?, &MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?],
-                )?],
+                "Fetch",
+                true,
+                &[&MenuItem::with_id(app, "skip", "Skip this paper", true, None::<&str>)?, &MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?],
             )?;
+            if job.settings.proxies.len() > 1 {
+                fetch.prepend(&MenuItem::with_id(app, "next", "Try the next proxy", true, None::<&str>)?)?;
+            }
+            let menu = Menu::with_items(app, &[&fetch])?;
             let (load_tx, dl_tx, menu_tx, title_tx, new_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone(), tx.clone());
             let target = current.clone();
             let dir = downloads.clone();
@@ -145,8 +154,10 @@ pub fn run(job: Job) {
                         DownloadEvent::Requested { destination, .. } => {
                             *destination = dir.join(format!("{}.part", target.lock().unwrap()));
                         }
-                        DownloadEvent::Finished { path, success, .. } => {
-                            let _ = dl_tx.send(Event::Downloaded(path.filter(|_| success)));
+                        // wry 0.57 shares one failure flag among all downloads and never clears it, so
+                        // after one failure `success` stays false; `keep_pdf` checks the file instead.
+                        DownloadEvent::Finished { .. } => {
+                            let _ = dl_tx.send(Event::Downloaded(dir.join(format!("{}.part", target.lock().unwrap()))));
                         }
                         _ => {}
                     }
@@ -154,7 +165,11 @@ pub fn run(job: Job) {
                 })
                 .build()?;
             app.on_menu_event(move |_, e| {
-                let _ = menu_tx.send(if e.id() == "skip" { Event::Skip } else { Event::Stop });
+                let _ = menu_tx.send(match e.id().as_ref() {
+                    "next" => Event::NextProxy,
+                    "skip" => Event::Skip,
+                    _ => Event::Stop,
+                });
             });
             let close_tx = tx.clone();
             window.on_window_event(move |e| {
@@ -174,112 +189,130 @@ pub fn run(job: Job) {
 }
 
 fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mutex<String>) {
-    let script = report_script(&job.settings);
+    let proxies: Vec<Option<&str>> = match job.settings.proxies.as_slice() {
+        [] => vec![None],
+        list => list.iter().map(|p| Some(p.as_str())).collect(),
+    };
     for (n, paper) in job.papers.iter().enumerate() {
         *current.lock().unwrap() = paper.file.clone();
-        let _ = window.set_title(&format!("yeda fetch {}/{} · {} — sign in or click the PDF link if it stops", n + 1, job.papers.len(), paper.key));
         if let Some(file) = without_window(window, job, paper) {
             report(&Outcome::Saved { key: paper.key.clone(), file });
             continue;
         }
-        // Events from the last paper's page (a repeated report, a late download) would be taken as this one's.
-        if !blank_page(window, rx) {
-            for p in &job.papers[n..] {
-                report(&Outcome::Failed { key: p.key.clone(), error: "fetch window closed".into() });
-            }
-            return;
-        }
-        let url = fulltext::proxied(&format!("https://doi.org/{}", paper.doi), &job.settings);
-        if let Err(e) = url.parse().map_err(anyhow::Error::from).and_then(|u| Ok(window.navigate(u)?)) {
-            report(&Outcome::Failed { key: paper.key.clone(), error: format!("{e:#}") });
-            continue;
-        }
-        let target = job.downloads.join(&paper.file);
-        let part = job.downloads.join(format!("{}.part", paper.file));
-        let save = |pdf: Vec<u8>| std::fs::write(&target, pdf).ok().map(|()| Outcome::Saved { key: paper.key.clone(), file: target.clone() });
-        // The page waiting for its script to report, and the PDF links already tried.
-        let mut loaded: Option<String> = None;
-        let mut tried: Vec<String> = Vec::new();
-        let outcome = loop {
-            let event = match loaded {
-                Some(_) => rx.recv_timeout(Duration::from_secs(2)),
-                None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            };
-            match event {
-                Ok(Event::Loaded(url)) => {
-                    if url != "about:blank" {
-                        report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
-                    }
-                    // ScienceDirect's PDF link is an intermediate page that ends in the viewer.
-                    if let Some(pdf) = fulltext::sciencedirect_pdf(&url).filter(|p| !tried.contains(p)) {
-                        tried.push(pdf.clone());
-                        let _ = pdf.parse().map(|u| window.navigate(u));
-                    }
-                    // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
-                    if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
-                        tried.push(pdf.clone());
-                        match fetch_with_cookies(window, &pdf).ok().and_then(save) {
-                            Some(outcome) => break outcome,
-                            None => download_in_page(window, &pdf),
-                        }
-                    }
-                    let _ = window.eval(&script);
-                    loaded = Some(url);
+        let mut outcome = Outcome::Failed { key: paper.key.clone(), error: "no proxy gave a PDF".into() };
+        for (i, proxy) in proxies.iter().enumerate() {
+            let through = if proxies.len() > 1 { format!(" · proxy {}/{}", i + 1, proxies.len()) } else { String::new() };
+            let _ = window.set_title(&format!("yeda fetch {}/{} · {}{through} — sign in or click the PDF link if it stops", n + 1, job.papers.len(), paper.key));
+            match through_proxy(window, job, paper, *proxy, rx) {
+                Step::Done(o) => {
+                    outcome = o;
+                    break;
                 }
-                Ok(Event::Title(title)) => {
-                    let Some((page, pdf)) = title.strip_prefix(HTML).and_then(|t| t.split_once(' ')) else { continue };
-                    // A report from a page already left (a redirect) mustn't cancel the wait for this one.
-                    if loaded.as_deref().is_some_and(|l| without_fragment(l) == without_fragment(page)) {
-                        loaded = None;
-                    }
-                    if pdf.is_empty() || tried.iter().any(|t| t == pdf) {
-                        continue;
-                    }
-                    tried.push(pdf.to_string());
-                    match fetch_with_cookies(window, pdf).ok().and_then(save) {
-                        Some(outcome) => break outcome,
-                        // The browser may get what a plain request can't; a link to another site
-                        // just opens, showing what stands in the way: a sign-in or a check.
-                        None => download_in_page(window, pdf),
-                    }
-                }
-                // No report: WebKit's PDF viewer, which can be downloaded from like any page.
-                Err(RecvTimeoutError::Timeout) => {
-                    let url = loaded.take().unwrap_or_default();
-                    let refused = match fetch_with_cookies(window, &url) {
-                        Ok(pdf) => match save(pdf) {
-                            Some(outcome) => break outcome,
-                            None => false,
-                        },
-                        // A page that answers with HTML is just a page that reported nothing.
-                        Err(e) => !yeda_net::fulltext::is_not_pdf(&e),
-                    };
-                    // Signed PDF links (ScienceDirect's) may refuse a plain request; WebKit's own
-                    // download, as from the viewer's button, carries the browser's session.
-                    if refused && !url.is_empty() && !tried.contains(&url) {
-                        tried.push(url.clone());
-                        report(&Outcome::Visited { key: paper.key.clone(), page: format!("WebKit download of {}", without_query(&url)) });
-                        download_natively(window, &url);
-                    }
-                }
-                // Anything but a PDF (an HTML page, a cancelled download) waits for the next one.
-                Ok(Event::Downloaded(Some(done))) if done == part => {
-                    if let Some(file) = keep_pdf(&part, &target) {
-                        break Outcome::Saved { key: paper.key.clone(), file };
-                    }
-                }
-                Ok(Event::Downloaded(_)) => {}
-                Ok(Event::NewWindow(url)) => drop(url.parse().map(|u| window.navigate(u))),
-                Ok(Event::Skip) => break Outcome::Failed { key: paper.key.clone(), error: "skipped in the browser".into() },
-                Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => {
+                Step::NextProxy => {}
+                Step::Stop => {
                     for p in &job.papers[n..] {
                         report(&Outcome::Failed { key: p.key.clone(), error: "fetch window closed".into() });
                     }
                     return;
                 }
             }
-        };
+        }
         report(&outcome);
+    }
+}
+
+/// Opens `paper` through `proxy` and waits for its PDF, or for the user to move on.
+fn through_proxy(window: &WebviewWindow, job: &Job, paper: &Paper, proxy: Option<&str>, rx: &Receiver<Event>) -> Step {
+    // Events from the last page (a repeated report, a late download) would be taken as this one's.
+    if !blank_page(window, rx) {
+        return Step::Stop;
+    }
+    let doi = format!("https://doi.org/{}", paper.doi);
+    let url = proxy.map_or(doi.clone(), |p| fulltext::proxied(&doi, p));
+    if let Err(e) = url.parse().map_err(anyhow::Error::from).and_then(|u| Ok(window.navigate(u)?)) {
+        return Step::Done(Outcome::Failed { key: paper.key.clone(), error: format!("{e:#}") });
+    }
+    let script = report_script(proxy);
+    let target = job.downloads.join(&paper.file);
+    let part = job.downloads.join(format!("{}.part", paper.file));
+    let save = |pdf: Vec<u8>| std::fs::write(&target, pdf).ok().map(|()| Step::Done(Outcome::Saved { key: paper.key.clone(), file: target.clone() }));
+    // The page waiting for its script to report, and the PDF links already tried.
+    let mut loaded: Option<String> = None;
+    let mut tried: Vec<String> = Vec::new();
+    loop {
+        let event = match loaded {
+            Some(_) => rx.recv_timeout(Duration::from_secs(2)),
+            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
+        match event {
+            Ok(Event::Loaded(url)) => {
+                if url != "about:blank" {
+                    report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
+                }
+                // ScienceDirect's PDF link is an intermediate page that ends in the viewer.
+                if let Some(pdf) = fulltext::sciencedirect_pdf(&url).filter(|p| !tried.contains(p)) {
+                    tried.push(pdf.clone());
+                    let _ = pdf.parse().map(|u| window.navigate(u));
+                }
+                // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
+                if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
+                    tried.push(pdf.clone());
+                    match fetch_with_cookies(window, &pdf).ok().and_then(save) {
+                        Some(step) => return step,
+                        None => download_in_page(window, &pdf),
+                    }
+                }
+                let _ = window.eval(&script);
+                loaded = Some(url);
+            }
+            Ok(Event::Title(title)) => {
+                let Some((page, pdf)) = title.strip_prefix(HTML).and_then(|t| t.split_once(' ')) else { continue };
+                // A report from a page already left (a redirect) mustn't cancel the wait for this one.
+                if loaded.as_deref().is_some_and(|l| without_fragment(l) == without_fragment(page)) {
+                    loaded = None;
+                }
+                if pdf.is_empty() || tried.iter().any(|t| t == pdf) {
+                    continue;
+                }
+                tried.push(pdf.to_string());
+                match fetch_with_cookies(window, pdf).ok().and_then(save) {
+                    Some(step) => return step,
+                    // The browser may get what a plain request can't; a link to another site
+                    // just opens, showing what stands in the way: a sign-in or a check.
+                    None => download_in_page(window, pdf),
+                }
+            }
+            // No report: WebKit's PDF viewer, which can be downloaded from like any page.
+            Err(RecvTimeoutError::Timeout) => {
+                let url = loaded.take().unwrap_or_default();
+                let refused = match fetch_with_cookies(window, &url) {
+                    Ok(pdf) => match save(pdf) {
+                        Some(step) => return step,
+                        None => false,
+                    },
+                    // A page that answers with HTML is just a page that reported nothing.
+                    Err(e) => !yeda_net::fulltext::is_not_pdf(&e),
+                };
+                // Signed PDF links (ScienceDirect's) may refuse a plain request; WebKit's own
+                // download, as from the viewer's button, carries the browser's session.
+                if refused && !url.is_empty() && !tried.contains(&url) {
+                    tried.push(url.clone());
+                    report(&Outcome::Visited { key: paper.key.clone(), page: format!("WebKit download of {}", without_query(&url)) });
+                    download_natively(window, &url);
+                }
+            }
+            // Anything but a PDF (an HTML page, a cancelled download) waits for the next one.
+            Ok(Event::Downloaded(done)) if done == part => {
+                if let Some(file) = keep_pdf(&part, &target) {
+                    return Step::Done(Outcome::Saved { key: paper.key.clone(), file });
+                }
+            }
+            Ok(Event::Downloaded(_)) => {}
+            Ok(Event::NewWindow(url)) => drop(url.parse().map(|u| window.navigate(u))),
+            Ok(Event::NextProxy) => return Step::NextProxy,
+            Ok(Event::Skip) => return Step::Done(Outcome::Failed { key: paper.key.clone(), error: "skipped in the browser".into() }),
+            Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => return Step::Stop,
+        }
     }
 }
 
@@ -308,10 +341,11 @@ fn without_query(url: &str) -> String {
     url.split(['?', '#']).next().unwrap_or_default().to_string()
 }
 
-/// Renames a finished download to `target` if it is a PDF; anything else is deleted.
+/// Renames a finished download to `target` if it is a whole PDF; anything else is deleted.
 fn keep_pdf(part: &std::path::Path, target: &std::path::Path) -> Option<PathBuf> {
     let bytes = std::fs::read(part).ok()?;
-    if !fulltext::is_pdf(&bytes) {
+    let tail = &bytes[bytes.len().saturating_sub(2048)..];
+    if !fulltext::is_pdf(&bytes) || !tail.windows(5).any(|w| w == b"%%EOF") {
         let _ = std::fs::remove_file(part);
         return None;
     }
@@ -321,19 +355,36 @@ fn keep_pdf(part: &std::path::Path, target: &std::path::Path) -> Option<PathBuf>
 
 /// With an open proxy session, publishers with a known PDF URL need no page at all.
 fn without_window(window: &WebviewWindow, job: &Job, paper: &Paper) -> Option<PathBuf> {
-    let host = fulltext::proxy_host(&job.settings)?;
-    for url in fulltext::publisher_urls(&paper.doi, &job.settings) {
-        let url = fulltext::proxied_host(&url, &host)?;
-        let cookies = window.cookies_for_url(url.parse().ok()?).ok()?;
-        if cookies.is_empty() {
-            return None;
-        }
-        let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
-        if let Ok(pdf) = yeda_net::fulltext::download(&url, Some(&header)) {
-            let target = job.downloads.join(&paper.file);
-            std::fs::write(&target, pdf).ok()?;
-            return Some(target);
+    for host in job.settings.proxies.iter().filter_map(|p| fulltext::proxy_host(p)) {
+        for url in fulltext::publisher_urls(&paper.doi, &job.settings) {
+            let Some(url) = fulltext::proxied_host(&url, &host) else { continue };
+            let Some(cookies) = url.parse().ok().and_then(|u| window.cookies_for_url(u).ok()) else { continue };
+            if cookies.is_empty() {
+                continue;
+            }
+            let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
+            if let Ok(pdf) = yeda_net::fulltext::download(&url, Some(&header)) {
+                let target = job.downloads.join(&paper.file);
+                std::fs::write(&target, pdf).ok()?;
+                return Some(target);
+            }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn keeps_only_whole_pdfs() {
+        let dir = std::env::temp_dir().join(format!("yeda-keep-pdf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (part, target) = (dir.join("x.pdf.part"), dir.join("x.pdf"));
+        std::fs::write(&part, b"%PDF-1.7\n1 0 obj").unwrap();
+        assert!(super::keep_pdf(&part, &target).is_none());
+        assert!(!part.exists());
+        std::fs::write(&part, b"%PDF-1.7\n1 0 obj\nendobj\n%%EOF\n").unwrap();
+        assert_eq!(super::keep_pdf(&part, &target), Some(target.clone()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

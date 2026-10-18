@@ -9,8 +9,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// The library proxy, with `{url}` for the address to open through it.
-    pub proxy: Option<String>,
+    /// Library proxies, tried in order, each with `{url}` for the address to open through it.
+    pub proxies: Vec<String>,
     /// The `[locations]` entry fetched PDFs are attached to.
     pub location: Option<String>,
     /// Where the bundled browser saves downloads; clients have a default.
@@ -38,14 +38,14 @@ pub fn publisher_urls(doi: &str, settings: &Settings) -> Vec<String> {
     configured.chain(PATTERNS.iter().copied()).filter(|(p, _)| *p == prefix).map(|(_, t)| t.replace("{doi}", doi)).collect()
 }
 
-/// `url` opened through the proxy, or as it is without one.
-pub fn proxied(url: &str, settings: &Settings) -> String {
-    settings.proxy.as_ref().map_or_else(|| url.to_string(), |p| p.replace("{url}", url))
+/// `url` opened through `proxy`.
+pub fn proxied(url: &str, proxy: &str) -> String {
+    proxy.replace("{url}", url)
 }
 
 /// The proxy's host, such as `proxy.lib.ltu.se`; EZproxy serves proxied sites under it.
-pub fn proxy_host(settings: &Settings) -> Option<String> {
-    let rest = settings.proxy.as_deref()?.split("://").nth(1)?;
+pub fn proxy_host(proxy: &str) -> Option<String> {
+    let rest = proxy.split("://").nth(1)?;
     let host = rest.split(['/', '?', ':']).next()?;
     // `login.proxy.example.edu` and `proxy.example.edu` serve the same proxied names.
     Some(host.strip_prefix("login.").unwrap_or(host).to_string())
@@ -174,11 +174,12 @@ mod tests {
 
     #[test]
     fn builds_urls_and_checks_pdfs() {
-        let settings = Settings { proxy: Some("https://login.proxy.lib.ltu.se/login?url={url}".into()), ..Default::default() };
+        let settings = Settings::default();
+        let proxy = "https://login.proxy.lib.ltu.se/login?url={url}";
         assert_eq!(publisher_urls("10.1007/s10514-020-09902-z", &settings), ["https://link.springer.com/content/pdf/10.1007/s10514-020-09902-z.pdf"]);
         assert!(publisher_urls("10.1109/x", &settings).is_empty());
-        assert_eq!(proxied("https://doi.org/10.1/x", &settings), "https://login.proxy.lib.ltu.se/login?url=https://doi.org/10.1/x");
-        assert_eq!(proxy_host(&settings).as_deref(), Some("proxy.lib.ltu.se"));
+        assert_eq!(proxied("https://doi.org/10.1/x", proxy), "https://login.proxy.lib.ltu.se/login?url=https://doi.org/10.1/x");
+        assert_eq!(proxy_host(proxy).as_deref(), Some("proxy.lib.ltu.se"));
         assert_eq!(
             proxied_host("https://link.springer.com/content/pdf/10.1/x.pdf", "proxy.lib.ltu.se").as_deref(),
             Some("https://link-springer-com.proxy.lib.ltu.se/content/pdf/10.1/x.pdf")
