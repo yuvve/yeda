@@ -3,8 +3,9 @@ use yeda_core::library::{Library, Ref};
 use yeda_core::search::Searcher;
 use yeda_core::tables::BUILTIN;
 
-/// The columns of every table for the references `:table` was run on, in the right column.
+/// A table of the references `:table` was run on, in the right column.
 pub struct TableView {
+    pub name: String,
     pub keys: Vec<String>,
     pub row: usize,
     pub col: usize,
@@ -21,14 +22,14 @@ pub struct TableView {
 }
 
 impl TableView {
-    pub fn new(keys: Vec<String>) -> Self {
-        TableView { keys, row: 0, col: 0, left: 0, sort: None, query: String::new(), filters: Vec::new(), open: false }
+    pub fn new(name: String, keys: Vec<String>) -> Self {
+        TableView { name, keys, row: 0, col: 0, left: 0, sort: None, query: String::new(), filters: Vec::new(), open: false }
     }
 
 
     /// The cells of each row shown, filtered and sorted; the first is the reference key.
     pub fn rows(&self, lib: &Library, searcher: &mut Searcher) -> Vec<Vec<String>> {
-        let columns = columns(lib);
+        let columns = columns(lib, &self.name);
         let words: Vec<&str> = self.query.split_whitespace().collect();
         let mut rows: Vec<Vec<String>> = self
             .keys
@@ -60,22 +61,13 @@ pub struct Column {
     /// `None` for the reference's own fields.
     pub table: Option<String>,
     pub name: String,
-    /// The header: the name, after its table's when there are several.
-    pub label: String,
 }
 
-/// The reference's own fields, then every table's columns.
-pub fn columns(lib: &Library) -> Vec<Column> {
-    let own = BUILTIN.iter().map(|c| Column { table: None, name: c.to_string(), label: c.to_string() });
-    let several = lib.tables.len() > 1;
-    let tables = lib.tables.iter().flat_map(|(t, def)| {
-        def.columns.iter().map(move |c| Column {
-            table: Some(t.clone()),
-            name: c.clone(),
-            label: if several { format!("{t}.{c}") } else { c.clone() },
-        })
-    });
-    own.chain(tables).collect()
+/// The reference's own fields, then the table's columns.
+pub fn columns(lib: &Library, table: &str) -> Vec<Column> {
+    let own = BUILTIN.iter().map(|c| Column { table: None, name: c.to_string() });
+    let def = lib.tables.get(table).map(|t| t.columns.as_slice()).unwrap_or_default();
+    own.chain(def.iter().map(|c| Column { table: Some(table.to_string()), name: c.clone() })).collect()
 }
 
 fn cell(r: &Ref, column: &Column) -> String {
@@ -131,9 +123,9 @@ mod tests {
         let mut lib = Library::parse(Some(cfg), None, refs.map(|(k, t)| (k.to_string(), t.to_string())), None).unwrap();
         lib.load_ai("a2020", "[lit]\nmethod = \"CBBA\"\n\"hardware/sim\" = \"ROS\"\n").unwrap();
         lib.load_ai("b2019", "[lit]\nmethod = \"auction\"\n").unwrap();
-        let labels: Vec<String> = columns(&lib).into_iter().map(|c| c.label).collect();
-        assert_eq!(labels, ["key", "title", "authors", "year", "lit.method", "lit.hardware/sim", "more.x"]);
-        let mut t = TableView::new(vec!["a2020".into(), "b2019".into(), "c2021".into()]);
+        let names: Vec<String> = columns(&lib, "lit").into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["key", "title", "authors", "year", "method", "hardware/sim"]);
+        let mut t = TableView::new("lit".into(), vec!["a2020".into(), "b2019".into(), "c2021".into()]);
         let mut s = Searcher::new();
         let keys = |t: &TableView, s: &mut Searcher| t.rows(&lib, s).into_iter().map(|r| r[0].clone()).collect::<Vec<_>>();
 

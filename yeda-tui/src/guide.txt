@@ -169,17 +169,26 @@ KEY BINDINGS
   Space separates the keys of a sequence: "g g". :keys lists every binding
   in effect and every action.
 
-TABLES  ( :table, T )
+TABLES  ( :table [name], T )
 
-  Define literature tables in yeda.toml under [tables.<name>]. :summarize
-  fills the selected reference's row using an LLM profile from [llm.<name>];
-  each paper's rows are kept in notes/<key>.ai.toml.
+  Define literature tables in yeda.toml under [tables.<name>], each with its
+  columns, an optional describe per column and an optional prompt saying
+  what the table is for:
 
-  :table (or T) shows the selected or marked references with every table's
-  columns (as table.column when there are several) in the right column; c
-  gives it the whole window. j/k pick a row, h/l a column
-  (h from the first goes back to the list). Enter shows the cell in full, e
-  edits it in $EDITOR, s sorts by the column (again reverses). / shows only
-  rows with every word somewhere in them; f only rows whose cell in this
-  column matches (!x: doesn't match x; "": empty). Esc closes the cell, then
-  clears search and filters, then closes the table, as does q.
+    [tables.lit]
+    columns = ["contribution", "method"]
+    describe = { method = "Algorithm family, a few words." }
+    prompt = "Multi-robot coordination papers."
+
+  :summarize [table] fills the selected reference's row using an LLM profile
+  from [llm.<name>]; each paper's rows are kept in notes/<key>.ai.toml.
+  Without a table name and with several tables, a list to pick from opens;
+  Tab completes the name on the command line.
+
+  :table [name] (or T) shows a table of the selected or marked references
+  in the right column; c gives it the whole window. j/k pick a row, h/l a
+  column (h from the first goes back to the list). Enter shows the cell in
+  full, e edits it in $EDITOR, s sorts by the column (again reverses). /
+  shows only rows with every word somewhere in them; f only rows whose cell
+  in this column matches (!x: doesn't match x; "": empty). Esc closes the
+  cell, then clears search and filters, then closes the table, as does q.

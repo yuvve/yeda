@@ -46,6 +46,7 @@ user = "yuvve"
 [tables.lit]                     # literature table, filled by an LLM
 columns = ["method", "hardware/sim"]
 describe = { method = "Algorithm family, a few words." }
+prompt = "Multi-robot coordination papers."  # optional, added to yeda's instructions
 
 [llm.claude]
 provider = "anthropic"           # or "openai" for any OpenAI-compatible server

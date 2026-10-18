@@ -59,8 +59,8 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 |---|---|
 | `:log` | Open the log of status messages and failures (`~/.local/state/yeda/yeda.log`) in `$EDITOR` |
 | `:save <name>` | Save the current search |
-| `:table` | Every table's columns for the selected or marked references in the right column: `h`/`l` pick a column, `Enter` shows a cell in full, `e` edits it in `$EDITOR`, `s` sorts, `/` searches and `f` filters the column; `Esc`, `q` or `:table close` closes it |
-| `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM, kept in `notes/<key>.ai.toml`; `!` overwrites filled cells |
+| `:table [name]` | A table of the selected or marked references in the right column; without a name, the only table or one picked from a list: `h`/`l` pick a column, `Enter` shows a cell in full, `e` edits it in `$EDITOR`, `s` sorts, `/` searches and `f` filters the column; `Esc`, `q` or `:table close` closes it |
+| `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM, kept in `notes/<key>.ai.toml`, following the table's `prompt` and `describe`; without a table name, pick one from a list; `!` overwrites filled cells |
 | `:summarize-all[!] [table] [profile]` | The same for every visible reference |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
