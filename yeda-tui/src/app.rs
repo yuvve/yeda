@@ -2022,8 +2022,9 @@ impl App {
         match result {
             Ok(lists) => {
                 let keys = self.lib.refs.iter().filter_map(|r| Some((graph::work_id(r)?.to_string(), r.key.clone()))).collect();
-                g.graph.extend(i, &lists.cites, &lists.cited_by, &keys);
+                g.graph.open(i, &lists.cites, &lists.cited_by, &keys);
                 g.full.insert(i);
+                g.scroll_for = None;
                 self.status = format!("graph: {} references, {} citing works", lists.cites.len(), lists.cited_by.len());
             }
             Err(e) => self.status = format!("graph: {e}"),

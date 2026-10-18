@@ -99,6 +99,20 @@ pub struct Graph {
 impl Graph {
     /// Adds all of node `i`'s references (`cites`) and the works citing it (`cited_by`), as hidden
     /// nodes where they aren't in the graph yet; `keys` maps work ids to library keys.
+    /// Makes node `i` a seed with its full lists (see `extend`): it and the library papers in its
+    /// lists are drawn, and the layout is redone.
+    pub fn open(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
+        self.extend(i, cites, cited_by, keys);
+        let linked: HashSet<usize> = self.edges.iter().filter_map(|&(a, b)| if a == i { Some(b) } else if b == i { Some(a) } else { None }).collect();
+        for (j, n) in self.nodes.iter_mut().enumerate() {
+            if j == i || (linked.contains(&j) && n.key.is_some()) {
+                n.hidden = false;
+            }
+        }
+        self.nodes[i].seed = true;
+        self.years = layout(&mut self.nodes, &self.edges);
+    }
+
     pub fn extend(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
         let mut node = |w: &Work| match self.find(&w.id) {
             Some(j) => j,
@@ -256,7 +270,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
 /// One row per year, newest at the top; within a row, nodes sit near the mean position of
 /// their neighbours, which keeps most edges short.
 fn layout(nodes: &mut [Node], edges: &[(usize, usize)]) -> Vec<Option<i32>> {
-    let mut years: Vec<Option<i32>> = nodes.iter().map(|n| n.year).collect::<HashSet<_>>().into_iter().collect();
+    let mut years: Vec<Option<i32>> = nodes.iter().filter(|n| !n.hidden).map(|n| n.year).collect::<HashSet<_>>().into_iter().collect();
     // Newest first, and the row without a year last.
     years.sort_by_key(|y| (y.is_none(), std::cmp::Reverse(*y)));
     for n in nodes.iter_mut() {
@@ -265,7 +279,7 @@ fn layout(nodes: &mut [Node], edges: &[(usize, usize)]) -> Vec<Option<i32>> {
     let spread = |nodes: &mut [Node], order: &dyn Fn(&Node, usize) -> f64| {
         for row in 0..years.len() {
             let mut members: Vec<(f64, usize)> =
-                nodes.iter().enumerate().filter(|(_, n)| n.row == row).map(|(i, n)| (order(n, i), i)).collect();
+                nodes.iter().enumerate().filter(|(_, n)| !n.hidden && n.row == row).map(|(i, n)| (order(n, i), i)).collect();
             members.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             let count = members.len();
             for (slot, (_, i)) in members.into_iter().enumerate() {
@@ -277,9 +291,11 @@ fn layout(nodes: &mut [Node], edges: &[(usize, usize)]) -> Vec<Option<i32>> {
     // ponytail: three barycenter sweeps; a proper crossing-minimization pass if big graphs get tangled.
     for _ in 0..3 {
         let xs: Vec<f64> = nodes.iter().map(|n| n.x).collect();
+        let hidden: Vec<bool> = nodes.iter().map(|n| n.hidden).collect();
         let mean: Vec<f64> = (0..nodes.len())
             .map(|i| {
-                let near: Vec<f64> = edges.iter().filter_map(|&(a, b)| if a == i { Some(xs[b]) } else if b == i { Some(xs[a]) } else { None }).collect();
+                let other = |&(a, b): &(usize, usize)| if a == i { Some(b) } else if b == i { Some(a) } else { None };
+                let near: Vec<f64> = edges.iter().filter_map(other).filter(|&j| !hidden[j]).map(|j| xs[j]).collect();
                 if near.is_empty() { xs[i] } else { near.iter().sum::<f64>() / near.len() as f64 }
             })
             .collect();
@@ -360,5 +376,14 @@ mod tests {
         let w = &g.nodes[g.find("W").unwrap()];
         assert!(w.hidden && w.key.as_deref() == Some("w"));
         assert!(!g.nodes[g.find("A").unwrap()].hidden);
+
+        let v = g.find("V").unwrap();
+        g.open(v, &[work("C", 2022, &[], 0)], &[work("U", 2025, &[], 0)], &HashMap::from([("U".to_string(), "u".to_string())]));
+        let (u, v) = (g.find("U").unwrap(), g.find("V").unwrap());
+        assert!(g.nodes[v].seed && !g.nodes[v].hidden, "the opened paper is a drawn seed");
+        assert!(!g.nodes[u].hidden, "a library paper in its lists is drawn");
+        assert!(g.nodes[g.find("W").unwrap()].hidden, "what it doesn't link stays hidden");
+        assert_eq!(g.years[g.nodes[u].row], Some(2025));
+        assert!(g.edges.contains(&(v, g.find("C").unwrap())));
     }
 }
