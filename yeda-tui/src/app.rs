@@ -105,6 +105,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("cluster-tab", "list the selected node's links, or every node"),
     ("table-left", "previous column of the table; from the first, the reference list"),
     ("table-right", "next column of the table"),
+    ("table-hide", "hide the column"),
+    ("table-show", "show the hidden columns again"),
     ("table-cell", "show the cell in full, or close it"),
     ("table-edit", "edit the cell in $EDITOR"),
     ("table-sort", "sort by the column; again reverses"),
@@ -782,14 +784,31 @@ impl App {
                     c.nbr = 0;
                 }
             }
-            "table-left" => match &mut self.table {
-                Some(t) if t.col > 0 => t.col -= 1,
-                _ => self.pane = Pane::List,
-            },
+            "table-left" => {
+                let n = self.table.as_ref().map_or(0, |t| table::columns(&self.lib, &t.name).len());
+                let prev = self.table.as_ref().and_then(|t| t.visible(n).into_iter().rfind(|&c| c < t.col));
+                match (&mut self.table, prev) {
+                    (Some(t), Some(c)) => t.col = c,
+                    _ => self.pane = Pane::List,
+                }
+            }
             "table-right" => {
                 let n = self.table.as_ref().map_or(0, |t| table::columns(&self.lib, &t.name).len());
+                if let Some(t) = &mut self.table
+                    && let Some(c) = t.visible(n).into_iter().find(|&c| c > t.col)
+                {
+                    t.col = c;
+                }
+            }
+            "table-hide" => {
+                let n = self.table.as_ref().map_or(0, |t| table::columns(&self.lib, &t.name).len());
                 if let Some(t) = &mut self.table {
-                    t.col = (t.col + 1).min(n.saturating_sub(1));
+                    t.hide(n);
+                }
+            }
+            "table-show" => {
+                if let Some(t) = &mut self.table {
+                    t.hidden.clear();
                 }
             }
             "table-cell" => {

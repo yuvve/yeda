@@ -171,17 +171,22 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
             widest.max(name.chars().count()).clamp(4, cap) as u16
         })
         .collect();
+    let vis = t.visible(columns.len());
+    if !vis.contains(&t.col) {
+        t.col = vis.iter().copied().find(|&c| c > t.col).or(vis.last().copied()).unwrap_or(0);
+    }
+    let at = vis.iter().position(|&c| c == t.col).unwrap_or(0);
     let inner = area.inner(layout::Margin::new(1, 1));
-    let fits = |from: usize, to: usize| widths[from..=to].iter().map(|w| w + 1).sum::<u16>() <= inner.width;
-    t.left = t.left.min(t.col);
-    while t.left > 0 && fits(t.left - 1, t.col) {
+    let fits = |from: usize, to: usize| vis[from..=to].iter().map(|&c| widths[c] + 1).sum::<u16>() <= inner.width;
+    t.left = t.left.min(at);
+    while t.left > 0 && fits(t.left - 1, at) {
         t.left -= 1;
     }
-    while t.left < t.col && !fits(t.left, t.col) {
+    while t.left < at && !fits(t.left, at) {
         t.left += 1;
     }
-    let mut right = t.col + 1;
-    while right < columns.len() && fits(t.left, right) {
+    let mut right = at + 1;
+    while right < vis.len() && fits(t.left, right) {
         right += 1;
     }
     let mut title = format!("Table {} ({})", t.name, rows.len());
@@ -194,15 +199,18 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     for (c, v) in &t.filters {
         title += &format!(" · {}:{v}", columns[*c]);
     }
-    let shown = t.left..right;
-    let header = Row::new(columns[shown.clone()].iter().map(|c| Cell::from(c.clone()))).style(Style::new().fg(Color::Cyan).bold());
-    let body = rows.iter().map(|r| Row::new(r[shown.clone()].iter().map(|v| Cell::from(v.lines().next().unwrap_or_default().to_string()))));
-    let widget = Table::new(body, widths[shown.clone()].iter().map(|&w| Constraint::Length(w)))
+    if !t.hidden.is_empty() {
+        title += &format!(" · {} hidden (+)", t.hidden.len());
+    }
+    let shown = &vis[t.left..right];
+    let header = Row::new(shown.iter().map(|&c| Cell::from(columns[c].clone()))).style(Style::new().fg(Color::Cyan).bold());
+    let body = rows.iter().map(|r| Row::new(shown.iter().map(|&c| Cell::from(r[c].lines().next().unwrap_or_default().to_string()))));
+    let widget = Table::new(body, shown.iter().map(|&c| Constraint::Length(widths[c])))
         .header(header)
         .block(block(title, focused))
         .row_highlight_style(Style::new().add_modifier(Modifier::BOLD))
         .cell_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
-    let mut state = TableState::default().with_selected(Some(t.row)).with_selected_column(Some(t.col - t.left));
+    let mut state = TableState::default().with_selected(Some(t.row)).with_selected_column(Some(at - t.left));
     f.render_stateful_widget(widget, area, &mut state);
     if t.open
         && let Some(r) = rows.get(t.row)
