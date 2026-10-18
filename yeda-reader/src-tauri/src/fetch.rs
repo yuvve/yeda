@@ -210,6 +210,11 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     if url != "about:blank" {
                         report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
                     }
+                    // ScienceDirect's PDF link is an intermediate page that ends in the viewer.
+                    if let Some(pdf) = fulltext::sciencedirect_pdf(&url).filter(|p| !tried.contains(p)) {
+                        tried.push(pdf.clone());
+                        let _ = pdf.parse().map(|u| window.navigate(u));
+                    }
                     // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
                     if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
                         tried.push(pdf.clone());
