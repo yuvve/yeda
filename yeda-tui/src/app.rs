@@ -4,7 +4,7 @@ use ratatui::layout::{Position, Rect};
 use crate::keys::{self, Keymap, Lookup};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -219,6 +219,9 @@ pub struct GraphView {
     /// The first text row shown, and the node it was last moved to show.
     pub scroll: usize,
     pub scroll_for: Option<usize>,
+    /// Nodes whose full lists were fetched (opened with Enter), and the fetch under way.
+    full: HashSet<usize>,
+    fetching: Option<(usize, Receiver<Result<citations::Lists, String>>)>,
 }
 
 /// What the list under the graph shows.
@@ -1887,6 +1890,7 @@ impl App {
 
     /// Applies a finished graph fetch; called from the event loop.
     pub fn poll_graph(&mut self) {
+        self.poll_lists();
         let Some(job) = &self.graph_job else { return };
         loop {
             match job.rx.try_recv() {
@@ -1948,7 +1952,20 @@ impl App {
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
         let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
         let (tab, by_year, ego) = self.graph.as_ref().map_or((GraphTab::Cites, false, false), |g| (g.tab, g.by_year, g.ego));
-        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, tab, by_year, back: Vec::new(), ego, scroll: 0, scroll_for: None });
+        self.graph = Some(GraphView {
+            graph: f.graph,
+            sel,
+            nbr: 0,
+            scope,
+            tab,
+            by_year,
+            back: Vec::new(),
+            ego,
+            scroll: 0,
+            scroll_for: None,
+            full: HashSet::new(),
+            fetching: None,
+        });
         self.right = RightView::Graph;
     }
 
@@ -1976,11 +1993,41 @@ impl App {
         }
     }
 
+    /// Opens the picked paper, fetching all its references and citing works the first time.
     fn graph_go(&mut self) {
+        let key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
+        let cache = self.lib.cache.clone().unwrap_or_else(std::env::temp_dir);
         let Some(g) = &mut self.graph else { return };
         let Some(&(_, target)) = g.entries().get(g.nbr) else { return };
         g.back.push(g.sel);
+        if !g.full.contains(&target) && g.fetching.is_none() {
+            let node = &g.graph.nodes[target];
+            self.status = format!("graph: fetching what {} {} cites and is cited by…", node.first_author, node.year.map(|y| y.to_string()).unwrap_or_default());
+            g.fetching = Some((target, citations::spawn_lists(node.id.clone(), cache, key)));
+        }
         self.graph_select(target);
+    }
+
+    /// Adds a fetched paper's lists to the graph; called from the event loop.
+    fn poll_lists(&mut self) {
+        let Some(g) = &mut self.graph else { return };
+        let Some((i, rx)) = &g.fetching else { return };
+        let i = *i;
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the fetch stopped".into()),
+        };
+        g.fetching = None;
+        match result {
+            Ok(lists) => {
+                let keys = self.lib.refs.iter().filter_map(|r| Some((graph::work_id(r)?.to_string(), r.key.clone()))).collect();
+                g.graph.extend(i, &lists.cites, &lists.cited_by, &keys);
+                g.full.insert(i);
+                self.status = format!("graph: {} references, {} citing works", lists.cites.len(), lists.cited_by.len());
+            }
+            Err(e) => self.status = format!("graph: {e}"),
+        }
     }
 
     fn graph_back(&mut self) {
