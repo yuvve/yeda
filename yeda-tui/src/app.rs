@@ -19,6 +19,7 @@ use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
+use crate::cluster::ClusterView;
 use crate::complete::Completion;
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
@@ -99,6 +100,9 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("graph-scroll-down", "scroll the graph down"),
     ("graph-scroll-up", "scroll the graph up"),
     ("open-annotation", "open the image in the viewer, or the entry in $EDITOR"),
+    ("cluster-go", "select the picked paper or label"),
+    ("cluster-back", "go back"),
+    ("cluster-tab", "list the selected node's links, or every node"),
     ("table-left", "previous column of the table; from the first, the reference list"),
     ("table-right", "next column of the table"),
     ("table-cell", "show the cell in full, or close it"),
@@ -117,9 +121,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":sync", "commit, pull and push the library with git"),
-    (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
+    (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
+    (":graph tags", "the selected or marked references and their tags, clustered"),
+    (":graph col <column>", "the same with a table column's values, such as :graph col group"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
-    (":graph close", "close the graph"),
+    (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
     (":table close", "close the table"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
@@ -225,6 +231,8 @@ pub enum RightView {
     Annotations,
     Tables,
     Graph,
+    /// `:graph tags` or `:graph col`.
+    Clusters,
 }
 
 const OPENALEX_ACCOUNT: &str = yeda_secrets::OPENALEX;
@@ -427,6 +435,7 @@ pub struct App {
     pub chooser: Option<Chooser>,
     pub right: RightView,
     pub table: Option<TableView>,
+    pub cluster: Option<ClusterView>,
     pub annots: Vec<Annotation>,
     annots_key: Option<String>,
     annots_modified: Option<std::time::SystemTime>,
@@ -496,6 +505,7 @@ impl App {
             chooser: None,
             right: RightView::Details,
             table: None,
+            cluster: None,
             annots: Vec::new(),
             annots_key: None,
             annots_modified: None,
@@ -671,6 +681,7 @@ impl App {
             Pane::Right if self.in_graph() => "graph",
             Pane::Right if self.right == RightView::Annotations => "annotations",
             Pane::Right if self.right == RightView::Tables && self.table.is_some() => "table",
+            Pane::Right if self.right == RightView::Clusters && self.cluster.is_some() => "cluster",
             _ => "normal",
         }
     }
@@ -748,7 +759,30 @@ impl App {
             }
             "open-annotation" => self.open_annotation(),
             "annotations" => self.toggle_right(RightView::Annotations),
-"table-left" => match &mut self.table {
+"cluster-go" => {
+                if let Some(c) = &mut self.cluster
+                    && let Some(&i) = c.entries().get(c.nbr)
+                {
+                    c.go(i);
+                    self.cluster_follow_list();
+                }
+            }
+            "cluster-back" => {
+                if let Some(c) = &mut self.cluster
+                    && let Some(i) = c.back.pop()
+                {
+                    c.sel = i;
+                    c.nbr = 0;
+                    self.cluster_follow_list();
+                }
+            }
+            "cluster-tab" => {
+                if let Some(c) = &mut self.cluster {
+                    c.all = !c.all;
+                    c.nbr = 0;
+                }
+            }
+            "table-left" => match &mut self.table {
                 Some(t) if t.col > 0 => t.col -= 1,
                 _ => self.pane = Pane::List,
             },
@@ -844,6 +878,7 @@ impl App {
             "move" => self.open_chooser(PickKind::Move),
             "command" => self.mode = Mode::Prompt(Prompt::Command),
             "close-or-quit" if self.right == RightView::Tables && self.table.is_some() => self.close_table(),
+            "close-or-quit" if self.right == RightView::Clusters && self.cluster.is_some() => self.close_cluster(),
             "close-or-quit" if self.graph.is_some() => self.close_graph(),
             "close-or-quit" => self.quit = true,
             "add" if args.is_empty() => self.mode = Mode::Prompt(Prompt::Add),
@@ -2016,6 +2051,7 @@ impl App {
             Pane::List => self.sel,
             Pane::Right if self.right == RightView::Tables => self.table.as_ref().map_or(0, |t| t.row),
             Pane::Right if self.right == RightView::Graph => self.graph.as_ref().map_or(0, |g| g.nbr),
+            Pane::Right if self.right == RightView::Clusters => self.cluster.as_ref().map_or(0, |c| c.nbr),
             Pane::Right => self.annot_sel,
         };
         self.move_to(cur.saturating_add_signed(delta));
@@ -2031,6 +2067,11 @@ impl App {
                 self.sel = i.min(self.visible.len().saturating_sub(1));
                 self.extend_visual();
                 self.follow_in_graph();
+            }
+            Pane::Right if self.right == RightView::Clusters => {
+                if let Some(c) = &mut self.cluster {
+                    c.nbr = i.min(c.entries().len().saturating_sub(1));
+                }
             }
             Pane::Right if self.right == RightView::Graph => {
                 if let Some(g) = &mut self.graph {
@@ -2128,11 +2169,17 @@ impl App {
             self.status = "a graph is already being fetched".into();
             return;
         }
-        let (scope, seeds): (&str, Vec<usize>) = match args.trim() {
-            "close" => return self.close_graph(),
-            "" => ("the selection", self.targets()),
+        let (scope, seeds): (&str, Vec<usize>) = match args.split_whitespace().collect::<Vec<_>>()[..] {
+            ["close"] if self.right == RightView::Clusters && self.cluster.is_some() => return self.close_cluster(),
+            ["close"] => {
+                self.close_cluster();
+                return self.close_graph();
+            }
+            ["tags"] => return self.open_cluster(None),
+            ["col", column] => return self.open_cluster(Some(column)),
+            [] | ["citations"] => ("the selection", self.targets()),
             _ => {
-                self.status = "usage: :graph[!] [close]".into();
+                self.status = "usage: :graph[!] [citations], :graph tags, :graph col <column>, :graph close".into();
                 return;
             }
         };
@@ -2263,6 +2310,13 @@ impl App {
     /// Selects the list's reference in the graph, if it is there.
     fn follow_in_graph(&mut self) {
         let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
+        if let Some(c) = &mut self.cluster
+            && let Some(i) = c.clusters.find_key(&key)
+            && i != c.sel
+        {
+            c.sel = i;
+            c.nbr = 0;
+        }
         if let Some(g) = &mut self.graph
             && let Some(i) = g.graph.find_key(&key)
             && i != g.sel
@@ -2304,6 +2358,49 @@ impl App {
         self.graph_select(target);
         self.start_graph(seeds, explored, opened, false, "", &scope, Some(id));
         self.status = format!("graph: opening {label}…");
+    }
+
+    /// Moves the reference list to the selected paper, so the details and other commands follow.
+    fn cluster_follow_list(&mut self) {
+        let Some(c) = &self.cluster else { return };
+        if let yeda_core::clusters::Kind::Paper(key) = &c.clusters.nodes[c.sel].kind
+            && let Some(pos) = self.visible.iter().position(|&r| self.lib.refs[r].key == *key)
+        {
+            self.sel = pos;
+        }
+    }
+
+    /// `:graph tags` (`column` None) or `:graph col <column>`, of the selected or marked references.
+    fn open_cluster(&mut self, column: Option<&str>) {
+        let refs: Vec<&Ref> = self.targets().iter().map(|&i| &self.lib.refs[i]).collect();
+        if refs.is_empty() {
+            return self.status = "no reference selected".into();
+        }
+        let clusters = match column {
+            None => yeda_core::clusters::Clusters::build(refs, |r| r.tags.clone()),
+            Some(column) => {
+                let Some(table) = self.lib.tables.iter().find(|(_, t)| t.columns.iter().any(|c| c == column)).map(|(n, _)| n.clone()) else {
+                    let all: Vec<&str> = self.lib.tables.values().flat_map(|t| t.columns.iter().map(String::as_str)).collect();
+                    return self.status = format!("no table has a column '{column}' (columns: {})", all.join(", "));
+                };
+                yeda_core::clusters::Clusters::build(refs, |r| r.tables.get(&table).and_then(|row| row.get(column)).cloned().into_iter().collect())
+            }
+        };
+        if clusters.nodes.is_empty() {
+            return self.status = format!("none of these references has {}", column.map_or("tags".to_string(), |c| format!("a value for '{c}'")));
+        }
+        self.cluster = Some(ClusterView::new(clusters, column.unwrap_or("tags").to_string()));
+        self.right = RightView::Clusters;
+        self.pane = Pane::Right;
+        self.follow_in_graph();
+    }
+
+    fn close_cluster(&mut self) {
+        self.cluster = None;
+        if self.right == RightView::Clusters {
+            self.right = RightView::Details;
+            self.pane = Pane::List;
+        }
     }
 
     fn graph_back(&mut self) {

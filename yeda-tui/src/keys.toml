@@ -1,6 +1,6 @@
 # The default key bindings. Override or add any of them under [keys.<context>] in
 # ~/.config/yeda/config.toml; "" unbinds a key. A binding is a command line, as typed after ':'.
-# The library, graph, table and annotations contexts take precedence over normal in their column.
+# The library, graph, cluster, table and annotations contexts take precedence over normal in their column.
 
 [keys.normal]
 "j" = "down"
@@ -54,6 +54,13 @@
 "N" = "neighbourhood"
 "a" = "graph-add"
 "o" = "graph-open"
+"Esc" = "graph close"
+
+[keys.cluster]
+"Enter" = "cluster-go"
+"Backspace" = "cluster-back"
+"Tab" = "cluster-tab"
+"shift-Tab" = "cluster-tab"
 "Esc" = "graph close"
 
 [keys.table]

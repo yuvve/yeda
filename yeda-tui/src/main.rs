@@ -1,5 +1,6 @@
 mod app;
 mod citations;
+mod cluster;
 mod complete;
 mod fetch;
 mod keys;

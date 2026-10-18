@@ -73,7 +73,7 @@ SAVED (CUSTOM) SEARCHES
   The library column also lists every collection (a collection includes its
   sub-collections) and every tag. Selecting one filters the list the same way.
 
-CITATION GRAPH  ( :graph )
+CITATION GRAPH  ( :graph [citations] )
 
   :graph graphs the selected reference, or the marked ones (v, V; V G marks
   the whole list).
@@ -118,6 +118,20 @@ CITATION GRAPH  ( :graph )
   openalex.org/settings/api) has its own, larger one. :secrets sets it
   and keeps it in the system secret store, never in a file. You are also
   asked when the keyless budget runs out, and OPENALEX_API_KEY works too.
+
+TAG AND COLUMN GRAPHS  ( :graph tags, :graph col <column> )
+
+  :graph tags draws the selected or marked references and their tags, each
+  paper linked to its tags; :graph col <column> does the same with a table
+  column's values, such as :graph col group. Papers sharing a value sit
+  together around it (■, with the number of papers); papers without one are
+  left out. Only the selected node's links are drawn.
+
+  The list under it shows the selected node's links (a tag's papers, a
+  paper's tags), or with Tab every node, the largest values first. j/k pick
+  one, Enter selects it, Backspace goes back, and Esc (or q, or :graph
+  close) closes the graph. Selecting a paper in the reference list selects
+  it in the graph too.
 
 CITING  ( :cite [format] )
 
