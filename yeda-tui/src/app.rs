@@ -19,6 +19,7 @@ use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
+use crate::complete::Completion;
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
 use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
@@ -83,7 +84,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("extract", "extract the annotations embedded in the PDF"),
     ("tag-color", "colour the selected tag (library column)"),
     ("delete", "delete the reference or saved search"),
-    ("command", "command line; Up/Down recall earlier commands"),
+    ("command", "command line; Up/Down recall earlier commands, Tab/shift-Tab complete"),
     ("close-or-quit", "close the graph if it's open, else quit"),
     ("graph-go", "go to the picked neighbour"),
     ("graph-back", "go back"),
@@ -447,6 +448,8 @@ pub struct App {
     /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
     history: Vec<String>,
     history_at: Option<usize>,
+    /// Tab completion in progress on the command line.
+    pub completion: Option<Completion>,
 }
 
 const HISTORY_LEN: usize = 200;
@@ -457,6 +460,7 @@ impl App {
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
             history_at: None,
+            completion: None,
             log: crate::log::Log::open(),
             dir,
             sidebar: browse::sidebar(&lib),
@@ -866,6 +870,27 @@ impl App {
         }
     }
 
+    /// Tab: the first candidate for the last word, then the next; shift-Tab goes back. A single
+    /// candidate is taken, with a space for the next word.
+    fn complete(&mut self, back: bool) {
+        match &mut self.completion {
+            Some(c) => c.step(back),
+            None => {
+                let Some(mut c) = Completion::new(&self.lib, &self.input) else { return };
+                if back {
+                    c.step(true);
+                }
+                self.completion = Some(c);
+            }
+        }
+        let Some(c) = &self.completion else { return };
+        self.input = c.line();
+        if c.candidates.len() == 1 {
+            self.input.push(' ');
+            self.completion = None;
+        }
+    }
+
     /// Up (`back`) or Down through the command history; past the newest is an empty line.
     fn recall(&mut self, back: bool) {
         let at = match (self.history_at, back) {
@@ -883,6 +908,10 @@ impl App {
         if mode == Mode::Prompt(Prompt::Command) && matches!(k.code, KeyCode::Up | KeyCode::Down) {
             return self.recall(k.code == KeyCode::Up);
         }
+        if mode == Mode::Prompt(Prompt::Command) && matches!(k.code, KeyCode::Tab | KeyCode::BackTab) {
+            return self.complete(k.code == KeyCode::BackTab);
+        }
+        self.completion = None;
         let buf = match mode {
             Mode::Search => &mut self.query,
             Mode::SideSearch => &mut self.side_query,
