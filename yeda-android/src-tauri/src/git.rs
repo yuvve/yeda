@@ -46,6 +46,10 @@ pub fn init() {
     #[cfg(target_os = "android")]
     unsafe {
         let _ = git2::opts::set_ssl_cert_dir("/system/etc/security/cacerts");
+        // Shared storage shows every folder as owned by the media provider, never by the app, so
+        // libgit2's ownership check would refuse every library; any app with storage access can
+        // write there anyway.
+        let _ = git2::opts::set_verify_owner_validation(false);
     }
 }
 
