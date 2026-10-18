@@ -2074,6 +2074,13 @@ impl App {
                 "the downloaded PDF doesn't look like this paper (no DOI or title match); it's in {}",
                 file.display()
             );
+            if let (Some(max), Ok(pages)) = (fulltext::max_pages(&self.lib.refs[i]), poppler::page_count(file)) {
+                anyhow::ensure!(
+                    pages <= max,
+                    "the downloaded PDF has {pages} pages, more than this paper should (a whole issue?); if it's right, :attach {}",
+                    file.display()
+                );
+            }
         }
         let r = self.attach_file(i, file, &job.location, job.password.as_deref())?;
         yeda_fs::apply(&self.dir, [self.lib.save(&r)?])?;

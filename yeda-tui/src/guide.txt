@@ -129,7 +129,9 @@ FETCHING PDFS  ( :fetch [location] )
   when the proxy asks, and click through where it stops (a bot check, a page
   without a PDF link). Its Fetch menu skips a paper or stops. Every PDF is
   checked against the paper, then copied or uploaded to the location, as with
-  :attach. The ones that fail are listed (:failed) and copied.
+  :attach. One from the window that is far longer than the paper (a whole
+  issue?) stays in the downloads folder for :attach. The ones that fail are
+  listed (:failed) and copied.
 
     [fulltext]
     location = "papers"                                  # where PDFs go

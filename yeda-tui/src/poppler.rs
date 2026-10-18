@@ -15,6 +15,14 @@ pub fn pdf_text(pdf: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&run("pdftotext", &[pdf.as_os_str(), "-".as_ref()])?).into())
 }
 
+pub fn page_count(pdf: &Path) -> Result<u32> {
+    let out = run("pdfinfo", &[pdf.as_os_str()])?;
+    String::from_utf8_lossy(&out)
+        .lines()
+        .find_map(|l| l.strip_prefix("Pages:")?.trim().parse().ok())
+        .with_context(|| format!("no page count for {}", pdf.display()))
+}
+
 /// `pdftotext -bbox` output: every word with its box.
 pub fn word_boxes(pdf: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&run("pdftotext", &["-bbox".as_ref(), pdf.as_os_str(), "-".as_ref()])?).into())
