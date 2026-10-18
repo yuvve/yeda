@@ -518,22 +518,50 @@ fn key_help(keymap: &Keymap) -> Vec<Line<'static>> {
 
 fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     let (title, lines): (&str, Vec<Line>) = match page {
-        HelpPage::Keys => (" Keys · j/k scroll · q close · :help for the guide ", key_help(&app.keymap)),
+        HelpPage::Keys => (" Keys · j/k scroll · / search · q close · :help for the guide ", key_help(&app.keymap)),
         HelpPage::Guide => {
             // Headings are the unindented lines.
             let lines = GUIDE
                 .lines()
                 .map(|l| if l.starts_with(' ') || l.is_empty() { Line::from(l) } else { Line::from(l).bold().fg(Color::Cyan) })
                 .collect();
-            (" Guide · j/k Ctrl-d/u scroll · q close ", lines)
+            (" Guide · j/k Ctrl-d/u scroll · / search · q close ", lines)
         }
         HelpPage::Failed => (if app.report_copied { " Failed · copied to the clipboard · q close " } else { " Failed · q close " }, app.report.iter().map(|l| Line::from(l.as_str())).collect()),
     };
-    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2;
-    let area = popup(main, width, lines.len() as u16 + 2);
+    app.help_lines = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+    let lines: Vec<Line> = lines.into_iter().map(|l| highlight(l, &app.help_query)).collect();
+    let area = main;
     app.help_scroll = app.help_scroll.min((lines.len() as u16).saturating_sub(area.height.saturating_sub(2)));
+    let mut title = title.to_string();
+    if app.help_typing || !app.help_query.is_empty() {
+        title = format!(" /{}{} · n/N next/previous · Esc clears ", app.help_query, if app.help_typing { "▏" } else { "" });
+    }
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(title.into(), true)), area);
+    f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(block(title, true)), area);
+}
+
+/// `line` with each case-insensitive occurrence of `query` highlighted.
+fn highlight<'a>(line: Line<'a>, query: &str) -> Line<'a> {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let lower = text.to_lowercase();
+    let query = query.to_lowercase();
+    // Lower-casing can change byte lengths outside ASCII; such lines go unhighlighted.
+    if query.is_empty() || lower.len() != text.len() || !lower.contains(&query) {
+        return line;
+    }
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for (i, _) in lower.match_indices(&query) {
+        if i < at {
+            continue;
+        }
+        spans.push(Span::raw(text[at..i].to_string()));
+        spans.push(Span::raw(text[i..i + query.len()].to_string()).black().on_yellow());
+        at = i + query.len();
+    }
+    spans.push(Span::raw(text[at..].to_string()));
+    Line::from(spans).style(line.style)
 }
 
 /// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
