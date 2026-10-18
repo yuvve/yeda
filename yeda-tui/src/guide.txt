@@ -80,7 +80,9 @@ CITATION GRAPH  ( :graph )
 
   The graph shows the seeds (◉), other library papers citing or cited by
   them (●), and the 20 papers outside the library linked to the most seeds
-  (○). Rows are years, newest at the top. It stays in the right column and
+  (○). Rows are years, newest at the top. Arrows point at the cited paper;
+  the selected paper's citations are yellow, the one to the picked
+  neighbour bright yellow, the rest faint. It stays in the right column and
   follows the reference list. In it, j/k pick a neighbour (← cites the
   selected paper, → is cited by it), Enter goes there, Backspace goes back,
   a adds the paper by DOI, o opens its DOI in the browser, N shows only the
