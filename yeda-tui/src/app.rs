@@ -1214,11 +1214,11 @@ impl App {
             KeyCode::Char('n') if ctrl => form.pick = (form.pick + 1).min(form.suggestions().len().saturating_sub(1)),
             KeyCode::Char('p') if ctrl => form.pick = form.pick.saturating_sub(1),
             KeyCode::Tab | KeyCode::Right => form.accept(),
-            KeyCode::Char('x') if ctrl => {
+            KeyCode::Char('l') if ctrl => {
                 form.values[form.sel].clear();
                 form.pick = 0;
             }
-            KeyCode::Char('l') if ctrl => {
+            KeyCode::Char('x') if ctrl => {
                 form.values.iter_mut().for_each(String::clear);
                 form.other.clear();
                 form.pick = 0;

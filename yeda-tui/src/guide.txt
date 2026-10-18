@@ -43,7 +43,7 @@ FILTER  ( f )
   A form with one box per field (author, title, year, tag, collection,
   status, type, DOI) plus free text. It edits the same query as /, so
   everything above works inside the boxes, | and ! included. Ctrl-D and
-  Ctrl-U move between boxes, Ctrl-X clears a box and Ctrl-L every box,
+  Ctrl-U move between boxes, Ctrl-L clears a box and Ctrl-X every box,
   Enter applies, Esc cancels.
 
   Below the boxes, values the library already has for that field are

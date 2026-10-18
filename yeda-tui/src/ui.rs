@@ -391,7 +391,7 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     let height = (FILTER_FIELDS.len() + 2 + FilterForm::SHOWN) as u16 + 2;
     let area = popup(main, 60, height);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(" Filter · ^D/^U move · ^X clear · ^L all · Enter · Esc ".into(), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(" Filter · ^D/^U move · ^L clear · ^X all · Enter · Esc ".into(), true)), area);
 }
 
 fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
