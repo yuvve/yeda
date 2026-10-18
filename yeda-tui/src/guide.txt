@@ -91,8 +91,8 @@ CITATION GRAPH  ( :graph )
   A busy year takes up to four rows, and labels go to the most important
   papers first: the selected one, the picked neighbour, the listed ones,
   the seeds. Papers left without room show just their marker. A graph
-  taller than the column scrolls with Ctrl-e/Ctrl-y and follows the picked
-  neighbour.
+  taller than the column scrolls with Ctrl-e/Ctrl-y or the mouse wheel, and
+  follows the picked neighbour.
 
   Data comes from OpenAlex. References are matched by DOI and get an
   `openalex` field. For each seed, its references and its 100 most cited

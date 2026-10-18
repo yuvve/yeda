@@ -83,7 +83,7 @@ pub const HELP: &[(&str, &str)] = &[
     (":graph[!] [selected|filtered|prefetch]", "citation graph from OpenAlex (:help explains it)"),
     (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
     (":graph close", "close the graph (Esc in the graph does too)"),
-    ("N  Ctrl-e Ctrl-y", "in the graph: only the selected paper's links / scroll"),
+    ("N  Ctrl-e Ctrl-y", "in the graph: only the selected paper's links / scroll (or the mouse wheel)"),
     (":cite [format]", "copy the selected or marked references: bibtex, a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -1612,7 +1612,14 @@ impl App {
         if pane == Pane::Right && self.right == RightView::Details {
             return;
         }
+        // The graph's own area, as opposed to the citation list under it.
+        let on_graph = pane == Pane::Right && offset.is_none() && self.right == RightView::Graph;
         match m.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if on_graph => {
+                if let Some(g) = &mut self.graph {
+                    g.scroll = if m.kind == MouseEventKind::ScrollDown { g.scroll + 3 } else { g.scroll.saturating_sub(3) };
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.pane = pane;
                 if let Some(offset) = offset {
