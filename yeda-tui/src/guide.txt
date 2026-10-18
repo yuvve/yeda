@@ -86,7 +86,7 @@ CITATION GRAPH  ( :graph )
 
   The list under it has tabs, switched with Tab and shift-Tab: Seeds,
   Cites → (what the selected paper cites), ← Cited by, ▲ Top cited and
-  ▼ Top citing (outside papers cited by or citing the most seeds). Rows
+  ▼ Top citing (outside papers cited by or citing the seeds). Rows
   show the year and OpenAlex's citation count; s sorts by either. j/k pick
   a paper, Enter goes there, Backspace goes back, a adds it by DOI, o opens
   its DOI in the browser, N shows only the selected paper and its direct
