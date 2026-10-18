@@ -1,21 +1,26 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
-use yeda_core::library::{Dav, Library};
+use yeda_core::browse::SortField;
+use yeda_core::library::{Dav, Library, SavedSearch};
 use yeda_core::llm::{Profile, Provider};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
     Llm,
     Webdav,
+    /// Editing a saved search; nothing to test.
+    Search,
 }
 
-/// The `:setup` form for one LLM profile or WebDAV location; the last field is the secret.
+/// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; or a saved search being edited.
 pub struct SetupForm {
     pub kind: Kind,
     pub values: Vec<String>,
     pub sel: usize,
     /// The connection is being tested; the form waits.
     pub testing: bool,
+    /// The saved search's name before editing.
+    pub old: Option<String>,
 }
 
 /// What the form saves, once its connection works.
@@ -23,6 +28,7 @@ pub struct SetupForm {
 pub enum Setup {
     Llm(Profile),
     Webdav(Dav),
+    Search(SavedSearch),
 }
 
 impl SetupForm {
@@ -40,9 +46,15 @@ impl SetupForm {
                 Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), String::new()],
                 None => vec![name.into(), String::new(), String::new(), String::new()],
             },
+            Kind::Search => {
+                let s = lib.searches.get(name);
+                let sort = s.and_then(|s| Some(format!("{}{}", if s.descending { "-" } else { "" }, sort_name(s.sort?))));
+                vec![name.into(), s.map(|s| s.query.clone()).unwrap_or_default(), sort.unwrap_or_default()]
+            }
         };
         let sel = if name.is_empty() { 0 } else { 1 };
-        SetupForm { kind, values, sel, testing: false }
+        let old = (kind == Kind::Search).then(|| name.to_string());
+        SetupForm { kind, values, sel, testing: false, old }
     }
 
     /// Each field's label and hint.
@@ -61,6 +73,11 @@ impl SetupForm {
                 ("User", ""),
                 ("Password", "kept in the secret store"),
             ],
+            Kind::Search => &[
+                ("Name", ""),
+                ("Query", "as typed after /"),
+                ("Sort", "key, title, author, year, status or type; -year for descending; empty for none"),
+            ],
         }
     }
 
@@ -69,7 +86,11 @@ impl SetupForm {
     }
 
     pub fn secret(&self) -> Option<String> {
-        Some(self.values.last()?.clone()).filter(|s| !s.is_empty())
+        Some(self.values.last()?.clone()).filter(|s| !s.is_empty() && self.kind != Kind::Search)
+    }
+
+    pub fn masked(&self, field: usize) -> bool {
+        self.kind != Kind::Search && field == self.values.len() - 1
     }
 
     /// The `[llm.<name>]` or `[locations.<name>]` table, checked by reading it back as yeda does.
@@ -106,6 +127,17 @@ impl SetupForm {
                 t.insert("user".into(), v[2].into());
                 Setup::Webdav(Dav::deserialize(toml::Value::Table(t.clone()))?)
             }
+            Kind::Search => {
+                let (descending, field) = match v[2].strip_prefix('-') {
+                    Some(f) => (true, f),
+                    None => (false, v[2]),
+                };
+                let sort = match field {
+                    "" => None,
+                    f => Some(SortField::deserialize(toml::Value::String(f.into())).map_err(|_| anyhow::anyhow!("sort by key, title, author, year, status or type"))?),
+                };
+                Setup::Search(SavedSearch { query: v[1].into(), sort, descending: descending && sort.is_some() })
+            }
         };
         Ok((t, setup))
     }
@@ -116,6 +148,7 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     match setup {
         Setup::Llm(p) => yeda_net::llm::ping(p, secret),
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
+        Setup::Search(_) => Ok(()),
     }
 }
 
@@ -124,6 +157,16 @@ pub fn account(setup: &Setup) -> String {
     match setup {
         Setup::Llm(p) => yeda_secrets::llm_account(p.key_env()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
+        Setup::Search(_) => String::new(),
+    }
+}
+
+/// As `[searches]` entries spell it.
+fn sort_name(f: SortField) -> &'static str {
+    match f {
+        SortField::Author => "author",
+        SortField::Status => "status",
+        f => f.name(),
     }
 }
 
@@ -150,5 +193,14 @@ mod tests {
         let (t, s) = f.section().unwrap();
         assert!(!t.contains_key("password"));
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");
+
+        let lib = Library::parse(Some("[searches]\nnew = { query = \"tag:x\", sort = \"author\", descending = true }\n"), None, [], None).unwrap();
+        let mut f = SetupForm::new(Kind::Search, "new", &lib);
+        assert_eq!(f.values, ["new", "tag:x", "-author"]);
+        f.values[2] = "year".into();
+        let Ok((_, Setup::Search(s))) = f.section() else { panic!() };
+        assert_eq!((s.sort, s.descending), (Some(SortField::Year), false));
+        f.values[2] = "-pages".into();
+        assert!(f.section().is_err());
     }
 }

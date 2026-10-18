@@ -10,7 +10,7 @@ type Filter =
 	| { kind: 'tag'; value: string };
 
 interface Overview {
-	sidebar: { filter: Filter; color: string | null }[];
+	sidebar: { filter: Filter; color: string | null; sort: Sort | null }[];
 	statuses: string[];
 	filter_fields: [string, string][];
 	sort_fields: [string, string][];
@@ -221,7 +221,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 		const saveSearch = search.value.trim() && button('Save this search', () => run(async () => {
 			const name = window.prompt('Name for this search');
 			if (!name) return;
-			await invoke('save_search', { name, query: search.value });
+			await invoke('save_search', { name, query: search.value, sort, old: null });
 			filter = { kind: 'search', value: [name, search.value] };
 			search.value = '';
 			await refresh();
@@ -247,23 +247,45 @@ export function showBrowser(openReader: () => void): () => boolean {
 		text.focus();
 	}
 
+	function showSearchEdit(old: string, query: string, order: Sort | null) {
+		const name = h('input', { value: old });
+		const text = h('input', { value: query, autocapitalize: 'off' });
+		const field = h('select', {}, h('option', { value: '' }, 'unsorted'),
+			...overview.sort_fields.map(([f, label]) => h('option', { value: f, selected: f === order?.field }, label)));
+		const descending = h('input', { type: 'checkbox', checked: order?.descending ?? false });
+		const save = () => run(async () => {
+			const sortBy = field.value ? { field: field.value, descending: descending.checked } : null;
+			await invoke('save_search', { name: name.value.trim(), query: text.value, sort: sortBy, old });
+			filter = { kind: 'search', value: [name.value.trim(), text.value] };
+			if (sortBy) sort = sortBy;
+			await refresh();
+			await showList();
+		});
+		show(h('h2', {}, 'Saved search'),
+			h('table', {}, h('tr', {}, h('td', {}, 'Name'), h('td', {}, name)), h('tr', {}, h('td', {}, 'Query'), h('td', {}, text)),
+				h('tr', {}, h('td', {}, 'Sort'), h('td', {}, field, ' ', h('label', { className: 'check' }, descending, ' descending')))),
+			h('div', { className: 'actions' }, button('Save', save), button('Cancel', () => showSidebar())));
+	}
+
 	function showSidebar() {
-		const entries = overview.sidebar.map(({ filter: f, color }) => {
+		const entries = overview.sidebar.map(({ filter: f, color, sort: order }) => {
 			const label = h('span', { style: color ? `color: ${color}` : '' }, filterLabel(f));
 			const pick = () => run(async () => {
 				filter = f;
+				if (order) sort = order;
 				await refresh();
 				await showList();
 			});
 			const extra = f.kind === 'tag'
 				? button('colour', () => showTagColor(f.value, color))
-				: f.kind === 'search' && button('delete', () => run(async () => {
-					if (!window.confirm(`Delete saved search "${f.value[0]}"?`)) return;
-					await invoke('delete_search', { name: f.value[0] });
-					filter = { kind: 'all' };
-					await refresh();
-					showSidebar();
-				}));
+				: f.kind === 'search' && h('span', {}, button('edit', () => showSearchEdit(f.value[0], f.value[1], order)), ' ',
+					button('delete', () => run(async () => {
+						if (!window.confirm(`Delete saved search "${f.value[0]}"?`)) return;
+						await invoke('delete_search', { name: f.value[0] });
+						filter = { kind: 'all' };
+						await refresh();
+						showSidebar();
+					})));
 			const li = h('li', {}, label, ' ', extra || null);
 			label.onclick = pick;
 			label.style.whiteSpace = 'pre';
@@ -523,7 +545,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 				'Quote values with spaces: status:"To Read". An empty value ("") finds references without that field.',
 				'Values are fuzzy; ^ and $ anchor them: status:"^Read$".'),
 			...section('Browsing',
-				'The first button picks a collection, tag or saved search; "Save this search" under a search keeps it.',
+				'The first button picks a collection, tag or saved search; "Save this search" under a search keeps it with the current sort, and edit there changes its name, query or sort.',
 				'Filter opens a form with one box per field and suggestions from the library.',
 				'The sort button picks the order; picking the current field again reverses it.'),
 			...section('A reference',

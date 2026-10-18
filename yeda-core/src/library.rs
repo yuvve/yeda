@@ -66,6 +66,22 @@ impl Dav {
     }
 }
 
+/// A `[searches]` entry: the query, and the order its results are shown in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedSearch {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<crate::browse::SortField>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub descending: bool,
+}
+
+impl SavedSearch {
+    pub fn order(&self) -> Option<crate::browse::Sort> {
+        self.sort.map(|field| crate::browse::Sort { field, descending: self.descending })
+    }
+}
+
 /// A `[locations]` entry: a local folder, or a table describing a WebDAV server.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -79,7 +95,7 @@ enum Location {
 struct Config {
     locations: BTreeMap<String, Location>,
     tag_colors: BTreeMap<String, String>,
-    searches: BTreeMap<String, String>,
+    searches: BTreeMap<String, SavedSearch>,
     reader: Option<String>,
     tables: BTreeMap<String, Table>,
     llm: BTreeMap<String, Profile>,
@@ -108,7 +124,7 @@ pub struct Library {
     /// Where the client keeps downloaded copies of remote PDFs: `<cache>/<location>/<key>/<file>`.
     pub cache: Option<PathBuf>,
     pub tag_colors: BTreeMap<String, String>,
-    pub searches: BTreeMap<String, String>,
+    pub searches: BTreeMap<String, SavedSearch>,
     /// Command that opens PDFs as `<reader> <pdf> --annotations <dir>`; clients default to yeda-reader.
     pub reader: Option<String>,
     pub tables: BTreeMap<String, Table>,
@@ -215,6 +231,19 @@ impl Library {
     pub fn update_config(&mut self, edit: impl FnOnce(&mut toml::Table) -> Result<()>) -> Result<Effect> {
         edit(&mut self.shared)?;
         Ok(Effect::write(CONFIG, toml::to_string(&self.shared)?))
+    }
+
+    /// Saves the search as `name`, replacing `old` when it is renamed.
+    pub fn save_search(&mut self, name: &str, saved: &SavedSearch, old: Option<&str>) -> Result<Effect> {
+        let value = toml::Value::try_from(saved)?;
+        self.update_config(|t| {
+            let searches = config_section(t, "searches")?;
+            if let Some(old) = old {
+                searches.remove(old);
+            }
+            searches.insert(name.into(), value);
+            Ok(())
+        })
     }
 
     /// The named profile, else `default_llm`, else the only profile configured.
@@ -345,6 +374,17 @@ fn expand_home(p: &str, home: Option<&Path>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saves_searches_with_their_order() {
+        let mut lib = Library::parse(Some("[searches]\nold = { query = \"tag:x\" }\n"), None, [], None).unwrap();
+        assert_eq!(lib.searches["old"].order(), None);
+        let saved = SavedSearch { query: "year:2020".into(), sort: Some(crate::browse::SortField::Year), descending: true };
+        let Effect::Write { bytes, .. } = lib.save_search("new", &saved, Some("old")).unwrap() else { panic!() };
+        let lib = Library::parse(Some(std::str::from_utf8(&bytes).unwrap()), None, [], None).unwrap();
+        assert_eq!(lib.searches.keys().collect::<Vec<_>>(), ["new"]);
+        assert_eq!(lib.searches["new"], saved);
+    }
+
     use super::*;
 
     #[test]

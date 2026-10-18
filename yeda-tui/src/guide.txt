@@ -57,17 +57,19 @@ SORT  ( s )
 
 SAVED (CUSTOM) SEARCHES
 
-  1. Search with / or f until the list shows what you want.
+  1. Search with / or f, and sort with s, until the list shows what you want.
   2. Type  :save <name>
   The search appears near the top of the library column, marked ⌕. Select it
-  to show its references; a / search then narrows within it (AND). To delete
-  it, select it in the library column and press dd.
+  to show its references in its saved order; a / search then narrows within
+  it (AND). In the library column, e edits its name, query and sort, and dd
+  deletes it.
 
-  Saved searches live in yeda.toml, so you can also write them by hand:
+  Saved searches live in yeda.toml, so you can also write them by hand;
+  sort (key, title, author, year, status, type) and descending are optional:
 
     [searches]
-    "To read"          = 'status:"^To Read$"'
-    "Thesis, unread"   = 'coll:^thesis status:!^Read$'
+    "To read"        = { query = 'status:"^To Read$"', sort = "year", descending = true }
+    "Thesis, unread" = { query = 'coll:^thesis status:!^Read$' }
     "Vision or ML"     = 'tag:vision|ml'
 
   The library column also lists every collection (a collection includes its

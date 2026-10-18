@@ -170,6 +170,8 @@ fn set_secret(account: String, secret: String) -> Res<()> {
 struct SideEntry {
     filter: Filter,
     color: Option<String>,
+    /// A saved search's order.
+    sort: Option<Sort>,
 }
 
 #[derive(Serialize)]
@@ -198,7 +200,11 @@ fn refresh(app: AppHandle, state: State<Shared>) -> Res<Overview> {
                     Filter::Tag(t) => b.lib.tag_colors.get(t).cloned(),
                     _ => None,
                 };
-                SideEntry { filter, color }
+                let sort = match &filter {
+                    Filter::Search(name, _) => b.lib.searches.get(name).and_then(|s| s.order()),
+                    _ => None,
+                };
+                SideEntry { filter, color, sort }
             })
             .collect();
         Ok(Overview {
@@ -331,12 +337,11 @@ fn set_tag_color(app: AppHandle, state: State<Shared>, tag: String, color: Strin
 }
 
 #[tauri::command]
-fn save_search(app: AppHandle, state: State<Shared>, name: String, query: String) -> Res<()> {
+/// Saves a search with its order (`None`: unsorted), replacing `old` when it is renamed.
+fn save_search(app: AppHandle, state: State<Shared>, name: String, query: String, sort: Option<Sort>, old: Option<String>) -> Res<()> {
+    let saved = library::SavedSearch { query, sort: sort.map(|s| s.field), descending: sort.is_some_and(|s| s.descending) };
     state.change(&app, |b| {
-        let effect = b.lib.update_config(|t| {
-            config_section(t, "searches")?.insert(name, query.into());
-            Ok(())
-        })?;
+        let effect = b.lib.save_search(&name, &saved, old.as_deref().filter(|o| *o != name))?;
         b.apply(vec![effect])
     })
 }

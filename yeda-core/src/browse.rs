@@ -53,7 +53,7 @@ pub fn sidebar(lib: &Library) -> Vec<Filter> {
     }
     let (colored, plain): (Vec<_>, Vec<_>) = tags.into_iter().partition(|t| lib.tag_colors.contains_key(t));
     std::iter::once(Filter::All)
-        .chain(lib.searches.iter().map(|(n, q)| Filter::Search(n.clone(), q.clone())))
+        .chain(lib.searches.iter().map(|(n, s)| Filter::Search(n.clone(), s.query.clone())))
         .chain(colls.into_iter().map(Filter::Collection))
         .chain(colored.into_iter().chain(plain).map(Filter::Tag))
         .collect()
@@ -157,7 +157,7 @@ mod tests {
             ("a".to_string(), "collections = [\"thesis/ch2\"]\ntags = [\"plain\", \"hot\"]\n".to_string()),
             ("b".into(), "title = \"Other\"\n".into()),
         ];
-        let lib = Library::parse(Some("[tag_colors]\nhot = \"red\"\n[searches]\nmine = \"tag:plain\"\n"), None, refs, None).unwrap();
+        let lib = Library::parse(Some("[tag_colors]\nhot = \"red\"\n[searches]\nmine = { query = \"tag:plain\" }\n"), None, refs, None).unwrap();
         let names: Vec<_> = sidebar(&lib).iter().map(|f| f.name().to_string()).collect();
         assert_eq!(names, ["All", "mine", "thesis", "thesis/ch2", "hot", "plain"]);
         let mut s = Searcher::new();
