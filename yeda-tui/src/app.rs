@@ -117,7 +117,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph"),
-    (":table [name]", "the table of the selected or marked references (:help explains it)"),
+    (":table", "every table's columns for the selected or marked references (:help explains it)"),
     (":table close", "close the table"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
@@ -741,7 +741,7 @@ impl App {
                 _ => self.pane = Pane::List,
             },
             "table-right" => {
-                let n = self.table.as_ref().map_or(0, |t| t.columns(&self.lib).len());
+                let n = table::columns(&self.lib).len();
                 if let Some(t) = &mut self.table {
                     t.col = (t.col + 1).min(n.saturating_sub(1));
                 }
@@ -1846,15 +1846,14 @@ impl App {
         if args == "close" {
             return self.close_table();
         }
-        let name = match self.table_name(Some(args).filter(|a| !a.is_empty())) {
-            Ok(n) => n,
-            Err(e) => return self.status = format!("{e:#}"),
-        };
+        if !args.is_empty() {
+            return self.status = "usage: :table [close]".into();
+        }
         let keys: Vec<String> = self.targets().iter().map(|&i| self.lib.refs[i].key.clone()).collect();
         if keys.is_empty() {
             return self.status = "no reference selected".into();
         }
-        self.table = Some(TableView::new(name, keys));
+        self.table = Some(TableView::new(keys));
         self.right = RightView::Tables;
         self.pane = Pane::Right;
     }
@@ -1877,12 +1876,10 @@ impl App {
         let rows = self.table_rows();
         let Some(t) = &self.table else { return };
         let Some(key) = rows.get(t.row).map(|r| r[0].clone()) else { return };
-        let column = t.columns(&self.lib)[t.col].clone();
-        let name = t.name.clone();
-        if tables::BUILTIN.contains(&column.as_str()) {
+        let Some(table::Column { table: Some(name), name: column, .. }) = table::columns(&self.lib).into_iter().nth(t.col) else {
             self.edit = Some((self.path(&library::ref_path(&key)), None));
             return;
-        }
+        };
         let path = self.path(&library::ai_path(&key));
         let find = |path: &PathBuf| fs::read_to_string(path).ok().and_then(|text| table::line_of(&text, &name, &column));
         if find(&path).is_none()

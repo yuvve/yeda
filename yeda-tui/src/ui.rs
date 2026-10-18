@@ -1,3 +1,4 @@
+use crate::table;
 use crate::app::{ACTIONS, App, GraphTab, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
 use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
@@ -157,7 +158,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = app.table_rows();
     let focused = app.pane == Pane::Right;
     let Some(t) = &mut app.table else { return };
-    let columns = t.columns(&app.lib);
+    let columns: Vec<String> = table::columns(&app.lib).into_iter().map(|c| c.label).collect();
     t.row = t.row.min(rows.len().saturating_sub(1));
     t.col = t.col.min(columns.len().saturating_sub(1));
     let widths: Vec<u16> = columns
@@ -182,7 +183,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     while right < columns.len() && fits(t.left, right) {
         right += 1;
     }
-    let mut title = format!("Table {} ({})", t.name, rows.len());
+    let mut title = format!("Table ({})", rows.len());
     if let Some((c, descending)) = t.sort {
         title += &format!(" {} {}", if descending { "▼" } else { "▲" }, columns[c]);
     }
@@ -295,7 +296,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
         Mode::Prompt(Prompt::TableSearch) => format!("table /{}", app.input),
         Mode::Prompt(Prompt::TableFilter) => {
-            let column = app.table.as_ref().map(|t| t.columns(&app.lib)[t.col].clone()).unwrap_or_default();
+            let column = app.table.as_ref().and_then(|t| table::columns(&app.lib).into_iter().nth(t.col)).map(|c| c.label).unwrap_or_default();
             format!("{column} (!x: not x, \"\": empty): {}", app.input)
         }
         Mode::Prompt(Prompt::Add) => format!("add DOIs / arXiv IDs / ISBNs: {}", app.input.replace('\n', "  ")),
