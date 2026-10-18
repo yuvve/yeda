@@ -49,7 +49,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `x` | Extract the annotations embedded in the PDF |
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |
-| `?` | List every key and command |
+| `?` | List every key and command; `/` searches it, `n`/`N` move between matches, as in `:help` |
 | `:` | Command; Up/Down recall earlier ones, Tab completes the command or its argument (shift-Tab and Tab cycle through several) |
 | `q` | Close the graph if it's open, else quit |
 

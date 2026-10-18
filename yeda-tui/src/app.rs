@@ -457,6 +457,11 @@ pub struct App {
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub help_scroll: u16,
+    /// What `/` searches for in a help page, and whether it's still being typed.
+    pub help_query: String,
+    pub help_typing: bool,
+    /// The help page's text, as last drawn, for n/N.
+    pub help_lines: Vec<String>,
     pub log: crate::log::Log,
     /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
     history: Vec<String>,
@@ -524,6 +529,9 @@ impl App {
             sort_sel: 0,
             form: None,
             help_scroll: 0,
+            help_query: String::new(),
+            help_typing: false,
+            help_lines: Vec::new(),
             secrets: Default::default(),
             rejected: Default::default(),
             secret_items: Vec::new(),
@@ -1148,14 +1156,41 @@ impl App {
 
     fn open_help(&mut self, page: HelpPage) {
         self.help_scroll = 0;
+        self.help_query.clear();
+        self.help_typing = false;
         self.mode = Mode::Help(page);
     }
 
     fn help_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let half = (self.page / 2).max(1) as u16;
+        if self.help_typing {
+            match k.code {
+                KeyCode::Esc => {
+                    self.help_query.clear();
+                    self.help_typing = false;
+                }
+                KeyCode::Enter => {
+                    self.help_typing = false;
+                    self.help_jump(true, true);
+                }
+                KeyCode::Backspace => {
+                    self.help_query.pop();
+                }
+                KeyCode::Char(c) if !ctrl => self.help_query.push(c),
+                _ => {}
+            }
+            return;
+        }
         match k.code {
+            KeyCode::Esc if !self.help_query.is_empty() => self.help_query.clear(),
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.mode = Mode::Normal,
+            KeyCode::Char('/') => {
+                self.help_query.clear();
+                self.help_typing = true;
+            }
+            KeyCode::Char('n') => self.help_jump(true, false),
+            KeyCode::Char('N') => self.help_jump(false, false),
             KeyCode::Char('d') if ctrl => self.help_scroll = self.help_scroll.saturating_add(half),
             KeyCode::Char('u') if ctrl => self.help_scroll = self.help_scroll.saturating_sub(half),
             KeyCode::Char('j') | KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
@@ -1163,6 +1198,29 @@ impl App {
             KeyCode::Char('g') => self.help_scroll = 0,
             KeyCode::Char('G') => self.help_scroll = u16::MAX,
             _ => {}
+        }
+    }
+
+    /// Scrolls the next (or previous) line matching `help_query` to the top; `here` includes the top line.
+    fn help_jump(&mut self, forward: bool, here: bool) {
+        let query = self.help_query.to_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let hits: Vec<usize> = self.help_lines.iter().enumerate().filter(|(_, l)| l.to_lowercase().contains(&query)).map(|(i, _)| i).collect();
+        let top = self.help_scroll as usize;
+        let next = if forward {
+            hits.iter().find(|&&i| i > top || (here && i == top)).or(hits.first())
+        } else {
+            hits.iter().rfind(|&&i| i < top).or(hits.last())
+        };
+        match next {
+            Some(&i) => {
+                self.help_scroll = i as u16;
+                let at = hits.iter().position(|&h| h == i).unwrap_or(0) + 1;
+                self.status = format!("/{}: {at} of {}", self.help_query, hits.len());
+            }
+            None => self.status = format!("/{}: not found", self.help_query),
         }
     }
 
