@@ -1,4 +1,5 @@
 use crate::table;
+use yeda_core::clusters::Kind;
 use crate::app::{ACTIONS, App, GraphTab, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
 use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
@@ -271,6 +272,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.right == RightView::Graph && app.graph.is_some() {
         draw_graph(f, app, detail);
+    } else if app.right == RightView::Clusters && app.cluster.is_some() && !detail.is_empty() {
+        draw_clusters(f, app, detail);
     } else if app.right == RightView::Annotations && !detail.is_empty() {
         draw_annotations(f, app, detail);
     } else if app.right == RightView::Tables && app.table.is_some() {
@@ -576,6 +579,129 @@ fn marker(n: &yeda_core::graph::Node) -> &'static str {
 
 fn node_label(n: &yeda_core::graph::Node) -> String {
     format!("{} {}", n.first_author, n.year.map(|y| y.to_string()).unwrap_or_default())
+}
+
+/// Colours for labels without a tag colour of their own.
+const LABEL_COLORS: [Color; 6] = [Color::Green, Color::Blue, Color::Magenta, Color::Red, Color::LightCyan, Color::LightGreen];
+
+fn draw_clusters(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.pane == Pane::Right;
+    let Some(v) = &app.cluster else { return };
+    let nodes = &v.clusters.nodes;
+    let near = v.entries();
+    let list_height = (near.len() as u16 + 2).clamp(5, area.height / 2);
+    let [top, bottom] = Layout::vertical([Constraint::Min(6), Constraint::Length(list_height)]).areas(area);
+    let picked = near.get(v.nbr).copied().filter(|_| focused);
+    let is_label = |i: usize| nodes[i].kind == Kind::Label;
+    let rank = |i: usize| match i {
+        _ if i == v.sel => 4,
+        _ if Some(i) == picked => 3,
+        _ if nodes[v.sel].links.contains(&i) => 2,
+        _ if is_label(i) => 1,
+        _ => 0,
+    };
+    let label_color = |i: usize| {
+        let colors = nodes.iter().take(i).filter(|n| n.kind == Kind::Label).count();
+        let tag = (v.what == "tags").then(|| app.lib.tag_colors.get(&nodes[i].name).and_then(|c| color(c))).flatten();
+        tag.unwrap_or(LABEL_COLORS[colors % LABEL_COLORS.len()])
+    };
+    let text = |i: usize| {
+        let n = &nodes[i];
+        if !is_label(i) {
+            return n.name.clone();
+        }
+        let name: String = n.name.chars().take(28).collect();
+        let cut = if name.len() < n.name.len() { "…" } else { "" };
+        format!("{name}{cut} ({})", n.links.len())
+    };
+    // Text cells already taken, so labels never overlap: the most important nodes claim theirs first.
+    let (w, h) = (top.width.saturating_sub(2).max(1) as i32, top.height.saturating_sub(2).max(1) as i32);
+    let pos = |i: usize| (nodes[i].x * 0.96 + 0.02, nodes[i].y * 0.9 + 0.05);
+    // The cell the canvas prints a point in: it truncates, it doesn't round.
+    let cell = |i: usize| {
+        let (x, y) = pos(i);
+        ((x * (w - 1) as f64) as i32, ((1.0 - y) * (h - 1) as f64) as i32)
+    };
+    // A point inside cell (c, r), for printing there.
+    let at = |c: i32, r: i32| (((c as f64 + 0.01) / (w - 1).max(1) as f64).min(1.0), (1.0 - (r as f64 + 0.01) / (h - 1).max(1) as f64).max(0.0));
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(rank(i)));
+    let mut taken: Vec<(i32, i32, i32)> = Vec::new();
+    let mut labelled = vec![None; nodes.len()];
+    for &i in &order {
+        let (c, r) = cell(i);
+        let len = text(i).chars().count() as i32;
+        let free = |(a, b): (i32, i32)| a >= -1 && b <= w + 1 && !taken.iter().any(|&(row, x, y)| row == r && a < y && x < b);
+        let side = [(Label::Right, (c - 1, c + 3 + len)), (Label::Left, (c - 2 - len, c + 2))].into_iter().find(|&(_, span)| free(span));
+        match side.filter(|_| rank(i) > 0 || is_label(i)) {
+            Some((label, (a, b))) => {
+                taken.push((r, a, b));
+                labelled[i] = Some(label);
+            }
+            None => taken.push((r, c - 1, c + 2)),
+        }
+    }
+    let canvas = Canvas::default()
+        .block(block(format!("{} of {} papers · {} values", v.what, nodes.iter().filter(|n| !matches!(n.kind, Kind::Label)).count(), nodes.iter().filter(|n| n.kind == Kind::Label).count()), focused))
+        .marker(Marker::Braille)
+        .x_bounds([0.0, 1.0])
+        .y_bounds([0.0, 1.0])
+        .paint(|ctx| {
+            for (level, &color) in EDGE_COLORS.iter().enumerate().skip(1) {
+                for &j in &nodes[v.sel].links {
+                    if (level == 2) == (Some(j) == picked) {
+                        let ((x1, y1), (x2, y2)) = (pos(v.sel), pos(j));
+                        ctx.draw(&CanvasLine { x1, y1, x2, y2, color });
+                    }
+                }
+                ctx.layer();
+            }
+            for &i in order.iter().rev() {
+                let style = match rank(i) {
+                    4 => Style::new().fg(Color::Yellow),
+                    3 => Style::new().fg(Color::LightYellow).bold(),
+                    2 => Style::new().fg(Color::Cyan),
+                    1 => Style::new().fg(label_color(i)),
+                    _ => Style::new().dim(),
+                };
+                let glyph = match (rank(i), is_label(i)) {
+                    (3, _) => "◆",
+                    (_, true) => "■",
+                    _ => "•",
+                };
+                let (c, r) = cell(i);
+                let (x, y) = at(c, r);
+                ctx.print(x, y, Span::styled(glyph, style));
+                let start = match labelled[i] {
+                    Some(Label::Right) => c + 2,
+                    Some(Label::Left) => c - 1 - text(i).chars().count() as i32,
+                    _ => continue,
+                };
+                let (x, y) = at(start, r);
+                ctx.print(x, y, Span::styled(text(i), style));
+            }
+        });
+    f.render_widget(canvas, top);
+
+    let row = |i: usize| {
+        let n = &nodes[i];
+        match n.kind {
+            Kind::Label => Line::from(vec![Span::styled("■ ", Style::new().fg(label_color(i))), Span::raw(format!("{} ({})", n.name, n.links.len()))]),
+            Kind::Paper(_) => Line::from(format!("• {:<16.16} {}", n.name, n.title)),
+        }
+    };
+    let items: Vec<ListItem> = near.iter().map(|&i| ListItem::new(row(i))).collect();
+    let mut title: Vec<Span> = Vec::new();
+    for (all, name) in [(false, "Linked"), (true, "All")] {
+        let span = Span::raw(format!(" {name} "));
+        title.push(if all == v.all { span.reversed() } else { span.dim() });
+    }
+    title.push(Span::raw(format!(" · Tab · {} ", nodes[v.sel].name)));
+    let mut state = ListState::default().with_selected(focused.then_some(v.nbr));
+    let border = if focused { Style::new().fg(Color::Cyan) } else { Style::new() };
+    let list = List::new(items).block(Block::bordered().title(Line::from(title)).border_style(border)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    f.render_stateful_widget(list, bottom, &mut state);
+    clickable(app, Pane::Right, bottom, Some(state.offset()));
 }
 
 fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {

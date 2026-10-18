@@ -183,7 +183,7 @@ pub fn candidates(refs: &[Ref], seeds: &[String], known: &Known, outside: usize)
 }
 
 /// `Ada Lovelace` or `Lovelace, Ada` → `Lovelace`.
-fn surname(author: &str) -> String {
+pub(crate) fn surname(author: &str) -> String {
     author.split(',').next().unwrap_or(author).split_whitespace().last().unwrap_or("").to_string()
 }
 
