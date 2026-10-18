@@ -80,7 +80,7 @@ pub fn spawn(req: Request) -> Receiver<Msg> {
         let msg = match run(req, &tx) {
             Ok(f) => Msg::Done(Ok(f)),
             Err(e) if openalex::is_over_budget(&e) => Msg::OverBudget,
-            Err(e) if openalex::is_bad_key(&e) => Msg::Done(Err("OpenAlex rejected the API key; :graph key sets another".into())),
+            Err(e) if openalex::is_bad_key(&e) => Msg::Done(Err("OpenAlex rejected the API key; :secrets sets another".into())),
             Err(e) => Msg::Done(Err(format!("{e:#}"))),
         };
         let _ = tx.send(msg);
@@ -195,7 +195,7 @@ pub fn spawn_lists(id: String, cache: PathBuf, key: Option<String>) -> Receiver<
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = lists(&id, &Cache(cache.join("openalex")), &Client::new(key)).map_err(|e| match () {
-            _ if openalex::is_over_budget(&e) => "OpenAlex's daily budget is used up; :graph key sets an API key".to_string(),
+            _ if openalex::is_over_budget(&e) => "OpenAlex's daily budget is used up; :secrets sets an API key".to_string(),
             _ => format!("{e:#}"),
         });
         let _ = tx.send(result);

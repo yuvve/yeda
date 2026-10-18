@@ -114,7 +114,7 @@ CITATION GRAPH  ( :graph )
 
   An API key is optional. Without one, OpenAlex gives a small daily budget
   shared by everyone on your IP address; a free key (from
-  openalex.org/settings/api) has its own, larger one. :graph key asks for it
+  openalex.org/settings/api) has its own, larger one. :secrets sets it
   and keeps it in the system secret store, never in a file. You are also
   asked when the keyless budget runs out, and OPENALEX_API_KEY works too.
 
