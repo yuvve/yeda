@@ -81,6 +81,19 @@ fn download_in_page(window: &WebviewWindow, url: &str) {
     let _ = window.eval(format!("(() => {{ const a = document.createElement('a'); a.href = {url}; a.download = ''; document.body.appendChild(a); a.click(); }})()"));
 }
 
+/// Has WebKit download `url` itself, which reaches `on_download` like any download.
+fn download_natively(window: &WebviewWindow, url: &str) {
+    // ponytail: WebKitGTK only; elsewhere the viewer's own download button remains.
+    #[cfg(target_os = "linux")]
+    {
+        use webkit2gtk::WebViewExt;
+        let url = url.to_string();
+        let _ = window.with_webview(move |w| drop(w.inner().download_uri(&url)));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, url);
+}
+
 /// The PDF at `url`, downloaded with the window's cookies for it.
 fn fetch_with_cookies(window: &WebviewWindow, url: &str) -> Option<Vec<u8>> {
     let cookies = window.cookies_for_url(url.parse().ok()?).ok()?;
@@ -194,7 +207,9 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             };
             match event {
                 Ok(Event::Loaded(url)) => {
-                    report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
+                    if url != "about:blank" {
+                        report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
+                    }
                     // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
                     if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
                         tried.push(pdf.clone());
@@ -225,6 +240,12 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     let url = loaded.take().unwrap_or_default();
                     if let Some(outcome) = fetch_with_cookies(window, &url).and_then(save) {
                         break outcome;
+                    }
+                    // Signed PDF links (ScienceDirect's) may refuse a plain request; WebKit's own
+                    // download, as from the viewer's button, carries the browser's session.
+                    if !url.is_empty() && !tried.contains(&url) {
+                        tried.push(url.clone());
+                        download_natively(window, &url);
                     }
                 }
                 // Anything but a PDF (an HTML page, a cancelled download) waits for the next one.
