@@ -39,7 +39,7 @@
 "d d" = "delete"
 ":" = "command"
 "?" = "keys"
-"q" = "quit"
+"q" = "close-or-quit"
 "ctrl-e" = "graph-scroll-down"
 "ctrl-y" = "graph-scroll-up"
 
