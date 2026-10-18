@@ -509,6 +509,9 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 /// Unused for edges away from the selection, which would fill a large graph; the selected
 /// paper's darker, the picked neighbour's brightest.
 const EDGE_COLORS: [Color; 3] = [Color::DarkGray, Color::Yellow, Color::LightYellow];
+/// The selected paper's edges in the citation graph, normal and picked: to papers it cites, and from papers citing it.
+const CITES_COLORS: [Color; 2] = [Color::Yellow, Color::LightYellow];
+const CITED_BY_COLORS: [Color; 2] = [Color::Magenta, Color::LightMagenta];
 
 /// Text rows a year may take before its least important nodes lose their labels.
 const MAX_LANES: usize = 4;
@@ -784,9 +787,10 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         .y_bounds([0.0, (rows - 1.0).max(1.0)])
         .paint(|ctx| {
             // The picked neighbour's edge on a later layer, so it crosses over the others.
-            for (level, &color) in EDGE_COLORS.iter().enumerate().skip(1) {
+            for level in 1..=2 {
                 for &e in edges.iter().filter(|&&e| edge_level(e) == level) {
-                    ctx.draw(&edge(e, color));
+                    let colors = if e.0 == v.sel { CITES_COLORS } else { CITED_BY_COLORS };
+                    ctx.draw(&edge(e, colors[level - 1]));
                 }
                 ctx.layer();
             }
@@ -833,6 +837,11 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let mut title: Vec<Span> = Vec::new();
     for tab in GraphTab::ALL {
         let span = Span::raw(format!(" {} ", tab.name()));
+        let span = match tab {
+            GraphTab::Cites => span.fg(CITES_COLORS[0]),
+            GraphTab::CitedBy => span.fg(CITED_BY_COLORS[0]),
+            _ => span,
+        };
         title.push(if tab == v.tab { span.reversed() } else { span.dim() });
     }
     let order = if v.by_year { "year" } else { "citations" };
