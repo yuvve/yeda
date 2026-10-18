@@ -40,6 +40,8 @@ pub enum Outcome {
 
 enum Event {
     Loaded(String),
+    /// A page asked for a new window, which the fetch window opens itself instead.
+    NewWindow(String),
     /// The page's title; the script reports through it, as pages from the web get no IPC.
     Title(String),
     Downloaded(Option<PathBuf>),
@@ -72,6 +74,13 @@ fn report_script(settings: &Settings) -> String {
     )
 }
 
+/// Has the page download `url` as a click on a link would, so the browser's own session and
+/// checks apply; a link to another site opens instead.
+fn download_in_page(window: &WebviewWindow, url: &str) {
+    let url = serde_json::to_string(url).unwrap();
+    let _ = window.eval(format!("(() => {{ const a = document.createElement('a'); a.href = {url}; a.download = ''; document.body.appendChild(a); a.click(); }})()"));
+}
+
 /// The PDF at `url`, downloaded with the window's cookies for it.
 fn fetch_with_cookies(window: &WebviewWindow, url: &str) -> Option<Vec<u8>> {
     let cookies = window.cookies_for_url(url.parse().ok()?).ok()?;
@@ -99,7 +108,7 @@ pub fn run(job: Job) {
                     &[&MenuItem::with_id(app, "skip", "Skip this paper", true, None::<&str>)?, &MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?],
                 )?],
             )?;
-            let (load_tx, dl_tx, menu_tx, title_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone());
+            let (load_tx, dl_tx, menu_tx, title_tx, new_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone(), tx.clone());
             let target = current.clone();
             let dir = downloads.clone();
             let window = WebviewWindowBuilder::new(app, "fetch", WebviewUrl::External("about:blank".parse().unwrap()))
@@ -109,6 +118,10 @@ pub fn run(job: Job) {
                 // A profile of its own keeps the proxy session between runs.
                 .data_directory(app.path().app_data_dir()?.join("fetch-browser"))
                 .on_document_title_changed(move |_, title| drop(title_tx.send(Event::Title(title))))
+                .on_new_window(move |url, _| {
+                    let _ = new_tx.send(Event::NewWindow(url.to_string()));
+                    tauri::webview::NewWindowResponse::Deny
+                })
                 .on_page_load(move |_, payload| {
                     if payload.event() == tauri::webview::PageLoadEvent::Finished {
                         let _ = load_tx.send(Event::Loaded(payload.url().to_string()));
@@ -182,10 +195,12 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
             match event {
                 Ok(Event::Loaded(url)) => {
                     report(&Outcome::Visited { key: paper.key.clone(), page: without_query(&url) });
+                    // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
                     if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
                         tried.push(pdf.clone());
-                        if let Some(outcome) = fetch_with_cookies(window, &pdf).and_then(save) {
-                            break outcome;
+                        match fetch_with_cookies(window, &pdf).and_then(save) {
+                            Some(outcome) => break outcome,
+                            None => download_in_page(window, &pdf),
                         }
                     }
                     let _ = window.eval(&script);
@@ -200,8 +215,9 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     tried.push(pdf.to_string());
                     match fetch_with_cookies(window, pdf).and_then(save) {
                         Some(outcome) => break outcome,
-                        // Let the page show what stands in the way: a sign-in or a check.
-                        None => drop(pdf.parse().map(|u| window.navigate(u))),
+                        // The browser may get what a plain request can't; a link to another site
+                        // just opens, showing what stands in the way: a sign-in or a check.
+                        None => download_in_page(window, pdf),
                     }
                 }
                 // No report: WebKit's PDF viewer, which can be downloaded from like any page.
@@ -218,6 +234,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     }
                 }
                 Ok(Event::Downloaded(_)) => {}
+                Ok(Event::NewWindow(url)) => drop(url.parse().map(|u| window.navigate(u))),
                 Ok(Event::Skip) => break Outcome::Failed { key: paper.key.clone(), error: "skipped in the browser".into() },
                 Ok(Event::Stop) | Err(RecvTimeoutError::Disconnected) => {
                     for p in &job.papers[n..] {
