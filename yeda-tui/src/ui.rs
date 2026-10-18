@@ -402,7 +402,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         .zip(&form.values)
         .enumerate()
         .map(|(i, ((label, _), value))| {
-            let value = if i == fields.len() - 1 { "•".repeat(value.chars().count()) } else { value.clone() };
+            let value = if form.masked(i) { "•".repeat(value.chars().count()) } else { value.clone() };
             let cursor = if i == form.sel { "▏" } else { "" };
             let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
             if i == form.sel { line.reversed() } else { line }
@@ -411,10 +411,14 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     lines.push(Line::raw(""));
     let hint = if form.testing { "testing the connection…" } else { fields[form.sel].1 };
     lines.push(Line::raw(format!("{:>10}  {hint}", "")).dim());
-    let what = if form.kind == crate::setup::Kind::Llm { "LLM profile" } else { "WebDAV location" };
+    let what = match form.kind {
+        crate::setup::Kind::Llm => "LLM profile",
+        crate::setup::Kind::Webdav => "WebDAV location",
+        crate::setup::Kind::Search => "Saved search",
+    };
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter test and save · Esc cancel "), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if form.kind == crate::setup::Kind::Search { "save" } else { "test and save" }), true)), area);
 }
 
 fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {

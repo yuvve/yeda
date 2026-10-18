@@ -41,7 +41,7 @@ user = "yuvve"
 "priority 1" = "#ff6666"
 
 [searches]
-"To read" = 'status:"^To Read$"'
+"To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
 
 [tables.lit]                     # literature table, filled by an LLM
 columns = ["method", "hardware/sim"]

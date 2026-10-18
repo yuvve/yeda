@@ -191,7 +191,7 @@ pub fn import(db: &Connection, zotero: &Path, mut lib: Library, home: Option<&Pa
         let saved = config_section(t, "searches")?;
         for (name, query) in searches {
             if !saved.contains_key(&name) {
-                saved.insert(name, query.into());
+                saved.insert(name, toml::Table::from_iter([("query".to_string(), query.into())]).into());
                 sum.searches += 1;
             }
         }

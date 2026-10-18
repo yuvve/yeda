@@ -78,7 +78,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("clear", "cancel a range, else unmark all, else clear the search"),
     ("add", "add by DOI, arXiv ID or ISBN; a pasted list adds each"),
     ("open", "open the PDF in the reader (yeda read)"),
-    ("edit", "edit the reference file in $EDITOR"),
+    ("edit", "edit the reference file in $EDITOR; on a saved search in the library column, its name, query and sort"),
     ("note", "edit the reference's note in $EDITOR"),
     ("mark", "mark or unmark the reference"),
     ("range", "mark a range as you move"),
@@ -466,6 +466,8 @@ pub struct App {
     graph_job: Option<GraphJob>,
     fetch_job: Option<FetchJob>,
     pub sort: Sort,
+    /// The filter `refilter` last showed; choosing a saved search applies its sort once.
+    shown_filter: Filter,
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub setup: Option<SetupForm>,
@@ -540,6 +542,7 @@ impl App {
             graph_job: None,
             fetch_job: None,
             sort: Sort::default(),
+            shown_filter: Filter::All,
             sort_sel: 0,
             form: None,
             setup: None,
@@ -595,6 +598,14 @@ impl App {
 
     fn refilter(&mut self) {
         let filter = self.current_filter().clone();
+        if filter != self.shown_filter {
+            if let Filter::Search(name, _) = &filter
+                && let Some(order) = self.lib.searches.get(name).and_then(|s| s.order())
+            {
+                self.sort = order;
+            }
+            self.shown_filter = filter.clone();
+        }
         self.visible = browse::visible(&mut self.searcher, &self.lib, &filter, &self.query);
         browse::sort(&self.lib, &mut self.visible, self.sort);
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
@@ -916,6 +927,10 @@ impl App {
                 _ => self.status = "select a tag in the library pane to color it".into(),
             },
             "open" => self.open_pdf(),
+            "edit" if self.pane == Pane::Sidebar && matches!(self.current_filter(), Filter::Search(..)) => {
+                self.setup = Some(SetupForm::new(setup::Kind::Search, self.current_filter().name(), &self.lib));
+                self.mode = Mode::Setup;
+            }
             "edit" => self.edit = self.selected().map(|r| (self.path(&library::ref_path(&r.key)), None)),
             "note" => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
             "tags" => self.open_chooser(PickKind::Tags),
@@ -1091,6 +1106,17 @@ impl App {
                 self.mode = Mode::Normal;
             }
             KeyCode::Enter => match form.section() {
+                Ok((_, setup::Setup::Search(saved))) => {
+                    let (name, old) = (form.name().to_string(), form.old.clone());
+                    let result = self.lib.save_search(&name, &saved, old.as_deref().filter(|o| *o != name));
+                    self.after_config_change(result);
+                    self.setup = None;
+                    self.mode = Mode::Normal;
+                    // Applies the new sort even if only the sort changed.
+                    self.shown_filter = Filter::All;
+                    self.select_filter(&Filter::Search(name.clone(), saved.query));
+                    self.status = format!("saved search '{name}'");
+                }
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
@@ -1606,10 +1632,8 @@ impl App {
             return;
         }
         let query = std::mem::take(&mut self.query);
-        let result = self.lib.update_config(|t| {
-            config_section(t, "searches")?.insert(name.into(), query.clone().into());
-            Ok(())
-        });
+        let saved = library::SavedSearch { query: query.clone(), sort: Some(self.sort.field), descending: self.sort.descending };
+        let result = self.lib.save_search(name, &saved, None);
         self.after_config_change(result);
         self.side_query.clear();
         self.refilter_sidebar(false);
