@@ -86,7 +86,9 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("command", "command line; Up/Down recall earlier commands"),
     ("graph-go", "go to the picked neighbour"),
     ("graph-back", "go back"),
-    ("graph-lists", "switch between neighbours and the top cited/citing lists"),
+    ("graph-tab", "next list under the graph: seeds, cites, cited by, top cited, top citing"),
+    ("graph-tab-back", "previous list under the graph"),
+    ("graph-sort", "sort the lists by global citations or by year"),
     ("graph-add", "add the picked paper by DOI"),
     ("graph-open", "open the picked paper's DOI in the browser"),
     ("neighbourhood", "show only the selected paper and its direct links"),
@@ -206,8 +208,9 @@ pub struct GraphView {
     /// The highlighted entry of `entries()`.
     pub nbr: usize,
     pub scope: String,
-    /// Show the top cited and top citing outside papers instead of the selected paper's neighbours.
-    pub lists: bool,
+    pub tab: GraphTab,
+    /// Sort the per-paper tabs by year instead of global citation count.
+    pub by_year: bool,
     /// Nodes navigated away from, for Backspace.
     back: Vec<usize>,
     /// Show only the selected paper and its direct links.
@@ -217,24 +220,57 @@ pub struct GraphView {
     pub scroll_for: Option<usize>,
 }
 
+/// What the list under the graph shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum GraphTab {
+    Seeds,
+    /// Works the selected paper cites.
+    Cites,
+    /// Works citing the selected paper.
+    CitedBy,
+    /// Outside works cited by the most seeds.
+    TopCited,
+    /// Outside works citing the most seeds.
+    TopCiting,
+}
+
+impl GraphTab {
+    pub const ALL: [GraphTab; 5] = [GraphTab::Seeds, GraphTab::Cites, GraphTab::CitedBy, GraphTab::TopCited, GraphTab::TopCiting];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            GraphTab::Seeds => "Seeds",
+            GraphTab::Cites => "Cites →",
+            GraphTab::CitedBy => "← Cited by",
+            GraphTab::TopCited => "▲ Top cited",
+            GraphTab::TopCiting => "▼ Top citing",
+        }
+    }
+}
+
 impl GraphView {
-    /// The list under the graph, as `(mark, node)`: the selected paper's neighbours (`←` citing
-    /// it, `→` cited by it), or in `lists` mode the outside papers cited by the most seeds (`▲n`)
-    /// then those citing the most seeds (`▼n`).
+    /// The current tab's papers, as `(mark, node)`; the top lists mark how many seeds each links to.
     pub fn entries(&self) -> Vec<(String, usize)> {
         let nodes = &self.graph.nodes;
-        if !self.lists {
-            let (citing, cited) = self.graph.neighbours(self.sel);
-            return citing.into_iter().map(|i| ("←".into(), i)).chain(cited.into_iter().map(|i| ("→".into(), i))).collect();
-        }
-        let ranked = |count: fn(&graph::Node) -> usize, mark: &str| {
+        let (citing, cited) = self.graph.neighbours(self.sel);
+        let top = |count: fn(&graph::Node) -> usize, mark: &str| {
             let mut ids: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).collect();
             ids.sort_by_key(|&i| std::cmp::Reverse(count(&nodes[i])));
-            ids.into_iter().map(move |i| (format!("{mark}{}", count(&nodes[i])), i)).collect::<Vec<_>>()
+            ids.into_iter().map(|i| (format!("{mark}{}", count(&nodes[i])), i)).collect::<Vec<_>>()
         };
-        let mut out = ranked(|n| n.cited_by_seeds, "▲");
-        out.extend(ranked(|n| n.cites_seeds, "▼"));
-        out
+        let mut ids = match self.tab {
+            GraphTab::Seeds => (0..nodes.len()).filter(|&i| nodes[i].seed).collect(),
+            GraphTab::Cites => cited,
+            GraphTab::CitedBy => citing,
+            GraphTab::TopCited => return top(|n| n.cited_by_seeds, "▲"),
+            GraphTab::TopCiting => return top(|n| n.cites_seeds, "▼"),
+        };
+        if self.by_year {
+            ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].year));
+        } else {
+            ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].cited_by));
+        }
+        ids.into_iter().map(|i| (String::new(), i)).collect()
     }
 }
 
@@ -656,9 +692,17 @@ impl App {
             }
             "graph-go" => self.graph_go(),
             "graph-back" => self.graph_back(),
-            "graph-lists" => {
+            "graph-tab" | "graph-tab-back" => {
                 if let Some(g) = &mut self.graph {
-                    g.lists = !g.lists;
+                    let at = GraphTab::ALL.iter().position(|t| *t == g.tab).unwrap_or(0);
+                    let step = if name == "graph-tab" { 1 } else { GraphTab::ALL.len() - 1 };
+                    g.tab = GraphTab::ALL[(at + step) % GraphTab::ALL.len()];
+                    g.nbr = 0;
+                }
+            }
+            "graph-sort" => {
+                if let Some(g) = &mut self.graph {
+                    g.by_year = !g.by_year;
                     g.nbr = 0;
                 }
             }
@@ -1903,8 +1947,8 @@ impl App {
         }
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
         let sel = self.selected().and_then(|r| f.graph.find_key(&r.key)).unwrap_or(0);
-        let (lists, ego) = self.graph.as_ref().map_or((false, false), |g| (g.lists, g.ego));
-        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, lists, back: Vec::new(), ego, scroll: 0, scroll_for: None });
+        let (tab, by_year, ego) = self.graph.as_ref().map_or((GraphTab::Cites, false, false), |g| (g.tab, g.by_year, g.ego));
+        self.graph = Some(GraphView { graph: f.graph, sel, nbr: 0, scope, tab, by_year, back: Vec::new(), ego, scroll: 0, scroll_for: None });
         self.right = RightView::Graph;
     }
 

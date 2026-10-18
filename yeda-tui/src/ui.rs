@@ -1,4 +1,4 @@
-use crate::app::{ACTIONS, App, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
+use crate::app::{ACTIONS, App, GraphTab, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
 use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
@@ -415,7 +415,8 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 
 /// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
 /// selected paper is yellow, its neighbours cyan, and the neighbour highlighted in the list a magenta ◆.
-/// Faint for most edges, the selected paper's darker, the picked neighbour's brightest.
+/// Unused for edges away from the selection, which would fill a large graph; the selected
+/// paper's darker, the picked neighbour's brightest.
 const EDGE_COLORS: [Color; 3] = [Color::DarkGray, Color::Yellow, Color::LightYellow];
 
 /// Text rows a year may take before its least important nodes lose their labels.
@@ -470,6 +471,17 @@ fn place(g: &Graph, shown: &[usize], rank: &dyn Fn(usize) -> u8, col: &dyn Fn(us
         next += lanes.len();
     }
     Placement { at: out, years: starts, rows: next }
+}
+
+/// Seeds ⊚, other library papers ◎, outside papers ○.
+fn marker(n: &yeda_core::graph::Node) -> &'static str {
+    if n.seed {
+        "⊚"
+    } else if n.key.is_some() {
+        "◎"
+    } else {
+        "○"
+    }
 }
 
 fn node_label(n: &yeda_core::graph::Node) -> String {
@@ -540,21 +552,6 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         _ if touches(e, v.sel) => 1,
         _ => 0,
     };
-    let cell = 1.15 / (width - 1.0);
-    // An arrow two cells short of the cited paper, pointing at it; edge (a, b) means a cites b.
-    let arrow = |(a, b): (usize, usize)| {
-        let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
-        // Rows are about twice as tall as columns are wide.
-        let (dx, dy) = ((x2 - x1) / cell, (y2 - y1) * 2.0);
-        let len = dx.hypot(dy);
-        if len < 4.0 {
-            return None;
-        }
-        let t = 1.0 - 2.5 / len;
-        let octant = ((dy.atan2(dx).to_degrees() + 360.0 + 22.5) % 360.0 / 45.0) as usize;
-        let glyph = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"][octant.min(7)];
-        Some((x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, glyph))
-    };
     let mut title = format!("Graph of {} ({} papers)", v.scope, g.nodes.len());
     if v.ego {
         title += &format!(" · neighbourhood: {} · N: all", shown.len());
@@ -570,19 +567,12 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         .x_bounds([-0.15, 1.0])
         .y_bounds([0.0, (rows - 1.0).max(1.0)])
         .paint(|ctx| {
-            // Brighter edges on later layers, so they cross over fainter ones.
-            for (level, &color) in EDGE_COLORS.iter().enumerate() {
+            // The picked neighbour's edge on a later layer, so it crosses over the others.
+            for (level, &color) in EDGE_COLORS.iter().enumerate().skip(1) {
                 for &e in edges.iter().filter(|&&e| edge_level(e) == level) {
                     ctx.draw(&edge(e, color));
                 }
                 ctx.layer();
-            }
-            let mut by_level = edges.clone();
-            by_level.sort_by_key(|&e| edge_level(e));
-            for e in by_level {
-                if let Some((x, y, glyph)) = arrow(e) {
-                    ctx.print(x, y, Span::styled(glyph, Style::new().fg(EDGE_COLORS[edge_level(e)])));
-                }
             }
             ctx.layer();
             for &(r, year) in &starts {
@@ -606,7 +596,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
                     2 => (None, Style::new().fg(Color::Cyan)),
                     _ => (None, Style::new().dim()),
                 };
-                let glyph = glyph.unwrap_or(if n.seed { "◉" } else if n.key.is_some() { "●" } else { "○" });
+                let glyph = glyph.unwrap_or(marker(n));
                 let (x, y) = pos(i);
                 ctx.print(x, y, Span::styled(glyph, style));
                 let text = node_label(n);
@@ -619,23 +609,21 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         });
     f.render_widget(canvas, top);
 
-    let node = &g.nodes[v.sel];
-    let label = |n: &yeda_core::graph::Node| {
+    let row = |mark: &str, n: &yeda_core::graph::Node| {
         let year = n.year.map(|y| y.to_string()).unwrap_or_default();
-        let mark = if n.key.is_some() { "●" } else { "○" };
-        format!("{mark} {year:4} {:<12.12} {}", n.first_author, n.title)
+        format!("{mark:<4}{} {year:4} {:>6} {:<12.12} {}", marker(n), n.cited_by, n.first_author, n.title)
     };
-    let items: Vec<ListItem> = near
-        .iter()
-        .map(|(mark, i)| ListItem::new(format!("{mark:<3} {}", label(&g.nodes[*i]))))
-        .collect();
-    let title = if v.lists {
-        "▲ cited by the most seeds · ▼ citing the most seeds · L: neighbours".to_string()
-    } else {
-        format!("{} · ← cites it, → it cites · L: top lists", label(node))
-    };
+    let items: Vec<ListItem> = near.iter().map(|(mark, i)| ListItem::new(row(mark, &g.nodes[*i]))).collect();
+    let mut title: Vec<Span> = Vec::new();
+    for tab in GraphTab::ALL {
+        let span = Span::raw(format!(" {} ", tab.name()));
+        title.push(if tab == v.tab { span.reversed() } else { span.dim() });
+    }
+    let order = if v.by_year { "year" } else { "citations" };
+    title.push(Span::raw(format!(" · Tab · by {order} (s) · {} {} ", marker(&g.nodes[v.sel]), node_label(&g.nodes[v.sel]))));
     let mut state = ListState::default().with_selected(focused.then_some(v.nbr));
-    let list = List::new(items).block(block(title, focused)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    let border = if focused { Style::new().fg(Color::Cyan) } else { Style::new() };
+    let list = List::new(items).block(Block::bordered().title(Line::from(title)).border_style(border)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, bottom, &mut state);
     clickable(app, Pane::Right, bottom, Some(state.offset()));
 }

@@ -76,6 +76,8 @@ pub struct Node {
     pub links: usize,
     /// How many seeds cite it.
     pub cited_by_seeds: usize,
+    /// How many works cite it, in the whole index.
+    pub cited_by: u64,
     /// How many seeds it cites.
     pub cites_seeds: usize,
     /// Position in the layout: `x` in 0..=1, `row` indexes `Graph::years`, newest first.
@@ -180,6 +182,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
                     .unwrap_or_default(),
                 doi: r.and_then(|r| r.doi.clone()).or(w.and_then(|w| w.doi.clone())),
                 links: links.get(id).copied().unwrap_or(0),
+                cited_by: w.map_or(0, |w| w.cited_by_count),
                 cited_by_seeds: seeds.iter().filter(|s| known.works.get(*s).is_some_and(|w| w.references.contains(id))).count(),
                 cites_seeds: seeds
                     .iter()
