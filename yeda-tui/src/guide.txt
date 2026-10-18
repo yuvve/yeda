@@ -123,10 +123,10 @@ CITING  ( :cite [format] )
 
   Copies the selected or marked references to the clipboard. The format is
   bibtex; ident, one identifier per line (the DOI, else the arXiv ID, the
-  ISBN or the URL; a pastes them back in); the name of a citation style (ieee, apa, chicago-author-date,
-  vancouver, nature, …), or the path of a .csl file, relative to the library
-  or starting with ~/. Without one it uses [cite] format from yeda.toml, else
-  bibtex:
+  ISBN or the URL; a pastes them back in); the name of a citation style
+  (ieee, apa, chicago-author-date, vancouver, nature, …), or the path of a
+  .csl file, relative to the library or starting with ~/. Without one it
+  uses [cite] format from yeda.toml, else bibtex:
 
     [cite]
     format = "ieee"
@@ -162,14 +162,23 @@ KEY BINDINGS
     [keys.graph]                  # in the graph column, before normal
     "J" = "graph-scroll-down"
 
-  Contexts: normal, library, graph, annotations. Keys are written as typed
-  (j, G, ?, :), with ctrl- and alt- prefixes, or by name: Enter, Esc, Tab,
-  Backspace, Space, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1.
+  Contexts: normal, library, graph, table, annotations. Keys are written as
+  typed (j, G, ?, :), with ctrl- and alt- prefixes, or by name: Enter, Esc,
+  Tab, Backspace, Space, Up, Down, Left, Right, Home, End, PageUp, PageDown,
+  F1.
   Space separates the keys of a sequence: "g g". :keys lists every binding
   in effect and every action.
 
-TABLES
+TABLES  ( :table [name], T )
 
-  Define literature tables in yeda.toml under [tables.<name>]. Then
-  :summarize fills the selected reference's row using an LLM profile from
-  [llm.<name>], and T shows the rows. See :keys for every command.
+  Define literature tables in yeda.toml under [tables.<name>]. :summarize
+  fills the selected reference's row using an LLM profile from [llm.<name>];
+  each paper's rows are kept in notes/<key>.ai.toml.
+
+  :table (or T) shows the table of the selected or marked references in the
+  right column; c gives it the whole window. j/k pick a row, h/l a column
+  (h from the first goes back to the list). Enter shows the cell in full, e
+  edits it in $EDITOR, s sorts by the column (again reverses). / shows only
+  rows with every word somewhere in them; f only rows whose cell in this
+  column matches (!x: doesn't match x; "": empty). Esc closes the cell, then
+  clears search and filters, then closes the table, as does q.

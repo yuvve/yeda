@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub const DEFAULTS: &str = include_str!("keys.toml");
-pub const CONTEXTS: [&str; 4] = ["normal", "library", "graph", "annotations"];
+pub const CONTEXTS: [&str; 5] = ["normal", "library", "graph", "table", "annotations"];
 
 /// A key sequence and the command line it runs.
 pub type Binding = (Vec<String>, String);

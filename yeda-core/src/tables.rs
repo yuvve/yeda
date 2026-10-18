@@ -241,7 +241,7 @@ pub fn import_csv(lib: &mut Library, name: &str, csv: &str) -> Result<(String, V
             .map(|(h, v)| (h.clone(), v.to_string()))
             .collect();
         merge(&mut lib.refs[i], name, row, true);
-        effects.push(lib.save(&lib.refs[i])?);
+        effects.push(lib.save_ai(&lib.refs[i])?);
         imported += 1;
     }
     let mut report = format!("imported {imported} rows into table '{name}'");
@@ -300,6 +300,8 @@ mod tests {
         assert_eq!(lib.refs[0].tables["lit"]["venue"], "ICRA");
         let Effect::Write { path, .. } = &effects[0] else { panic!() };
         assert_eq!(path, "yeda.toml");
+        let Effect::Write { path, .. } = &effects[1] else { panic!() };
+        assert_eq!(path, "notes/a2020.ai.toml");
         lib.tables.get_mut("lit").unwrap().columns.push("venue".into());
         let (csv, n) = export_csv(&lib, "lit").unwrap();
         assert_eq!(n, 1);

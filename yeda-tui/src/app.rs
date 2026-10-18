@@ -19,6 +19,7 @@ use yeda_core::library::{self, Library, Ref, config_section};
 use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
+use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
 use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
 use yeda_net::wand;
@@ -79,7 +80,6 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("status-next", "next reading status"),
     ("status-prev", "previous reading status"),
     ("annotations", "show annotations"),
-    ("tables", "show tables"),
     ("extract", "extract the annotations embedded in the PDF"),
     ("tag-color", "colour the selected tag (library column)"),
     ("delete", "delete the reference or saved search"),
@@ -96,6 +96,14 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("graph-scroll-down", "scroll the graph down"),
     ("graph-scroll-up", "scroll the graph up"),
     ("open-annotation", "open the image in the viewer, or the entry in $EDITOR"),
+    ("table-left", "previous column of the table; from the first, the reference list"),
+    ("table-right", "next column of the table"),
+    ("table-cell", "show the cell in full, or close it"),
+    ("table-edit", "edit the cell in $EDITOR"),
+    ("table-sort", "sort by the column; again reverses"),
+    ("table-search", "show only rows with every word in some cell"),
+    ("table-filter", "show only rows whose cell in this column matches (!x: doesn't; \"\": empty)"),
+    ("table-clear", "close the cell, else clear search and filters, else close the table"),
 ];
 
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -109,6 +117,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph"),
+    (":table [name]", "the table of the selected or marked references (:help explains it)"),
+    (":table close", "close the table"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -169,6 +179,10 @@ pub enum Prompt {
     TagColor,
     /// A password or API key for `App::asking`; shown masked.
     Secret,
+    /// Words the table's rows must match, applied as typed.
+    TableSearch,
+    /// What the table's current column must match, applied as typed.
+    TableFilter,
 }
 
 /// What to run again once a missing secret has been entered.
@@ -409,8 +423,7 @@ pub struct App {
     summarizer: Option<Summarizer>,
     pub chooser: Option<Chooser>,
     pub right: RightView,
-    pub table_scroll: u16,
-    table_scroll_key: Option<String>,
+    pub table: Option<TableView>,
     pub annots: Vec<Annotation>,
     annots_key: Option<String>,
     annots_modified: Option<std::time::SystemTime>,
@@ -471,8 +484,7 @@ impl App {
             summarizer: None,
             chooser: None,
             right: RightView::Details,
-            table_scroll: 0,
-            table_scroll_key: None,
+            table: None,
             annots: Vec::new(),
             annots_key: None,
             annots_modified: None,
@@ -646,6 +658,7 @@ impl App {
             Pane::Sidebar => "library",
             Pane::Right if self.in_graph() => "graph",
             Pane::Right if self.right == RightView::Annotations => "annotations",
+            Pane::Right if self.right == RightView::Tables && self.table.is_some() => "table",
             _ => "normal",
         }
     }
@@ -723,7 +736,47 @@ impl App {
             }
             "open-annotation" => self.open_annotation(),
             "annotations" => self.toggle_right(RightView::Annotations),
-            "tables" => self.toggle_right(RightView::Tables),
+"table-left" => match &mut self.table {
+                Some(t) if t.col > 0 => t.col -= 1,
+                _ => self.pane = Pane::List,
+            },
+            "table-right" => {
+                let n = self.table.as_ref().map_or(0, |t| t.columns(&self.lib).len());
+                if let Some(t) = &mut self.table {
+                    t.col = (t.col + 1).min(n.saturating_sub(1));
+                }
+            }
+            "table-cell" => {
+                if let Some(t) = &mut self.table {
+                    t.open = !t.open;
+                }
+            }
+            "table-sort" => {
+                if let Some(t) = &mut self.table {
+                    t.sort = match t.sort {
+                        Some((c, false)) if c == t.col => Some((c, true)),
+                        _ => Some((t.col, false)),
+                    };
+                }
+            }
+            "table-search" => {
+                self.input = self.table.as_ref().map(|t| t.query.clone()).unwrap_or_default();
+                self.mode = Mode::Prompt(Prompt::TableSearch);
+            }
+            "table-filter" => {
+                let Some(t) = &self.table else { return true };
+                self.input = t.filters.iter().find(|(c, _)| *c == t.col).map(|(_, v)| v.clone()).unwrap_or_default();
+                self.mode = Mode::Prompt(Prompt::TableFilter);
+            }
+            "table-edit" => self.table_edit(),
+            "table-clear" => match &mut self.table {
+                Some(t) if t.open => t.open = false,
+                Some(t) if !t.query.is_empty() || !t.filters.is_empty() => {
+                    t.query.clear();
+                    t.filters.clear();
+                }
+                _ => self.close_table(),
+            },
             "extract" if !self.targets().is_empty() => {
                 self.status = "extracting annotations…".into();
                 self.job = Some(Job::ExtractAnnotations);
@@ -778,6 +831,7 @@ impl App {
             "tags" => self.open_chooser(PickKind::Tags),
             "move" => self.open_chooser(PickKind::Move),
             "command" => self.mode = Mode::Prompt(Prompt::Command),
+            "close-or-quit" if self.right == RightView::Tables && self.table.is_some() => self.close_table(),
             "close-or-quit" if self.graph.is_some() => self.close_graph(),
             "close-or-quit" => self.quit = true,
             "add" if args.is_empty() => self.mode = Mode::Prompt(Prompt::Add),
@@ -865,6 +919,23 @@ impl App {
         match mode {
             Mode::Search => self.refilter(),
             Mode::SideSearch => self.refilter_sidebar(true),
+            // Enter keeps what was typed; Esc clears it.
+            Mode::Prompt(Prompt::TableSearch) if self.mode == mode || k.code == KeyCode::Esc => {
+                if let Some(t) = &mut self.table {
+                    t.query = self.input.clone();
+                    t.row = 0;
+                }
+            }
+            Mode::Prompt(Prompt::TableFilter) if self.mode == mode || k.code == KeyCode::Esc => {
+                if let Some(t) = &mut self.table {
+                    let col = t.col;
+                    t.filters.retain(|(c, _)| *c != col);
+                    if !self.input.is_empty() {
+                        t.filters.push((col, self.input.clone()));
+                    }
+                    t.row = 0;
+                }
+            }
             _ => {}
         }
     }
@@ -1161,6 +1232,7 @@ impl App {
                 ("attach", args) => self.attach(args, text),
                 ("sync", _) => self.sync = true,
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
+                ("table", args) => self.table_command(args.trim()),
                 ("fetch", args) => self.fetch_command(args.trim(), text),
                 ("cite", args) => self.cite(args.trim()),
                 ("", _) => {}
@@ -1349,7 +1421,7 @@ impl App {
                 Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
                     if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
                         tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
-                        let saved = self.lib.save(&self.lib.refs[i]).and_then(|e| yeda_fs::apply(&self.dir, [e]));
+                        let saved = self.lib.save_ai(&self.lib.refs[i]).and_then(|e| yeda_fs::apply(&self.dir, [e]));
                         if let Err(e) = saved {
                             s.failed.push(format!("{key}: {e:#}"));
                         }
@@ -1770,13 +1842,58 @@ impl App {
         self.pane = if self.right == RightView::Details { Pane::List } else { Pane::Right };
     }
 
-    /// Scrolls the tables view back to the top when the selected reference changes.
-    pub fn sync_table_scroll(&mut self) {
-        let key = self.selected().map(|r| r.key.clone());
-        if key != self.table_scroll_key {
-            self.table_scroll = 0;
-            self.table_scroll_key = key;
+    fn table_command(&mut self, args: &str) {
+        if args == "close" {
+            return self.close_table();
         }
+        let name = match self.table_name(Some(args).filter(|a| !a.is_empty())) {
+            Ok(n) => n,
+            Err(e) => return self.status = format!("{e:#}"),
+        };
+        let keys: Vec<String> = self.targets().iter().map(|&i| self.lib.refs[i].key.clone()).collect();
+        if keys.is_empty() {
+            return self.status = "no reference selected".into();
+        }
+        self.table = Some(TableView::new(name, keys));
+        self.right = RightView::Tables;
+        self.pane = Pane::Right;
+    }
+
+    fn close_table(&mut self) {
+        self.table = None;
+        if self.right == RightView::Tables {
+            self.right = RightView::Details;
+            self.pane = Pane::List;
+        }
+    }
+
+    /// The table's rows as shown; empty without a table.
+    pub fn table_rows(&mut self) -> Vec<Vec<String>> {
+        self.table.as_ref().map(|t| t.rows(&self.lib, &mut self.searcher)).unwrap_or_default()
+    }
+
+    /// Opens the selected cell's file in $EDITOR at the cell: the LLM file, or the reference for its own fields.
+    fn table_edit(&mut self) {
+        let rows = self.table_rows();
+        let Some(t) = &self.table else { return };
+        let Some(key) = rows.get(t.row).map(|r| r[0].clone()) else { return };
+        let column = t.columns(&self.lib)[t.col].clone();
+        let name = t.name.clone();
+        if tables::BUILTIN.contains(&column.as_str()) {
+            self.edit = Some((self.path(&library::ref_path(&key)), None));
+            return;
+        }
+        let path = self.path(&library::ai_path(&key));
+        let find = |path: &PathBuf| fs::read_to_string(path).ok().and_then(|text| table::line_of(&text, &name, &column));
+        if find(&path).is_none()
+            && let Some(i) = self.lib.refs.iter().position(|r| r.key == key)
+        {
+            // A cell not in the file yet gets an empty line to fill in.
+            tables::merge(&mut self.lib.refs[i], &name, Row::from([(column.clone(), String::new())]), false);
+            let effect = self.lib.save_ai(&self.lib.refs[i]);
+            self.apply(effect.map(|e| vec![e]));
+        }
+        self.edit = Some((path.clone(), find(&path)));
     }
 
     /// Clicks select and focus; the wheel moves the selection of the column under the pointer.
@@ -1820,7 +1937,7 @@ impl App {
         let cur = match self.pane {
             Pane::Sidebar => self.side_sel,
             Pane::List => self.sel,
-            Pane::Right if self.right == RightView::Tables => self.table_scroll as usize,
+            Pane::Right if self.right == RightView::Tables => self.table.as_ref().map_or(0, |t| t.row),
             Pane::Right if self.right == RightView::Graph => self.graph.as_ref().map_or(0, |g| g.nbr),
             Pane::Right => self.annot_sel,
         };
@@ -1843,7 +1960,12 @@ impl App {
                     g.nbr = i.min(g.entries().len().saturating_sub(1));
                 }
             }
-            Pane::Right if self.right == RightView::Tables => self.table_scroll = i.min(u16::MAX as usize) as u16,
+            Pane::Right if self.right == RightView::Tables => {
+                let n = self.table_rows().len();
+                if let Some(t) = &mut self.table {
+                    t.row = i.min(n.saturating_sub(1));
+                }
+            }
             Pane::Right => self.annot_sel = i.min(self.annots.len().saturating_sub(1)),
         }
     }

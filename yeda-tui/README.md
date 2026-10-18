@@ -20,7 +20,7 @@ yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs w
 
 ## Keys
 
-These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a command line, and every action is also a command (`:annotations`, `:down`). Rebind keys under `[keys.<context>]` in `~/.config/yeda/config.toml`. The contexts are `normal`, plus `library`, `graph` and `annotations`, which take precedence in their column. `""` unbinds a key. `?` shows the bindings in effect.
+These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a command line, and every action is also a command (`:annotations`, `:down`). Rebind keys under `[keys.<context>]` in `~/.config/yeda/config.toml`. The contexts are `normal`, plus `library`, `graph`, `table` and `annotations`, which take precedence in their column. `""` unbinds a key. `?` shows the bindings in effect.
 
 ```toml
 [keys.normal]
@@ -44,7 +44,8 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `e` / `n` | Edit the reference file / its Markdown note in `$EDITOR` |
 | `t` / `m` | Edit tags / move to a collection |
 | `r` / `R` | Next / previous reading status |
-| `A` / `T` | Show annotations / tables in the right column; in annotations, `o` opens an image in the image viewer and any other annotation in `$EDITOR` |
+| `A` | Show annotations in the right column; there, `o` opens an image in the image viewer and any other annotation in `$EDITOR` |
+| `T` | `:table` |
 | `x` | Extract the annotations embedded in the PDF |
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |
@@ -58,7 +59,8 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 |---|---|
 | `:log` | Open the log of status messages and failures (`~/.local/state/yeda/yeda.log`) in `$EDITOR` |
 | `:save <name>` | Save the current search |
-| `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM; `!` overwrites filled cells |
+| `:table [name]` | The table of the selected or marked references in the right column: `h`/`l` pick a column, `Enter` shows a cell in full, `e` edits it in `$EDITOR`, `s` sorts, `/` searches and `f` filters the column; `Esc`, `q` or `:table close` closes it |
+| `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM, kept in `notes/<key>.ai.toml`; `!` overwrites filled cells |
 | `:summarize-all[!] [table] [profile]` | The same for every visible reference |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |

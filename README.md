@@ -19,6 +19,7 @@ A reference manager whose library is plain TOML and Markdown files, kept in git.
   yeda.toml                               # shared settings
   refs/<citekey>.toml                     # one reference each
   notes/<citekey>.md                      # notes
+  notes/<citekey>.ai.toml                 # what an LLM wrote: its row in each table
   annotations/<citekey>/annotations.toml  # annotations, merged by id
   annotations/<citekey>/img/<id>.png      # image and ink annotations
 ```
