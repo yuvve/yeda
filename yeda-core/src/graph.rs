@@ -82,6 +82,8 @@ pub struct Node {
     pub cites_seeds: usize,
     /// Added by `Graph::extend` for a paper's full lists: listed, but not drawn or ranked.
     pub hidden: bool,
+    /// A seed added while exploring the graph, not one of the starting seeds.
+    pub explored: bool,
     /// Position in the layout: `x` in 0..=1, `row` indexes `Graph::years`, newest first.
     pub x: f64,
     pub row: usize,
@@ -99,20 +101,6 @@ pub struct Graph {
 impl Graph {
     /// Adds all of node `i`'s references (`cites`) and the works citing it (`cited_by`), as hidden
     /// nodes where they aren't in the graph yet; `keys` maps work ids to library keys.
-    /// Makes node `i` a seed with its full lists (see `extend`): it and the library papers in its
-    /// lists are drawn, and the layout is redone.
-    pub fn open(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
-        self.extend(i, cites, cited_by, keys);
-        let linked: HashSet<usize> = self.edges.iter().filter_map(|&(a, b)| if a == i { Some(b) } else if b == i { Some(a) } else { None }).collect();
-        for (j, n) in self.nodes.iter_mut().enumerate() {
-            if j == i || (linked.contains(&j) && n.key.is_some()) {
-                n.hidden = false;
-            }
-        }
-        self.nodes[i].seed = true;
-        self.years = layout(&mut self.nodes, &self.edges);
-    }
-
     pub fn extend(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
         let mut node = |w: &Work| match self.find(&w.id) {
             Some(j) => j,
@@ -130,6 +118,7 @@ impl Graph {
                     cites_seeds: 0,
                     cited_by: w.cited_by_count,
                     hidden: true,
+                    explored: false,
                     x: 0.0,
                     row: 0,
                 });
@@ -237,6 +226,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
                 links: links.get(id).copied().unwrap_or(0),
                 cited_by: w.map_or(0, |w| w.cited_by_count),
                 hidden: false,
+                explored: false,
                 cited_by_seeds: seeds.iter().filter(|s| known.works.get(*s).is_some_and(|w| w.references.contains(id))).count(),
                 cites_seeds: seeds
                     .iter()
@@ -377,13 +367,5 @@ mod tests {
         assert!(w.hidden && w.key.as_deref() == Some("w"));
         assert!(!g.nodes[g.find("A").unwrap()].hidden);
 
-        let v = g.find("V").unwrap();
-        g.open(v, &[work("C", 2022, &[], 0)], &[work("U", 2025, &[], 0)], &HashMap::from([("U".to_string(), "u".to_string())]));
-        let (u, v) = (g.find("U").unwrap(), g.find("V").unwrap());
-        assert!(g.nodes[v].seed && !g.nodes[v].hidden, "the opened paper is a drawn seed");
-        assert!(!g.nodes[u].hidden, "a library paper in its lists is drawn");
-        assert!(g.nodes[g.find("W").unwrap()].hidden, "what it doesn't link stays hidden");
-        assert_eq!(g.years[g.nodes[u].row], Some(2025));
-        assert!(g.edges.contains(&(v, g.find("C").unwrap())));
     }
 }
