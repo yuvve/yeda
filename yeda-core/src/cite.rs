@@ -18,6 +18,7 @@ pub enum CslStyle<'a> {
 pub fn export(refs: &[Ref], format: &str, read_csl: impl FnOnce(&str) -> Result<String>) -> Result<String> {
     match format {
         "bibtex" | "bib" => Ok(bibtex(refs)),
+        "ident" => Ok(refs.iter().filter_map(identifier).map(|i| i + "\n").collect()),
         path if path.ends_with(".csl") => formatted(refs, CslStyle::Xml(&read_csl(path)?)),
         name => formatted(refs, CslStyle::Name(name)),
     }
@@ -179,9 +180,33 @@ pub fn formatted(refs: &[Ref], style: CslStyle) -> Result<String> {
     Ok(out)
 }
 
+/// The reference's identifier in a form `a` (add) takes: its DOI, else arXiv ID, else first ISBN, else URL.
+pub fn identifier(r: &Ref) -> Option<String> {
+    let extra = |name: &str| r.extra.get(name).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
+    r.doi
+        .clone()
+        .or_else(|| extra("archiveID").filter(|a| a.starts_with("arXiv:")).map(String::from))
+        .or_else(|| extra("isbn").and_then(|i| i.split_whitespace().next()).map(String::from))
+        .or_else(|| extra("url").map(String::from))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exports_identifiers() {
+        let with = |field: &str, value: &str| {
+            let mut r = Ref::default();
+            r.extra.insert(field.into(), value.into());
+            r
+        };
+        let mut arxiv = with("archiveID", "arXiv:1901.08492");
+        arxiv.extra.insert("url".into(), "https://arxiv.org/abs/1901.08492".into());
+        let refs = [paper(), arxiv, with("isbn", "978-0-262-38051-5 978-0-262-38050-8"), with("url", "https://example.org/x"), Ref::default()];
+        let text = export(&refs, "ident", |_| unreachable!()).unwrap();
+        assert_eq!(text, "10.3390/s22239042\narXiv:1901.08492\n978-0-262-38051-5\nhttps://example.org/x\n");
+    }
 
     fn paper() -> Ref {
         let mut r = Ref {
