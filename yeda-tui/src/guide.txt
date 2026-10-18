@@ -75,27 +75,27 @@ SAVED (CUSTOM) SEARCHES
 
 CITATION GRAPH  ( :graph )
 
-  :graph graphs the selected reference, or the marked ones (v, V; V G
-  marks the whole list).
+  :graph graphs the selected reference, or the marked ones (v, V; V G marks
+  the whole list).
 
   The graph shows the seeds (⊚, or ⊙ when opened while exploring), other
   library papers citing or cited by them (◎), and the 20 papers outside the
-  library linked to the most seeds (○). Rows are years, newest at the top. Only the selected paper's
-  citations are drawn, the one to the picked paper bright. It stays in the
-  right column and follows the reference list.
+  library linked to the most seeds (○). Rows are years, newest at the top.
+  Only the selected paper's citations are drawn, the one to the picked paper
+  bright. It stays in the right column and follows the reference list.
 
-  The list under it has tabs, switched with Tab and shift-Tab: Seeds,
-  Cites → (what the selected paper cites), ← Cited by, ▲ Top cited and
-  ▼ Top citing (outside papers cited by or citing the seeds). Rows
-  show the year and OpenAlex's citation count; s sorts by either. Cites
-  and Cited by list papers in the graph until a paper is opened with Enter.
-  Opening one makes it a seed (⊙ if it wasn't one; the starting seeds are
-  ⊚): the graph is rebuilt with its citing works, its full reference list
-  and everything ranked over all seeds. The next :graph starts over; what
-  was fetched stays cached. Exploring never adds to the library; a does.
-  j/k pick a paper, Enter opens it, Backspace goes back, a adds it by DOI, o opens
-  its DOI in the browser, N shows only the selected paper and its direct
-  links (again for all), and Esc (or q anywhere, or :graph close) closes the graph.
+  The list under it has tabs, switched with Tab and shift-Tab: Seeds, Cites
+  → (what the selected paper cites), ← Cited by, ▲ Top cited and ▼ Top
+  citing (outside papers cited by or citing the seeds). Rows show the year
+  and OpenAlex's citation count; s sorts by either. Cites and Cited by list
+  papers in the graph until a paper is opened with Enter. Opening one makes
+  it a seed (⊙ if it wasn't one; the starting seeds are ⊚): the graph is
+  rebuilt with its citing works, its full reference list and everything
+  ranked over all seeds. The next :graph starts over; what was fetched stays
+  cached. Exploring never adds to the library; a does. j/k pick a paper,
+  Enter opens it, Backspace goes back, a adds it by DOI, o opens its DOI in
+  the browser, N shows only the selected paper and its direct links (again
+  for all), and Esc (or q anywhere, or :graph close) closes the graph.
 
   A busy year takes up to four rows, and labels go to the most important
   papers first: the selected one, the picked one, the listed ones, the
