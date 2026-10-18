@@ -1,6 +1,6 @@
 # The default key bindings. Override or add any of them under [keys.<context>] in
 # ~/.config/yeda/config.toml; "" unbinds a key. A binding is a command line, as typed after ':'.
-# The library, graph and annotations contexts take precedence over normal in their column.
+# The library, graph, table and annotations contexts take precedence over normal in their column.
 
 [keys.normal]
 "j" = "down"
@@ -33,7 +33,7 @@
 "r" = "status-next"
 "R" = "status-prev"
 "A" = "annotations"
-"T" = "tables"
+"T" = "table"
 "x" = "extract"
 "C" = "tag-color"
 "d d" = "delete"
@@ -55,6 +55,18 @@
 "a" = "graph-add"
 "o" = "graph-open"
 "Esc" = "graph close"
+
+[keys.table]
+"h" = "table-left"
+"Left" = "table-left"
+"l" = "table-right"
+"Right" = "table-right"
+"Enter" = "table-cell"
+"e" = "table-edit"
+"s" = "table-sort"
+"/" = "table-search"
+"f" = "table-filter"
+"Esc" = "table-clear"
 
 [keys.annotations]
 "o" = "open-annotation"

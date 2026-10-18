@@ -37,8 +37,8 @@ pub struct Ref {
     pub pdf: Option<Pdf>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, toml::Value>,
-    /// This reference's row in each table, by table name then column.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    /// This reference's row in each table, by table name then column; kept in `ai_path`.
+    #[serde(skip)]
     pub tables: BTreeMap<String, BTreeMap<String, String>>,
 }
 
@@ -143,6 +143,18 @@ pub fn note_path(key: &str) -> String {
     format!("notes/{key}.md")
 }
 
+/// Everything an LLM wrote about the paper: its row in each table.
+pub fn ai_path(key: &str) -> String {
+    format!("notes/{key}{AI}")
+}
+
+const AI: &str = ".ai.toml";
+
+/// The citekey of a `notes/` file name, or `None` if it isn't an LLM file.
+pub fn ai_key(file_name: &str) -> Option<&str> {
+    file_name.strip_suffix(AI).filter(|k| !k.is_empty())
+}
+
 /// The citekey of a `refs/` file name, or `None` if it isn't a reference file.
 pub fn ref_key(file_name: &str) -> Option<&str> {
     file_name.strip_suffix(".toml").filter(|k| !k.is_empty())
@@ -245,9 +257,24 @@ impl Library {
         Ok(Effect::write(ref_path(&r.key), toml::to_string(r)?))
     }
 
+    pub fn save_ai(&self, r: &Ref) -> Result<Effect> {
+        if r.tables.is_empty() {
+            return Ok(Effect::remove(ai_path(&r.key)));
+        }
+        Ok(Effect::write(ai_path(&r.key), toml::to_string(&r.tables)?))
+    }
+
+    /// Reads `notes/<key>.ai.toml` into the reference's tables; a file without its reference is ignored.
+    pub fn load_ai(&mut self, key: &str, text: &str) -> Result<()> {
+        if let Some(r) = self.refs.iter_mut().find(|r| r.key == key) {
+            r.tables = toml::from_str(text).with_context(|| ai_path(key))?;
+        }
+        Ok(())
+    }
+
     /// Removes a reference with its annotations and notes.
     pub fn delete(&self, key: &str) -> Vec<Effect> {
-        vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key))]
+        vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key)), Effect::remove(ai_path(key))]
     }
 
     /// Where the PDF is on this machine; for a WebDAV location, its place in `cache`, which may not
@@ -338,8 +365,13 @@ mod tests {
         r.extra.insert("journal".into(), toml::Value::String("J".into()));
         let Effect::Write { path, bytes } = Library::default().save(&r).unwrap() else { panic!() };
         assert_eq!(path, "refs/smith2020.toml");
+        assert!(!String::from_utf8_lossy(&bytes).contains("ROS"));
+        let Effect::Write { path: ai, bytes: ai_bytes } = Library::default().save_ai(&r).unwrap() else { panic!() };
+        assert_eq!(ai, "notes/smith2020.ai.toml");
+        assert_eq!(ai_key("smith2020.ai.toml"), Some("smith2020"));
         let shared = "[locations]\npapers = \"~/papers\"\n";
-        let lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
+        let mut lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
+        lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap()).unwrap();
         assert_eq!(lib.refs, vec![r]);
         assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/h/papers/smith.pdf"));
     }

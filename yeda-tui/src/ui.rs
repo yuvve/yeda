@@ -8,7 +8,7 @@ use yeda_core::library::{Library, Ref};
 use ratatui::prelude::*;
 use ratatui::symbols::Marker;
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap};
 use ratatui_image::StatefulImage;
 use std::collections::HashMap;
 use yeda_core::graph::Graph;
@@ -153,37 +153,66 @@ fn draw_annotations(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_tables(f: &mut Frame, app: &mut App, area: Rect) {
-    app.sync_table_scroll();
-    let mut lines: Vec<Line> = Vec::new();
-    if app.lib.tables.is_empty() {
-        lines.push(Line::from("No tables. Define [tables.<name>] in yeda.toml or run import-table.").dim());
+fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
+    let rows = app.table_rows();
+    let focused = app.pane == Pane::Right;
+    let Some(t) = &mut app.table else { return };
+    let columns = t.columns(&app.lib);
+    t.row = t.row.min(rows.len().saturating_sub(1));
+    t.col = t.col.min(columns.len().saturating_sub(1));
+    let widths: Vec<u16> = columns
+        .iter()
+        .enumerate()
+        .map(|(c, name)| {
+            let widest = rows.iter().map(|r| r[c].lines().next().unwrap_or_default().chars().count()).max().unwrap_or(0);
+            let cap = if name == "key" { 20 } else { 40 };
+            widest.max(name.chars().count()).clamp(4, cap) as u16
+        })
+        .collect();
+    let inner = area.inner(layout::Margin::new(1, 1));
+    let fits = |from: usize, to: usize| widths[from..=to].iter().map(|w| w + 1).sum::<u16>() <= inner.width;
+    t.left = t.left.min(t.col);
+    while t.left > 0 && fits(t.left - 1, t.col) {
+        t.left -= 1;
     }
-    if let Some(r) = app.selected() {
-        for (name, table) in &app.lib.tables {
-            lines.push(Line::from(format!("▸ {name}")).bold());
-            let Some(row) = r.tables.get(name) else {
-                lines.push(Line::from(format!("  no row yet: :summarize {name}")).dim());
-                lines.push(Line::default());
-                continue;
-            };
-            for c in &table.columns {
-                lines.push(Line::from(Span::styled(c.clone(), Style::new().fg(Color::Cyan))));
-                match row.get(c).filter(|v| !v.trim().is_empty()) {
-                    Some(v) => lines.extend(v.lines().map(|l| Line::from(l.to_string()))),
-                    None => lines.push(Line::from("—").dim()),
-                }
-                lines.push(Line::default());
-            }
-        }
+    while t.left < t.col && !fits(t.left, t.col) {
+        t.left += 1;
     }
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((app.table_scroll, 0))
-            .block(block("Tables".into(), app.pane == Pane::Right)),
-        area,
-    );
+    let mut right = t.col + 1;
+    while right < columns.len() && fits(t.left, right) {
+        right += 1;
+    }
+    let mut title = format!("Table {} ({})", t.name, rows.len());
+    if let Some((c, descending)) = t.sort {
+        title += &format!(" {} {}", if descending { "▼" } else { "▲" }, columns[c]);
+    }
+    if !t.query.is_empty() {
+        title += &format!(" · /{}", t.query);
+    }
+    for (c, v) in &t.filters {
+        title += &format!(" · {}:{v}", columns[*c]);
+    }
+    let shown = t.left..right;
+    let header = Row::new(columns[shown.clone()].iter().map(|c| Cell::from(c.clone()))).style(Style::new().fg(Color::Cyan).bold());
+    let body = rows.iter().map(|r| Row::new(r[shown.clone()].iter().map(|v| Cell::from(v.lines().next().unwrap_or_default().to_string()))));
+    let widget = Table::new(body, widths[shown.clone()].iter().map(|&w| Constraint::Length(w)))
+        .header(header)
+        .block(block(title, focused))
+        .row_highlight_style(Style::new().add_modifier(Modifier::BOLD))
+        .cell_highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+    let mut state = TableState::default().with_selected(Some(t.row)).with_selected_column(Some(t.col - t.left));
+    f.render_stateful_widget(widget, area, &mut state);
+    if t.open
+        && let Some(r) = rows.get(t.row)
+    {
+        let cell = popup(area, area.width.saturating_sub(4), area.height.saturating_sub(4));
+        f.render_widget(Clear, cell);
+        let text = if r[t.col].trim().is_empty() { "—".to_string() } else { r[t.col].clone() };
+        f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).block(block(format!("{} · {}", columns[t.col], r[0]), true)), cell);
+    }
+    // The rows start under the header.
+    let rows_area = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
+    clickable(app, Pane::Right, rows_area, Some(state.offset()));
 }
 
 /// Narrower windows drop the right column, then the library column.
@@ -243,8 +272,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_graph(f, app, detail);
     } else if app.right == RightView::Annotations && !detail.is_empty() {
         draw_annotations(f, app, detail);
-    } else if app.right == RightView::Tables {
-        draw_tables(f, app, detail);
+    } else if app.right == RightView::Tables && app.table.is_some() {
+        draw_table(f, app, detail);
     } else {
         let text = app.selected().map(|r| details(r, &app.lib)).unwrap_or_default();
         f.render_widget(
@@ -264,6 +293,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             _ => format!("move to collection › {}", app.input),
         },
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
+        Mode::Prompt(Prompt::TableSearch) => format!("table /{}", app.input),
+        Mode::Prompt(Prompt::TableFilter) => {
+            let column = app.table.as_ref().map(|t| t.columns(&app.lib)[t.col].clone()).unwrap_or_default();
+            format!("{column} (!x: not x, \"\": empty): {}", app.input)
+        }
         Mode::Prompt(Prompt::Add) => format!("add DOIs / arXiv IDs / ISBNs: {}", app.input.replace('\n', "  ")),
         Mode::Prompt(Prompt::Secret) => format!(
             "secret for {} (Enter on empty cancels): {}",

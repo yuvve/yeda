@@ -5,6 +5,7 @@ mod keys;
 mod log;
 mod poppler;
 mod sync;
+mod table;
 mod ui;
 
 use anyhow::{Context, Result};

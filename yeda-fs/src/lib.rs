@@ -48,7 +48,16 @@ pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> 
             }
         }
     }
-    let lib = Library::parse(shared.as_deref(), machine.as_deref(), refs, home)?;
+    let mut lib = Library::parse(shared.as_deref(), machine.as_deref(), refs, home)?;
+    let notes = dir.join("notes");
+    if notes.exists() {
+        for entry in fs::read_dir(&notes).with_context(|| notes.display().to_string())? {
+            let path = entry?.path();
+            if let Some(key) = path.file_name().and_then(|n| n.to_str()).and_then(library::ai_key) {
+                lib.load_ai(key, &fs::read_to_string(&path).with_context(|| path.display().to_string())?)?;
+            }
+        }
+    }
     for base in lib.locations.values() {
         // A PDF folder that can't be written (read-only, unmounted) mustn't keep the library from loading.
         let _ = ensure_stignore(base, STIGNORE_PDFS);
