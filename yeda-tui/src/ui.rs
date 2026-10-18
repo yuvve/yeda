@@ -415,6 +415,9 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 
 /// Rows by year, newest at the top; ◉ seeds, ● other library papers, ○ papers outside it. The
 /// selected paper is yellow, its neighbours cyan, and the neighbour highlighted in the list a magenta ◆.
+/// Faint for most edges, the selected paper's darker, the picked neighbour's brightest.
+const EDGE_COLORS: [Color; 3] = [Color::DarkGray, Color::Yellow, Color::LightYellow];
+
 /// Text rows a year may take before its least important nodes lose their labels.
 const MAX_LANES: usize = 4;
 
@@ -530,6 +533,28 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         CanvasLine { x1, y1, x2, y2, color }
     };
     let edges: Vec<(usize, usize)> = g.edges.iter().copied().filter(|&(a, b)| is_shown(a) && is_shown(b)).collect();
+    let touches = |(a, b): (usize, usize), i: usize| a == i || b == i;
+    // 2: the edge to the picked neighbour, 1: the selected paper's other edges, 0: the rest.
+    let edge_level = |e: (usize, usize)| match () {
+        _ if touches(e, v.sel) && picked.is_some_and(|p| touches(e, p)) => 2,
+        _ if touches(e, v.sel) => 1,
+        _ => 0,
+    };
+    let cell = 1.15 / (width - 1.0);
+    // An arrow two cells short of the cited paper, pointing at it; edge (a, b) means a cites b.
+    let arrow = |(a, b): (usize, usize)| {
+        let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
+        // Rows are about twice as tall as columns are wide.
+        let (dx, dy) = ((x2 - x1) / cell, (y2 - y1) * 2.0);
+        let len = dx.hypot(dy);
+        if len < 4.0 {
+            return None;
+        }
+        let t = 1.0 - 2.5 / len;
+        let octant = ((dy.atan2(dx).to_degrees() + 360.0 + 22.5) % 360.0 / 45.0) as usize;
+        let glyph = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"][octant.min(7)];
+        Some((x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, glyph))
+    };
     let mut title = format!("Graph of {} ({} papers)", v.scope, g.nodes.len());
     if v.ego {
         title += &format!(" · neighbourhood: {} · N: all", shown.len());
@@ -545,19 +570,19 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         .x_bounds([-0.15, 1.0])
         .y_bounds([0.0, (rows - 1.0).max(1.0)])
         .paint(|ctx| {
-            // ponytail: past this many edges braille lines merge into a solid block, so only the selection's are drawn.
-            if edges.len() <= 60 {
-                for &e in edges.iter().filter(|e| e.0 != v.sel && e.1 != v.sel) {
-                    ctx.draw(&edge(e, Color::DarkGray));
+            // Brighter edges on later layers, so they cross over fainter ones.
+            for (level, &color) in EDGE_COLORS.iter().enumerate() {
+                for &e in edges.iter().filter(|&&e| edge_level(e) == level) {
+                    ctx.draw(&edge(e, color));
                 }
-            }
-            ctx.layer();
-            for &e in edges.iter().filter(|e| e.0 == v.sel || e.1 == v.sel) {
-                ctx.draw(&edge(e, Color::LightYellow));
-            }
-            if let Some(p) = picked.filter(|&p| is_shown(p)) {
                 ctx.layer();
-                ctx.draw(&edge((v.sel, p), Color::Magenta));
+            }
+            let mut by_level = edges.clone();
+            by_level.sort_by_key(|&e| edge_level(e));
+            for e in by_level {
+                if let Some((x, y, glyph)) = arrow(e) {
+                    ctx.print(x, y, Span::styled(glyph, Style::new().fg(EDGE_COLORS[edge_level(e)])));
+                }
             }
             ctx.layer();
             for &(r, year) in &starts {
@@ -577,7 +602,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
                 let (glyph, style) = match ranks[i] {
                     // Not bold: most terminals turn bold ANSI yellow into the bright yellow of the edges.
                     4 => (None, Style::new().fg(Color::Yellow)),
-                    3 => (Some("◆"), Style::new().fg(Color::Magenta).bold()),
+                    3 => (Some("◆"), Style::new().fg(Color::LightYellow).bold()),
                     2 => (None, Style::new().fg(Color::Cyan)),
                     _ => (None, Style::new().dim()),
                 };
