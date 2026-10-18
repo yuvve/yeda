@@ -381,7 +381,7 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
         .collect();
     let suggestions = form.suggestions();
     if !suggestions.is_empty() {
-        lines.push(Line::raw(format!("{:>10}  Ctrl-N/Ctrl-P pick · → completes", "")).dim());
+        lines.push(Line::raw(format!("{:>10}  Ctrl-N/Ctrl-P pick · Tab completes", "")).dim());
     }
     for (i, s) in suggestions.iter().enumerate() {
         let line = Line::raw(format!("{:>10}  {s}", ""));
@@ -390,7 +390,7 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     let height = (FILTER_FIELDS.len() + 2 + FilterForm::SHOWN) as u16 + 2;
     let area = popup(main, 60, height);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(" Filter · Tab/↓ next · Enter apply · Esc cancel ".into(), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(" Filter · ^D/^U move · ^X clear · ^L all · Enter · Esc ".into(), true)), area);
 }
 
 fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {
