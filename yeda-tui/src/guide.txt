@@ -117,7 +117,8 @@ CITATION GRAPH  ( :graph )
 CITING  ( :cite [format] )
 
   Copies the selected or marked references to the clipboard. The format is
-  bibtex, the name of a citation style (ieee, apa, chicago-author-date,
+  bibtex; ident, one identifier per line (the DOI, else the arXiv ID, the
+  ISBN or the URL; a pastes them back in); the name of a citation style (ieee, apa, chicago-author-date,
   vancouver, nature, …), or the path of a .csl file, relative to the library
   or starting with ~/. Without one it uses [cite] format from yeda.toml, else
   bibtex:
