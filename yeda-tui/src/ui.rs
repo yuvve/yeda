@@ -296,6 +296,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
+        Mode::Secrets => draw_secrets(f, app, main),
         Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
     }
@@ -331,6 +332,28 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, 60, height);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(" Filter · Tab/↓ next · Enter apply · Esc cancel ".into(), true)), area);
+}
+
+fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {
+    let width = app.secret_items.iter().map(|s| s.label.chars().count()).max().unwrap_or(0);
+    let items: Vec<ListItem> = app
+        .secret_items
+        .iter()
+        .map(|s| {
+            let style = if s.status == "not set" { Style::new().dim() } else { Style::new().fg(Color::Green) };
+            ListItem::new(Line::from(vec![Span::raw(format!("{:<width$}  ", s.label)), Span::styled(s.status.clone(), style)]))
+        })
+        .collect();
+    let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
+    let area = popup(main, lines.max(48) + 2, items.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block(" Secrets · Enter set · d remove · Esc close ".into(), true))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.secret_sel)),
+    );
 }
 
 fn draw_sort(f: &mut Frame, app: &App, main: Rect) {

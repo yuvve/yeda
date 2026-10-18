@@ -31,8 +31,8 @@ pub enum Mode {
     Pick,
     Prompt(Prompt),
     ConfirmDelete,
-    /// Asks whether to keep the secret just entered in the system secret store.
-    ConfirmSaveSecret,
+    /// The `:secrets` menu.
+    Secrets,
     Filter,
     Sort,
     Help(HelpPage),
@@ -107,7 +107,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":sync", "commit, pull and push the library with git"),
     (":graph[!]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
-    (":graph key", "set an optional OpenAlex API key, kept in the secret store"),
+    (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
@@ -176,6 +176,16 @@ pub enum Prompt {
 pub enum Retry {
     OpenPdf,
     Command(String),
+    /// Back to the `:secrets` menu.
+    Secrets,
+}
+
+/// A secret the configuration can use, as `:secrets` lists it.
+pub struct SecretItem {
+    pub account: String,
+    pub label: String,
+    /// Where it is set, or "not set"; never the value.
+    pub status: String,
 }
 
 /// A secret the user is being asked for.
@@ -359,6 +369,8 @@ pub struct App {
     secrets: std::collections::HashMap<String, String>,
     /// Accounts whose stored secret the server rejected, so the store is skipped until a new one is entered.
     rejected: std::collections::HashSet<String>,
+    pub secret_items: Vec<SecretItem>,
+    pub secret_sel: usize,
     pub asking: Option<PendingSecret>,
     /// The last magic-wand batch's failures, one line each.
     pub report: Vec<String>,
@@ -474,6 +486,8 @@ impl App {
             help_scroll: 0,
             secrets: Default::default(),
             rejected: Default::default(),
+            secret_items: Vec::new(),
+            secret_sel: 0,
             asking: None,
             report: Vec::new(),
             report_copied: false,
@@ -585,20 +599,7 @@ impl App {
         self.status.clear();
         match self.mode {
             Mode::Normal => self.normal_key(k),
-            Mode::ConfirmSaveSecret => {
-                self.mode = Mode::Normal;
-                let Some(p) = self.asking.take() else { return };
-                let saved = match self.secrets.get(&p.account) {
-                    Some(secret) if k.code == KeyCode::Char('y') => yeda_secrets::set(&p.account, secret).err(),
-                    _ => None,
-                };
-                self.status = if k.code == KeyCode::Char('y') { "saved" } else { "kept for this session" }.into();
-                self.retry(p.retry);
-                // After the retry, so its own status doesn't hide that the secret wasn't saved.
-                if let Some(e) = saved {
-                    self.status = format!("not saved: {e:#}; {}", self.status);
-                }
-            }
+            Mode::Secrets => self.secrets_key(k),
             Mode::ConfirmDelete => {
                 self.mode = Mode::Normal;
                 if k.code == KeyCode::Char('y') {
@@ -1134,6 +1135,7 @@ impl App {
                 }
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
+                ("secrets", _) => self.open_secrets(),
                 ("failed", _) if self.report.is_empty() => self.status = "nothing failed".into(),
                 ("failed", _) => self.open_help(HelpPage::Failed),
                 ("log", _) => match self.log.path.clone() {
@@ -1181,16 +1183,21 @@ impl App {
                 self.after_config_change(result);
             }
             Prompt::Secret => {
-                let Some(p) = &self.asking else { return };
                 if text.is_empty() {
                     self.asking = None;
                     self.status = "cancelled".into();
                     return;
                 }
+                let Some(p) = self.asking.take() else { return };
                 self.secrets.insert(p.account.clone(), text.into());
                 self.rejected.remove(&p.account);
-                self.status = format!("save {} in the secret store? (y/n)", p.label);
-                self.mode = Mode::ConfirmSaveSecret;
+                let saved = yeda_secrets::set(&p.account, text);
+                self.status = "saved".into();
+                self.retry(p.retry);
+                // After the retry, so its own status doesn't hide that the secret wasn't saved.
+                if let Err(e) = saved {
+                    self.status = format!("kept for this session only, not saved: {e:#}; {}", self.status);
+                }
             }
             Prompt::Add if !ids::split_ids(text).is_empty() => {
                 let todo: std::collections::VecDeque<String> = ids::split_ids(text).into_iter().map(Into::into).collect();
@@ -1422,6 +1429,68 @@ impl App {
         match retry {
             Retry::OpenPdf => self.open_pdf(),
             Retry::Command(text) => self.submit(Prompt::Command, &text),
+            Retry::Secrets => self.open_secrets(),
+        }
+    }
+
+    /// Every secret the configuration can use, with where each is set.
+    fn open_secrets(&mut self) {
+        let mut items: Vec<(String, String, Option<String>)> = Vec::new();
+        for (name, dav) in &self.lib.remotes {
+            items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url), None));
+        }
+        for (name, profile) in self.lib.llm.iter().filter(|(_, p)| p.needs_key()) {
+            let env = profile.key_env().to_string();
+            items.push((yeda_secrets::llm_account(&env), format!("LLM {name}: {env}"), Some(env)));
+        }
+        items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into(), Some("OPENALEX_API_KEY".into())));
+        let mut seen = HashSet::new();
+        items.retain(|(account, _, _)| seen.insert(account.clone()));
+        self.secret_items = items
+            .into_iter()
+            .map(|(account, label, env)| {
+                let status = match env.filter(|e| std::env::var(e).is_ok_and(|v| !v.is_empty())) {
+                    Some(e) => format!("from ${e}"),
+                    None if self.secrets.contains_key(&account) => "this session".into(),
+                    None => match yeda_secrets::get(&account) {
+                        Ok(Some(_)) => "in the secret store".into(),
+                        Ok(None) => "not set".into(),
+                        Err(e) => {
+                            self.status = format!("{e:#}");
+                            "secret store unavailable".into()
+                        }
+                    },
+                };
+                SecretItem { account, label, status }
+            })
+            .collect();
+        self.secret_sel = self.secret_sel.min(self.secret_items.len() - 1);
+        self.mode = Mode::Secrets;
+    }
+
+    fn secrets_key(&mut self, k: KeyEvent) {
+        let Some(item) = self.secret_items.get(self.secret_sel) else { return };
+        let account = item.account.clone();
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => self.secret_sel = (self.secret_sel + 1).min(self.secret_items.len() - 1),
+            KeyCode::Char('k') | KeyCode::Up => self.secret_sel = self.secret_sel.saturating_sub(1),
+            KeyCode::Enter => {
+                self.asking = Some(PendingSecret { account, label: item.label.clone(), retry: Retry::Secrets });
+                self.input.clear();
+                self.mode = Mode::Prompt(Prompt::Secret);
+            }
+            KeyCode::Char('d') => {
+                self.secrets.remove(&account);
+                self.status = match yeda_secrets::delete(&account) {
+                    Ok(()) => "removed".into(),
+                    Err(e) => format!("{e:#}"),
+                };
+                let status = std::mem::take(&mut self.status);
+                self.open_secrets();
+                self.status = status;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
         }
     }
 
@@ -1857,16 +1926,9 @@ impl App {
         }
         let (scope, seeds): (&str, Vec<usize>) = match args.trim() {
             "close" => return self.close_graph(),
-            "key" => {
-                let label = "OpenAlex API key (free at openalex.org/settings/api)".into();
-                self.asking = Some(PendingSecret { account: OPENALEX_ACCOUNT.into(), label, retry: Retry::Command(String::new()) });
-                self.input.clear();
-                self.mode = Mode::Prompt(Prompt::Secret);
-                return;
-            }
             "" => ("the selection", self.targets()),
             _ => {
-                self.status = "usage: :graph[!] [key|close]".into();
+                self.status = "usage: :graph[!] [close]".into();
                 return;
             }
         };
