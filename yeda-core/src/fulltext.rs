@@ -78,6 +78,21 @@ pub fn ieee_pdf(page: &str) -> Option<String> {
     Some(format!("{scheme}://{host}/stampPDF/getPDF.jsp?tp=&arnumber={number}&ref="))
 }
 
+/// ScienceDirect's PDF link for a `/science/article/pii/<PII>` page, directly or through the
+/// proxy; the article page has no `citation_pdf_url`.
+pub fn sciencedirect_pdf(page: &str) -> Option<String> {
+    let (scheme, rest) = page.split_once("://")?;
+    let (host, path) = rest.split_once('/')?;
+    if !(host == "www.sciencedirect.com" || host.starts_with("www-sciencedirect-com.")) {
+        return None;
+    }
+    let pii = path.split(['?', '#']).next()?.strip_prefix("science/article/pii/")?;
+    if pii.is_empty() || !pii.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(format!("{scheme}://{host}/science/article/pii/{pii}/pdfft"))
+}
+
 pub fn is_pdf(bytes: &[u8]) -> bool {
     bytes.trim_ascii_start().starts_with(b"%PDF-")
 }
@@ -108,6 +123,15 @@ pub fn looks_like(text: &str, r: &Ref) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_sciencedirect_pdfs() {
+        let proxied = "https://www-sciencedirect-com.proxy.lib.ltu.se/science/article/pii/S092523121400808X";
+        assert_eq!(sciencedirect_pdf(proxied), Some(format!("{proxied}/pdfft")));
+        assert_eq!(sciencedirect_pdf("https://www.sciencedirect.com/science/article/pii/S0925?via%3Dihub").as_deref(), Some("https://www.sciencedirect.com/science/article/pii/S0925/pdfft"));
+        assert_eq!(sciencedirect_pdf(&format!("{proxied}/pdfft")), None);
+        assert_eq!(sciencedirect_pdf("https://www.sciencedirect.com/journal/x"), None);
+    }
 
     #[test]
     fn finds_ieee_pdfs() {
