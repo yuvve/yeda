@@ -19,13 +19,28 @@ pub struct TableView {
     pub filters: Vec<(usize, String)>,
     /// The selected cell is shown in full.
     pub open: bool,
+    pub hidden: Vec<usize>,
 }
 
 impl TableView {
     pub fn new(name: String, keys: Vec<String>) -> Self {
-        TableView { name, keys, row: 0, col: 0, left: 0, sort: None, query: String::new(), filters: Vec::new(), open: false }
+        TableView { name, keys, row: 0, col: 0, left: 0, sort: None, query: String::new(), filters: Vec::new(), open: false, hidden: Vec::new() }
     }
 
+    /// The indices of the columns not hidden, out of `n`.
+    pub fn visible(&self, n: usize) -> Vec<usize> {
+        (0..n).filter(|c| !self.hidden.contains(c)).collect()
+    }
+
+    /// Hides the selected column, unless it's the last one shown, and selects a neighbour.
+    pub fn hide(&mut self, n: usize) {
+        let vis = self.visible(n);
+        if vis.len() < 2 {
+            return;
+        }
+        self.hidden.push(self.col);
+        self.col = vis.iter().copied().find(|&c| c > self.col).or(vis.iter().copied().rfind(|&c| c < self.col)).unwrap_or(0);
+    }
 
     /// The cells of each row shown, filtered and sorted; the first is the reference key.
     pub fn rows(&self, lib: &Library, searcher: &mut Searcher) -> Vec<Vec<String>> {
@@ -140,6 +155,15 @@ mod tests {
         assert_eq!(keys(&t, &mut s), ["a2020", "c2021"]);
         t.filters = vec![(5, "\"\"".into())];
         assert_eq!(keys(&t, &mut s), ["b2019", "c2021"]);
+
+        t.col = 5;
+        t.hide(6);
+        assert_eq!((t.visible(6), t.col), (vec![0, 1, 2, 3, 4], 4));
+        t.hidden = vec![0, 1, 2, 3];
+        t.hide(6);
+        assert_eq!(t.visible(6), [5]);
+        t.hide(6);
+        assert_eq!(t.visible(6), [5]);
 
         let Ok(yeda_core::Effect::Write { bytes, .. }) = lib.save_ai(lib.get("a2020").unwrap()) else { panic!() };
         let text = String::from_utf8(bytes).unwrap();

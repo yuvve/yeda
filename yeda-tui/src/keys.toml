@@ -68,6 +68,8 @@
 "Left" = "table-left"
 "l" = "table-right"
 "Right" = "table-right"
+"-" = "table-hide"
+"+" = "table-show"
 "Enter" = "table-cell"
 "e" = "table-edit"
 "s" = "table-sort"
