@@ -1,6 +1,6 @@
 //! Downloading a PDF over plain HTTP.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::time::Duration;
 use yeda_core::fulltext::is_pdf;
 
@@ -19,7 +19,23 @@ pub fn download(url: &str, cookie: Option<&str>) -> Result<Vec<u8>> {
     let kind = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let bytes = resp.body_mut().with_config().limit(MAX_BYTES).read_to_vec()?;
     if !is_pdf(&bytes) {
-        bail!("{url}: not a PDF ({})", if kind.is_empty() { "no content type" } else { &kind });
+        return Err(NotPdf(format!("{url}: not a PDF ({})", if kind.is_empty() { "no content type" } else { &kind })).into());
     }
     Ok(bytes)
+}
+
+/// The server answered, but with something other than a PDF, such as a web page.
+#[derive(Debug)]
+pub struct NotPdf(String);
+
+impl std::fmt::Display for NotPdf {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotPdf {}
+
+pub fn is_not_pdf(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<NotPdf>().is_some()
 }

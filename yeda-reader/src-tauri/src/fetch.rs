@@ -95,10 +95,10 @@ fn download_natively(window: &WebviewWindow, url: &str) {
 }
 
 /// The PDF at `url`, downloaded with the window's cookies for it.
-fn fetch_with_cookies(window: &WebviewWindow, url: &str) -> Option<Vec<u8>> {
-    let cookies = window.cookies_for_url(url.parse().ok()?).ok()?;
+fn fetch_with_cookies(window: &WebviewWindow, url: &str) -> anyhow::Result<Vec<u8>> {
+    let cookies = window.cookies_for_url(url.parse()?)?;
     let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
-    yeda_net::fulltext::download(url, Some(&header).filter(|h| !h.is_empty()).map(String::as_str)).ok()
+    yeda_net::fulltext::download(url, Some(&header).filter(|h| !h.is_empty()).map(String::as_str))
 }
 
 pub fn run(job: Job) {
@@ -218,7 +218,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                     // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
                     if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
                         tried.push(pdf.clone());
-                        match fetch_with_cookies(window, &pdf).and_then(save) {
+                        match fetch_with_cookies(window, &pdf).ok().and_then(save) {
                             Some(outcome) => break outcome,
                             None => download_in_page(window, &pdf),
                         }
@@ -236,7 +236,7 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                         continue;
                     }
                     tried.push(pdf.to_string());
-                    match fetch_with_cookies(window, pdf).and_then(save) {
+                    match fetch_with_cookies(window, pdf).ok().and_then(save) {
                         Some(outcome) => break outcome,
                         // The browser may get what a plain request can't; a link to another site
                         // just opens, showing what stands in the way: a sign-in or a check.
@@ -246,12 +246,17 @@ fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mute
                 // No report: WebKit's PDF viewer, which can be downloaded from like any page.
                 Err(RecvTimeoutError::Timeout) => {
                     let url = loaded.take().unwrap_or_default();
-                    if let Some(outcome) = fetch_with_cookies(window, &url).and_then(save) {
-                        break outcome;
-                    }
+                    let refused = match fetch_with_cookies(window, &url) {
+                        Ok(pdf) => match save(pdf) {
+                            Some(outcome) => break outcome,
+                            None => false,
+                        },
+                        // A page that answers with HTML is just a page that reported nothing.
+                        Err(e) => !yeda_net::fulltext::is_not_pdf(&e),
+                    };
                     // Signed PDF links (ScienceDirect's) may refuse a plain request; WebKit's own
                     // download, as from the viewer's button, carries the browser's session.
-                    if !url.is_empty() && !tried.contains(&url) {
+                    if refused && !url.is_empty() && !tried.contains(&url) {
                         tried.push(url.clone());
                         report(&Outcome::Visited { key: paper.key.clone(), page: format!("WebKit download of {}", without_query(&url)) });
                         download_natively(window, &url);
