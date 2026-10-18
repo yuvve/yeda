@@ -501,12 +501,12 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let picked = near.get(v.nbr).map(|&(_, j)| j).filter(|_| focused);
     let shown: Vec<usize> = if v.ego {
         let (citing, cited) = g.neighbours(v.sel);
-        let mut s: Vec<usize> = std::iter::once(v.sel).chain(citing).chain(cited).collect();
+        let mut s: Vec<usize> = std::iter::once(v.sel).chain(citing).chain(cited).filter(|&i| !g.nodes[i].hidden).collect();
         s.sort();
         s.dedup();
         s
     } else {
-        (0..g.nodes.len()).collect()
+        (0..g.nodes.len()).filter(|&i| !g.nodes[i].hidden).collect()
     };
     let rank = |i: usize| match i {
         _ if i == v.sel => 4,
@@ -552,7 +552,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
         _ if touches(e, v.sel) => 1,
         _ => 0,
     };
-    let mut title = format!("Graph of {} ({} papers)", v.scope, g.nodes.len());
+    let mut title = format!("Graph of {} ({} papers)", v.scope, g.nodes.iter().filter(|n| !n.hidden).count());
     if v.ego {
         title += &format!(" · neighbourhood: {} · N: all", shown.len());
     } else {

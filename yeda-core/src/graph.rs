@@ -80,6 +80,8 @@ pub struct Node {
     pub cited_by: u64,
     /// How many seeds it cites.
     pub cites_seeds: usize,
+    /// Added by `Graph::extend` for a paper's full lists: listed, but not drawn or ranked.
+    pub hidden: bool,
     /// Position in the layout: `x` in 0..=1, `row` indexes `Graph::years`, newest first.
     pub x: f64,
     pub row: usize,
@@ -95,6 +97,38 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Adds all of node `i`'s references (`cites`) and the works citing it (`cited_by`), as hidden
+    /// nodes where they aren't in the graph yet; `keys` maps work ids to library keys.
+    pub fn extend(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
+        let mut node = |w: &Work| match self.find(&w.id) {
+            Some(j) => j,
+            None => {
+                self.nodes.push(Node {
+                    id: w.id.clone(),
+                    key: keys.get(&w.id).cloned(),
+                    seed: false,
+                    title: w.title.clone(),
+                    year: w.year,
+                    first_author: w.authors.first().map(|a| surname(a)).unwrap_or_default(),
+                    doi: w.doi.clone(),
+                    links: 0,
+                    cited_by_seeds: 0,
+                    cites_seeds: 0,
+                    cited_by: w.cited_by_count,
+                    hidden: true,
+                    x: 0.0,
+                    row: 0,
+                });
+                self.nodes.len() - 1
+            }
+        };
+        let mut edges: Vec<(usize, usize)> = cites.iter().map(|w| (i, node(w))).collect();
+        edges.extend(cited_by.iter().map(|w| (node(w), i)));
+        self.edges.extend(edges.into_iter().filter(|(a, b)| a != b));
+        self.edges.sort();
+        self.edges.dedup();
+    }
+
     pub fn find(&self, id: &str) -> Option<usize> {
         self.nodes.iter().position(|n| n.id == id)
     }
@@ -145,6 +179,11 @@ pub fn candidates(refs: &[Ref], seeds: &[String], known: &Known, outside: usize)
     ranked.into_iter().take_while(|(_, n)| *n >= cutoff).take(500).map(|(id, _)| id).collect()
 }
 
+/// `Ada Lovelace` or `Lovelace, Ada` → `Lovelace`.
+fn surname(author: &str) -> String {
+    author.split(',').next().unwrap_or(author).split_whitespace().last().unwrap_or("").to_string()
+}
+
 /// The graph of the seeds (work ids), the library works linked to them, and the `outside` best-linked others.
 pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> Graph {
     let by_id: HashMap<&str, &Ref> = refs.iter().filter_map(|r| Some((work_id(r)?, r))).collect();
@@ -169,7 +208,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
         .map(|id| {
             let r = by_id.get(id.as_str());
             let w = known.works.get(id);
-            let author = |a: &String| a.split(',').next().unwrap_or(a).split_whitespace().last().unwrap_or("").to_string();
+            let author = |a: &String| surname(a);
             Node {
                 id: id.clone(),
                 key: r.map(|r| r.key.clone()),
@@ -183,6 +222,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
                 doi: r.and_then(|r| r.doi.clone()).or(w.and_then(|w| w.doi.clone())),
                 links: links.get(id).copied().unwrap_or(0),
                 cited_by: w.map_or(0, |w| w.cited_by_count),
+                hidden: false,
                 cited_by_seeds: seeds.iter().filter(|s| known.works.get(*s).is_some_and(|w| w.references.contains(id))).count(),
                 cites_seeds: seeds
                     .iter()
@@ -309,5 +349,16 @@ mod tests {
         let g = build(&refs, &seeds, &Known { works: &without_x, citing: known.citing }, 2);
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["A", "B", "C", "Y", "Z"]);
+        let mut g = g;
+        let keys = HashMap::from([("W".to_string(), "w".to_string())]);
+        let c = g.find("C").unwrap();
+        g.extend(c, &[work("A", 2020, &[], 5), work("W", 2001, &[], 3)], &[work("V", 2024, &[], 1)], &keys);
+        let (citing, cited) = g.neighbours(c);
+        let id = |i: usize| g.nodes[i].id.as_str();
+        assert_eq!(citing.iter().map(|&i| id(i)).collect::<Vec<_>>(), ["V"]);
+        assert_eq!(cited.iter().map(|&i| id(i)).collect::<Vec<_>>(), ["A", "W"]);
+        let w = &g.nodes[g.find("W").unwrap()];
+        assert!(w.hidden && w.key.as_deref() == Some("w"));
+        assert!(!g.nodes[g.find("A").unwrap()].hidden);
     }
 }
