@@ -155,9 +155,9 @@ pub struct Known<'a> {
     pub citing: &'a HashMap<String, Vec<String>>,
 }
 
-/// Works outside the library linked to a seed, with how many seeds each links to, most first.
+/// Works outside the library and the seeds linked to a seed, with how many seeds each links to, most first.
 fn outside_links(refs: &[Ref], seeds: &[String], known: &Known) -> Vec<(String, usize)> {
-    let library: HashSet<&str> = refs.iter().filter_map(work_id).collect();
+    let library: HashSet<&str> = refs.iter().filter_map(work_id).chain(seeds.iter().map(String::as_str)).collect();
     let mut links: HashMap<&str, usize> = HashMap::new();
     for s in seeds {
         let cited = known.works.get(s).map(|w| w.references.iter()).into_iter().flatten();
@@ -367,5 +367,9 @@ mod tests {
         assert!(w.hidden && w.key.as_deref() == Some("w"));
         assert!(!g.nodes[g.find("A").unwrap()].hidden);
 
+        // X, outside the library, opened as a seed.
+        let seeds = vec!["A".to_string(), "B".to_string(), "X".to_string()];
+        let g = build(&refs, &seeds, &known, 2);
+        assert_eq!(g.nodes.iter().filter(|n| n.id == "X").count(), 1);
     }
 }
