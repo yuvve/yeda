@@ -33,6 +33,21 @@ const USAGE: &str = "usage: yeda [library dir]
        yeda import-table <table name> <file.csv> [library dir]
        yeda copy-pdfs <from location> <to location> [library dir]";
 
+/// Written to `~/.config/yeda/config.toml` when there is none.
+const CONFIG_TEMPLATE: &str = r#"# Settings for this machine. Any yeda.toml setting can also go here, overriding the library's.
+
+# The library yeda opens when given no folder and not started inside one.
+# library = "~/papers"
+
+# This machine's folders for the library's PDF locations.
+# [locations]
+# zotero = "~/Zotero/storage"
+
+# Key bindings, per context (normal, library, graph, cluster, table, annotations); "" unbinds a key.
+# [keys.normal]
+# "ctrl-d" = "half-down"
+"#;
+
 /// `arg` if given; else the current folder if it is a library; else `library` from config.toml; else the current folder.
 fn library_dir(arg: Option<&String>) -> Result<PathBuf> {
     if let Some(a) = arg {
@@ -138,10 +153,14 @@ fn main() -> Result<()> {
         println!("{report}");
         return Ok(());
     }
+    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
+    if let Some(path) = config.as_deref().filter(|p| !p.exists()) {
+        fs::create_dir_all(path.parent().unwrap())?;
+        yeda_fs::write_atomic(path, CONFIG_TEMPLATE.as_bytes())?;
+    }
     let dir = library_dir(args.first())?;
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
-    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
     let user = config.as_deref().map(yeda_fs::read_optional).transpose()?.flatten();
     let keymap = keys::Keymap::load(user.as_deref())?;
     let mut term = ratatui::init();
