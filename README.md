@@ -45,7 +45,6 @@ user = "yuvve"
 
 [tables.lit]                     # literature table, filled by an LLM
 columns = ["contribution", "group", "subproblem"]
-prompt = "Multi-robot coordination papers."  # optional, added to yeda's instructions
 
 [tables.lit.describe]            # optional guidance per column
 contribution = "What the paper adds, in plain words; no jargon."

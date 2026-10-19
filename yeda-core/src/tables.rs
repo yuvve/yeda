@@ -19,8 +19,6 @@ pub struct Table {
     pub describe: BTreeMap<String, String>,
     /// Existing rows shown to the LLM as style examples (default 1).
     pub examples: Option<usize>,
-    /// What the table is for, added to the built-in instructions.
-    pub prompt: Option<String>,
 }
 
 pub type Row = BTreeMap<String, String>;
@@ -60,10 +58,7 @@ pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, annotations: &[An
     }
     Some(Job {
         key: r.key.clone(),
-        system: match &table.prompt {
-            Some(p) => format!("{SYSTEM}\n\nAbout this table: {}", p.trim()),
-            None => SYSTEM.into(),
-        },
+        system: SYSTEM.into(),
         text: prompt_text(lib, name, table, r, annotations, &columns),
         schema: schema(&columns),
         pdf: lib.pdf_path(r).ok(),
@@ -286,11 +281,6 @@ mod tests {
         assert!(job.text.contains("- contribution: Most important. No jargon.\n- method\n"));
         assert!(job.system.contains("objectively"));
         assert!(job.system.contains("never compare"));
-
-        let cfg = "[tables.lit]\ncolumns = [\"method\"]\nprompt = \"Robotics papers.\"\n";
-        let lib = Library::parse(Some(cfg), None, [("a2020".into(), "title = \"A\"\n".into())], None).unwrap();
-        let job = plan(&lib, "lit", &lib.tables["lit"], &lib.refs[0], &[], false).unwrap();
-        assert!(job.system.starts_with(SYSTEM) && job.system.ends_with("About this table: Robotics papers."));
     }
 
     #[test]

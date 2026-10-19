@@ -205,12 +205,10 @@ FINDING PAPERS  ( :discover [what] )
 TABLES  ( :table [name], T )
 
   Define literature tables in yeda.toml under [tables.<name>], each with its
-  columns, an optional describe per column and an optional prompt saying
-  what the table is for:
+  columns and an optional describe per column:
 
     [tables.lit]
     columns = ["contribution", "group", "subproblem"]
-    prompt = "Multi-robot coordination papers."
 
     [tables.lit.describe]
     contribution = "What the paper adds, in plain words; no jargon."
