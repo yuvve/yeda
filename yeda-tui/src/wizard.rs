@@ -8,17 +8,18 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use std::path::PathBuf;
 use yeda_core::library::Dav;
 
-/// Where the imported PDFs go.
+/// Where the PDFs go; `Nowhere` keeps imported ones in Zotero's storage, or sets no location yet.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Dest {
     Folder,
     Webdav,
-    Zotero,
+    Nowhere,
 }
 
-const DESTS: [(Dest, &str); 3] = [(Dest::Folder, "copy to a folder"), (Dest::Webdav, "upload to WebDAV"), (Dest::Zotero, "leave in Zotero's storage")];
+const IMPORT_DESTS: [(Dest, &str); 3] = [(Dest::Folder, "copy to a folder"), (Dest::Webdav, "upload to WebDAV"), (Dest::Nowhere, "leave in Zotero's storage")];
+const INIT_DESTS: [(Dest, &str); 3] = [(Dest::Folder, "a folder"), (Dest::Webdav, "a WebDAV folder"), (Dest::Nowhere, "none yet")];
 
-/// What `yeda import` was told.
+/// What `yeda import` or `yeda init` was told.
 pub struct Answers {
     pub zotero: PathBuf,
     pub library: PathBuf,
@@ -57,6 +58,8 @@ const FIELDS: [(F, &str, &str); 9] = [
 ];
 
 struct Form {
+    /// `yeda import`: from Zotero; else `yeda init`.
+    import: bool,
     values: Vec<String>,
     dest: usize,
     make_default: bool,
@@ -69,16 +72,30 @@ impl Form {
         self.values[f as usize].trim()
     }
 
+    fn dests(&self) -> &'static [(Dest, &'static str); 3] {
+        if self.import { &IMPORT_DESTS } else { &INIT_DESTS }
+    }
+
     fn visible(&self) -> Vec<usize> {
-        let dest = DESTS[self.dest].0;
+        let dest = self.dests()[self.dest].0;
         (0..FIELDS.len())
             .filter(|&i| match FIELDS[i].0 {
+                F::Zotero => self.import,
                 F::Folder => dest == Dest::Folder,
                 F::Url | F::User | F::Password => dest == Dest::Webdav,
-                F::Name => dest != Dest::Zotero,
+                F::Name => dest != Dest::Nowhere,
                 _ => true,
             })
             .collect()
+    }
+
+    fn hint(&self) -> &'static str {
+        match (FIELDS[self.sel].0, self.import) {
+            (F::Library, false) => "the new library's folder: created if missing",
+            (F::Dest, false) => "←/→ picks where PDFs you add or fetch are kept; more locations can be added later",
+            (F::Folder, false) => "where PDFs are kept, as <citekey>/<file>; created if missing",
+            _ => FIELDS[self.sel].2,
+        }
     }
 
     fn step(&mut self, by: isize) {
@@ -90,12 +107,13 @@ impl Form {
     fn choose(&mut self, by: isize) {
         match FIELDS[self.sel].0 {
             F::Dest => {
-                let before = DESTS[self.dest].0;
-                self.dest = (self.dest as isize + by).rem_euclid(DESTS.len() as isize) as usize;
+                let before = self.dests()[self.dest].0;
+                self.dest = (self.dest as isize + by).rem_euclid(3) as usize;
                 // The location's default name follows the choice until it is typed over.
+                let after = default_name(self.dests()[self.dest].0);
                 let name = &mut self.values[F::Name as usize];
                 if *name == default_name(before) {
-                    *name = default_name(DESTS[self.dest].0).into();
+                    *name = after.into();
                 }
             }
             F::Default => self.make_default = !self.make_default,
@@ -106,7 +124,7 @@ impl Form {
     /// Checks the answers; a WebDAV folder is logged into, and created if missing.
     fn answers(&self) -> Result<Answers, String> {
         let zotero = expand(self.get(F::Zotero));
-        if !zotero.join("zotero.sqlite").exists() {
+        if self.import && !zotero.join("zotero.sqlite").exists() {
             return Err(format!("{} has no zotero.sqlite", zotero.display()));
         }
         let library = expand(self.get(F::Library));
@@ -114,9 +132,9 @@ impl Form {
         if library.as_os_str().is_empty() || (!is_library && std::fs::read_dir(&library).is_ok_and(|mut d| d.next().is_some())) {
             return Err(format!("{} isn't empty and isn't a yeda library", library.display()));
         }
-        let dest = DESTS[self.dest].0;
+        let dest = self.dests()[self.dest].0;
         let name = self.get(F::Name).to_string();
-        if dest != Dest::Zotero && (name.is_empty() || ["zotero", "home", "files"].contains(&name.as_str())) {
+        if dest != Dest::Nowhere && (name.is_empty() || ["zotero", "home", "files"].contains(&name.as_str())) {
             return Err("name the location (zotero, home and files are taken by the import)".into());
         }
         let folder = expand(self.get(F::Folder));
@@ -154,14 +172,15 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// Asks for everything `yeda import` needs; `None` when quit with Esc.
-pub fn run(term: &mut DefaultTerminal, library: &str) -> Result<Option<Answers>> {
+/// Asks for everything `yeda import` (or with `import` off, `yeda init`) needs; `None` when quit with Esc.
+pub fn run(term: &mut DefaultTerminal, import: bool, library: &str) -> Result<Option<Answers>> {
     let mut values = vec![String::new(); FIELDS.len()];
     values[F::Zotero as usize] = "~/Zotero".into();
     values[F::Library as usize] = library.into();
     values[F::Folder as usize] = "~/yeda-pdfs".into();
     values[F::Name as usize] = default_name(Dest::Folder).into();
-    let mut form = Form { values, dest: 0, make_default: true, sel: 0, error: String::new() };
+    let sel = if import { F::Zotero } else { F::Library } as usize;
+    let mut form = Form { import, values, dest: 0, make_default: true, sel, error: String::new() };
     loop {
         term.draw(|f| draw(f, &form))?;
         let text = match event::read()? {
@@ -206,7 +225,7 @@ fn draw(f: &mut ratatui::Frame, form: &Form) {
     for i in form.visible() {
         let (field, label, _) = FIELDS[i];
         let value = match field {
-            F::Dest => format!("‹ {} ›", DESTS[form.dest].1),
+            F::Dest => format!("‹ {} ›", form.dests()[form.dest].1),
             F::Default => format!("‹ {} ›", if form.make_default { "yes" } else { "no" }),
             F::Password => "•".repeat(form.values[i].chars().count()),
             _ => form.values[i].clone(),
@@ -216,7 +235,7 @@ fn draw(f: &mut ratatui::Frame, form: &Form) {
         lines.push(if i == form.sel { line.reversed() } else { line });
     }
     lines.push(Line::raw(""));
-    lines.push(Line::raw(format!("{:>11}  {}", "", FIELDS[form.sel].2)).dim());
+    lines.push(Line::raw(format!("{:>11}  {}", "", form.hint())).dim());
     if !form.error.is_empty() {
         lines.push(Line::raw(format!("{:>11}  {}", "", form.error)).fg(Color::Red));
     }
@@ -225,6 +244,6 @@ fn draw(f: &mut ratatui::Frame, form: &Form) {
     let [area] = Layout::horizontal([Constraint::Length(width)]).flex(Flex::Center).areas(f.area());
     let [area] = Layout::vertical([Constraint::Length(height)]).flex(Flex::Center).areas(area);
     f.render_widget(Clear, area);
-    let title = " Import from Zotero · Tab/↓ next · Enter start · Esc quit ";
+    let title = if form.import { " Import from Zotero · Tab/↓ next · Enter start · Esc quit " } else { " New library · Tab/↓ next · Enter create · Esc quit " };
     f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).border_style(Color::Cyan)), area);
 }
