@@ -70,6 +70,7 @@ fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {
     let tmp = std::env::temp_dir().join(format!("yeda-zotero-{}", std::process::id()));
     fs::create_dir_all(&tmp)?;
     let result = (|| {
+        eprint!("copying Zotero's database…");
         for name in ["zotero.sqlite", "zotero.sqlite-wal"] {
             let src = zotero.join(name);
             if src.exists() {
@@ -77,14 +78,20 @@ fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {
             }
         }
         let db = rusqlite::Connection::open(tmp.join("zotero.sqlite"))?;
+        eprint!("\rreading items and annotations…{:20}", "");
+        let mut images = 0;
         let mut image = |src: &zotero::ImageSource| {
+            images += 1;
+            eprint!("\rimage annotations: {images} (from Zotero's cache or rendered from the PDF){:10}", "");
             fs::read(&src.cached).ok().or_else(|| {
                 let (page, rect) = src.area?;
                 poppler::render_area(src.pdf?, page, rect).ok()
             })
         };
         let (report, effects) = zotero::import(&db, zotero, load_library(dir)?, dirs::home_dir().as_deref(), &mut image)?;
+        eprint!("\rwriting {} files…{:60}", effects.len(), "");
         yeda_fs::apply(dir, effects)?;
+        eprint!("\r{:80}\r", "");
         Ok(report)
     })();
     let _ = fs::remove_dir_all(&tmp);
