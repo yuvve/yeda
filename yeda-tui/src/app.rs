@@ -283,6 +283,8 @@ pub enum GraphTab {
     Cites,
     /// Works citing the selected paper.
     CitedBy,
+    /// Works cited together with the selected paper.
+    Cocited,
     /// Outside works cited by the most seeds.
     TopCited,
     /// Outside works citing the most seeds.
@@ -290,13 +292,14 @@ pub enum GraphTab {
 }
 
 impl GraphTab {
-    pub const ALL: [GraphTab; 5] = [GraphTab::Seeds, GraphTab::Cites, GraphTab::CitedBy, GraphTab::TopCited, GraphTab::TopCiting];
+    pub const ALL: [GraphTab; 6] = [GraphTab::Seeds, GraphTab::Cites, GraphTab::CitedBy, GraphTab::Cocited, GraphTab::TopCited, GraphTab::TopCiting];
 
     pub fn name(self) -> &'static str {
         match self {
             GraphTab::Seeds => "Seeds",
             GraphTab::Cites => "Cites →",
             GraphTab::CitedBy => "← Cited by",
+            GraphTab::Cocited => "⇄ Co-cited",
             GraphTab::TopCited => "▲ Top cited",
             GraphTab::TopCiting => "▼ Top citing",
         }
@@ -305,24 +308,26 @@ impl GraphTab {
 
 impl GraphView {
     /// The current tab's papers, as `(mark, node)`, by global citations or year; the top lists
-    /// mark how many seeds each is cited by (▲) or cites (▼).
+    /// mark how many seeds each is cited by (▲) or cites (▼), co-cited papers how many works cite both (×).
     pub fn entries(&self) -> Vec<(String, usize)> {
         let nodes = &self.graph.nodes;
         let (citing, cited) = self.graph.neighbours(self.sel);
-        let outside = |count: fn(&graph::Node) -> usize| (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).collect();
-        let (mut ids, mark): (Vec<usize>, fn(&graph::Node) -> String) = match self.tab {
-            GraphTab::Seeds => ((0..nodes.len()).filter(|&i| nodes[i].seed).collect(), |_| String::new()),
-            GraphTab::Cites => (cited, |_| String::new()),
-            GraphTab::CitedBy => (citing, |_| String::new()),
-            GraphTab::TopCited => (outside(|n| n.cited_by_seeds), |n| format!("▲{}", n.cited_by_seeds)),
-            GraphTab::TopCiting => (outside(|n| n.cites_seeds), |n| format!("▼{}", n.cites_seeds)),
+        let outside = |count: fn(&graph::Node) -> usize| (0..nodes.len()).filter(|&i| nodes[i].key.is_none() && count(&nodes[i]) > 0).map(|i| (i, count(&nodes[i]))).collect();
+        let plain = |ids: Vec<usize>| ids.into_iter().map(|i| (i, 0)).collect();
+        let (mut ids, mark): (Vec<(usize, usize)>, &str) = match self.tab {
+            GraphTab::Seeds => (plain((0..nodes.len()).filter(|&i| nodes[i].seed).collect()), ""),
+            GraphTab::Cites => (plain(cited), ""),
+            GraphTab::CitedBy => (plain(citing), ""),
+            GraphTab::Cocited => (nodes.get(self.sel).map(|n| n.cocited.clone()).unwrap_or_default(), "×"),
+            GraphTab::TopCited => (outside(|n| n.cited_by_seeds), "▲"),
+            GraphTab::TopCiting => (outside(|n| n.cites_seeds), "▼"),
         };
         if self.by_year {
-            ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].year));
+            ids.sort_by_key(|&(i, _)| std::cmp::Reverse(nodes[i].year));
         } else {
-            ids.sort_by_key(|&i| std::cmp::Reverse(nodes[i].cited_by));
+            ids.sort_by_key(|&(i, _)| std::cmp::Reverse(nodes[i].cited_by));
         }
-        ids.into_iter().map(|i| (mark(&nodes[i]), i)).collect()
+        ids.into_iter().map(|(i, n)| (if mark.is_empty() { String::new() } else { format!("{mark}{n}") }, i)).collect()
     }
 }
 
@@ -2512,6 +2517,11 @@ impl App {
         for (id, lists) in &f.lists {
             if let Some(i) = graph.find(id) {
                 graph.extend(i, &lists.cites, &lists.cited_by, &keys);
+            }
+        }
+        for (id, list) in &f.cocited {
+            if let Some(i) = graph.find(id) {
+                graph.add_cocited(i, list, &keys);
             }
         }
         for n in graph.nodes.iter_mut() {

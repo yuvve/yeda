@@ -84,6 +84,8 @@ pub struct Node {
     pub hidden: bool,
     /// A seed added while exploring the graph, not one of the starting seeds.
     pub explored: bool,
+    /// Works cited together with this one, with how many of its citing works cite both; for seeds.
+    pub cocited: Vec<(usize, usize)>,
     /// Position in the layout: `x` in 0..=1, `row` indexes `Graph::years`, newest first.
     pub x: f64,
     pub row: usize,
@@ -102,34 +104,52 @@ impl Graph {
     /// Adds all of node `i`'s references (`cites`) and the works citing it (`cited_by`), as hidden
     /// nodes where they aren't in the graph yet; `keys` maps work ids to library keys.
     pub fn extend(&mut self, i: usize, cites: &[Work], cited_by: &[Work], keys: &HashMap<String, String>) {
-        let mut node = |w: &Work| match self.find(&w.id) {
-            Some(j) => j,
-            None => {
-                self.nodes.push(Node {
-                    id: w.id.clone(),
-                    key: keys.get(&w.id).cloned(),
-                    seed: false,
-                    title: w.title.clone(),
-                    year: w.year,
-                    first_author: w.authors.first().map(|a| surname(a)).unwrap_or_default(),
-                    doi: w.doi.clone(),
-                    links: 0,
-                    cited_by_seeds: 0,
-                    cites_seeds: 0,
-                    cited_by: w.cited_by_count,
-                    hidden: true,
-                    explored: false,
-                    x: 0.0,
-                    row: 0,
-                });
-                self.nodes.len() - 1
-            }
-        };
+        let mut node = |w: &Work| self.node_for(w, keys);
         let mut edges: Vec<(usize, usize)> = cites.iter().map(|w| (i, node(w))).collect();
         edges.extend(cited_by.iter().map(|w| (node(w), i)));
         self.edges.extend(edges.into_iter().filter(|(a, b)| a != b));
         self.edges.sort();
         self.edges.dedup();
+    }
+
+    /// Records node `i`'s co-cited works, adding them as hidden nodes where they aren't in the graph yet.
+    /// OpenAlex answers a merged work's old id with the surviving work, so two entries can be one node.
+    pub fn add_cocited(&mut self, i: usize, cocited: &[(Work, usize)], keys: &HashMap<String, String>) {
+        let mut list: Vec<(usize, usize)> = Vec::new();
+        for (w, n) in cocited {
+            let j = self.node_for(w, keys);
+            match list.iter_mut().find(|(k, _)| *k == j) {
+                Some((_, m)) => *m = (*m).max(*n),
+                None => list.push((j, *n)),
+            }
+        }
+        self.nodes[i].cocited = list;
+    }
+
+    /// The node for `w`, added hidden if the graph doesn't have it.
+    fn node_for(&mut self, w: &Work, keys: &HashMap<String, String>) -> usize {
+        if let Some(j) = self.find(&w.id) {
+            return j;
+        }
+        self.nodes.push(Node {
+            id: w.id.clone(),
+            key: keys.get(&w.id).cloned(),
+            seed: false,
+            title: w.title.clone(),
+            year: w.year,
+            first_author: w.authors.first().map(|a| surname(a)).unwrap_or_default(),
+            doi: w.doi.clone(),
+            links: 0,
+            cited_by_seeds: 0,
+            cites_seeds: 0,
+            cited_by: w.cited_by_count,
+            hidden: true,
+            explored: false,
+            cocited: Vec::new(),
+            x: 0.0,
+            row: 0,
+        });
+        self.nodes.len() - 1
     }
 
     pub fn find(&self, id: &str) -> Option<usize> {
@@ -153,6 +173,22 @@ pub struct Known<'a> {
     pub works: &'a HashMap<String, Work>,
     /// Seed id → ids of works citing it, as far as fetched.
     pub citing: &'a HashMap<String, Vec<String>>,
+}
+
+/// The works cited together with `id` by the works citing it that are known, with how many cite
+/// both, most first.
+pub fn cocitations(id: &str, known: &Known) -> Vec<(String, usize)> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for w in known.citing.get(id).into_iter().flatten().filter_map(|c| known.works.get(c)) {
+        let refs: HashSet<&str> = w.references.iter().map(String::as_str).filter(|r| *r != id).collect();
+        for r in refs {
+            *counts.entry(r).or_default() += 1;
+        }
+    }
+    let mut ranked: Vec<(String, usize)> = counts.into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    let cited_by = |id: &str| known.works.get(id).map_or(0, |w| w.cited_by_count);
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(cited_by(&b.0).cmp(&cited_by(&a.0))).then(a.0.cmp(&b.0)));
+    ranked
 }
 
 /// Works outside the library and the seeds linked to a seed, with how many seeds each links to, most first.
@@ -227,6 +263,7 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
                 cited_by: w.map_or(0, |w| w.cited_by_count),
                 hidden: false,
                 explored: false,
+                cocited: Vec::new(),
                 cited_by_seeds: seeds.iter().filter(|s| known.works.get(*s).is_some_and(|w| w.references.contains(id))).count(),
                 cites_seeds: seeds
                     .iter()
@@ -371,5 +408,23 @@ mod tests {
         let seeds = vec!["A".to_string(), "B".to_string(), "X".to_string()];
         let g = build(&refs, &seeds, &known, 2);
         assert_eq!(g.nodes.iter().filter(|n| n.id == "X").count(), 1);
+    }
+
+    #[test]
+    fn ranks_cocitations() {
+        let works: HashMap<String, Work> = [work("W1", 2020, &["A", "X", "Y", "X"], 0), work("W2", 2021, &["A", "X"], 0), work("Y", 2010, &[], 9), work("V", 2015, &[], 1)]
+            .into_iter()
+            .map(|w| (w.id.clone(), w))
+            .collect();
+        let citing = HashMap::from([("A".to_string(), vec!["W1".to_string(), "W2".to_string(), "gone".to_string()])]);
+        let known = Known { works: &works, citing: &citing };
+        assert_eq!(cocitations("A", &known), [("X".to_string(), 2), ("Y".to_string(), 1)]);
+        assert!(cocitations("B", &known).is_empty());
+
+        let mut g = build(&[lib_ref("a", "A")], &["A".to_string()], &known, 0);
+        g.add_cocited(0, &[(works["Y"].clone(), 1), (works["Y"].clone(), 1)], &HashMap::new());
+        assert_eq!(g.nodes[0].cocited.len(), 1);
+        let (j, n) = g.nodes[0].cocited[0];
+        assert_eq!((g.nodes[j].id.as_str(), g.nodes[j].hidden, n), ("Y", true, 1));
     }
 }
