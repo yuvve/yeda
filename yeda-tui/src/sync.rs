@@ -26,15 +26,46 @@ fn interactive(dir: &Path, args: &[&str]) -> Result<bool> {
     Ok(git(dir).args(args).status().context("git")?.success())
 }
 
+/// Whether the library folder is the top of a repository; one inside another repository
+/// (dotfiles in the home folder, say) is not.
+fn own_repository(dir: &Path) -> Result<bool> {
+    let out = output(dir, &["rev-parse", "--show-toplevel"])?;
+    let root = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    Ok(out.status.success() && root.canonicalize()? == dir.canonicalize()?)
+}
+
+/// Git carries the data only: PDFs sync through WebDAV or Syncthing.
+fn add_all(dir: &Path) -> Result<()> {
+    stdout(dir, &["add", "-A", "--", ".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"]).map(drop)
+}
+
+/// Makes the library folder a repository with everything committed; with `url`, adds it as
+/// `origin` and pushes there, so `run` works afterwards.
+pub fn init(dir: &Path, url: Option<&str>) -> Result<String> {
+    if own_repository(dir)? {
+        bail!("the library folder is a git repository already");
+    }
+    stdout(dir, &["init", "-q"])?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        yeda_fs::write_atomic(&ignore, b"*.tmp\n*.pdf\n*.PDF\n")?;
+    }
+    add_all(dir)?;
+    stdout(dir, &["commit", "-q", "-m", "yeda library"])?;
+    let Some(url) = url else { return Ok("git repository created; git remote add origin <url> connects it for :sync".into()) };
+    stdout(dir, &["remote", "add", "origin", url])?;
+    if !interactive(dir, &["push", "-q", "-u", "origin", "HEAD"])? {
+        bail!("created the repository and added {url} as origin, but git push failed");
+    }
+    Ok(format!("git repository created and pushed to {url}"))
+}
+
 /// Commits everything, merges the upstream branch and pushes; returns what happened.
 pub fn run(dir: &Path) -> Result<String> {
-    // A library inside some other repository (dotfiles in the home folder, say) must not sync it.
-    let root = std::path::PathBuf::from(stdout(dir, &["rev-parse", "--show-toplevel"])?.trim());
-    if root.canonicalize()? != dir.canonicalize()? {
-        bail!("the library folder is not a git repository of its own (it is inside {}); run git init in it", root.display());
+    if !own_repository(dir)? {
+        bail!("the library folder is not a git repository of its own; :git-init [url] makes it one");
     }
-    // Git carries the data only: PDFs sync through WebDAV or Syncthing.
-    stdout(dir, &["add", "-A", "--", ".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"])?;
+    add_all(dir)?;
     let committed = !output(dir, &["diff", "--cached", "--quiet"])?.status.success();
     if committed {
         stdout(dir, &["commit", "-q", "-m", "yeda sync"])?;
