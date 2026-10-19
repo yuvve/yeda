@@ -146,3 +146,49 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
     let prompt = Prompt { system: "Set ok to true.".into(), text: "Connection test.".into(), paper: None, schema };
     complete(&p, &prompt, key).map(|_| ())
 }
+
+/// A plain answer to `text`, searching the web where the provider can: Anthropic's web search
+/// tool, or an OpenAI-compatible server that searches by itself.
+pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
+    let key = key.filter(|k| !k.is_empty());
+    if key.is_none() && p.needs_key() {
+        bail!("set {} to your API key (or api_key_env in the llm profile)", p.key_env());
+    }
+    match p.provider {
+        Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
+        Provider::Openai => {
+            let base = p.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
+            let body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
+            let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
+            Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
+        }
+    }
+}
+
+fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
+    let base = p.base_url.as_deref().unwrap_or("https://api.anthropic.com").trim_end_matches('/');
+    let headers = [("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
+    let mut messages = vec![json!({"role": "user", "content": text})];
+    // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.
+    for _ in 0..4 {
+        let body = json!({
+            "model": p.model,
+            "max_tokens": p.max_tokens.unwrap_or(16000),
+            "system": system,
+            "output_config": {"effort": p.effort.as_deref().unwrap_or("medium")},
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            "messages": messages,
+        });
+        let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
+        match v["stop_reason"].as_str() {
+            Some("pause_turn") => messages.push(json!({"role": "assistant", "content": v["content"]})),
+            Some("refusal") => bail!("the model declined"),
+            _ => {
+                let blocks = v["content"].as_array().into_iter().flatten();
+                return Ok(blocks.filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect());
+            }
+        }
+    }
+    bail!("the search did not finish")
+}

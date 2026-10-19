@@ -354,6 +354,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Setup => draw_setup(f, app, main),
+        Mode::Found => draw_found(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
@@ -419,6 +420,31 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if form.kind == crate::setup::Kind::Search { "save" } else { "test and save" }), true)), area);
+}
+
+/// ✓ found in OpenAlex, ? not found (it may not exist), ◎ already in the library.
+fn draw_found(f: &mut Frame, app: &App, main: Rect) {
+    let area = popup(main, main.width.saturating_sub(4).min(120), main.height.saturating_sub(2));
+    let width = area.width.saturating_sub(10) as usize;
+    let items: Vec<ListItem> = app
+        .found
+        .iter()
+        .map(|c| {
+            let mark = if app.found_in_library(c) { "◎" } else if c.work.is_some() { "✓" } else { "?" };
+            let year = c.found.year.or(c.work.as_ref().and_then(|w| w.year)).map(|y| y.to_string()).unwrap_or_default();
+            let head = Line::raw(format!("{mark} {year:4}  {:<16.16} {}", c.authors(), c.title()));
+            let why: String = c.found.why.chars().take(width).collect();
+            ListItem::new(vec![head, Line::raw(format!("        {why}")).dim()])
+        })
+        .collect();
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block(" Found · ✓ in OpenAlex · ? not found · ◎ in library · a add · o open · q close ".into(), true))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.found_sel)),
+    );
 }
 
 fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {

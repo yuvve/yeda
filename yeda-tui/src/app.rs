@@ -21,6 +21,7 @@ use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use crate::cluster::ClusterView;
 use crate::complete::Completion;
+use crate::discover::Candidate;
 use crate::setup::{self, SetupForm};
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
@@ -40,6 +41,8 @@ pub enum Mode {
     Filter,
     /// The `:setup` form.
     Setup,
+    /// The papers `:discover` found.
+    Found,
     Sort,
     /// Picking the table a command runs on.
     TablePick,
@@ -129,6 +132,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
+    (":discover [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described; a adds one"),
+    (":found", "the papers the last :discover found"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph shown"),
@@ -476,6 +481,9 @@ pub struct App {
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub setup: Option<SetupForm>,
+    discover_job: Option<Receiver<anyhow::Result<Vec<Candidate>>>>,
+    pub found: Vec<Candidate>,
+    pub found_sel: usize,
     setup_job: Option<SetupJob>,
     pub help_scroll: u16,
     /// What `/` searches for in a help page, and whether it's still being typed.
@@ -551,6 +559,9 @@ impl App {
             sort_sel: 0,
             form: None,
             setup: None,
+            discover_job: None,
+            found: Vec::new(),
+            found_sel: 0,
             setup_job: None,
             help_scroll: 0,
             help_query: String::new(),
@@ -692,6 +703,7 @@ impl App {
             Mode::Pick => self.pick_key(k),
             Mode::Filter => self.filter_key(k),
             Mode::Setup => self.setup_key(k),
+            Mode::Found => self.found_key(k),
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
             Mode::Help(_) => self.help_key(k),
@@ -1539,6 +1551,13 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
+                ("discover", rest) => {
+                    if let Err(e) = self.discover(rest, text) {
+                        self.status = format!("{e:#}");
+                    }
+                }
+                ("found", _) if self.found.is_empty() => self.status = "nothing found yet: :discover".into(),
+                ("found", _) => self.mode = Mode::Found,
                 ("setup", rest) => {
                     let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
                     let kind = match kind {
@@ -1679,6 +1698,91 @@ impl App {
 
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
     /// `command` is the whole command line, run again once a missing API key is entered.
+    /// The profile's API key, if it has one: from its environment variable, else the secret store,
+    /// else a prompt, after which `command` runs again. `None` while prompting.
+    fn llm_key(&mut self, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
+        let env = profile.key_env().to_string();
+        match std::env::var(&env).ok().filter(|k| !k.is_empty()) {
+            Some(k) => Some(Some(k)),
+            None if profile.needs_key() => self.secret(&yeda_secrets::llm_account(&env), &env, Retry::Command(command.into())).map(Some),
+            None => Some(yeda_secrets::get(&yeda_secrets::llm_account(&env)).ok().flatten()),
+        }
+    }
+
+    /// `:discover [what]`: asks the default LLM profile for papers like the selected or marked ones, or as described.
+    fn discover(&mut self, prompt: &str, command: &str) -> anyhow::Result<()> {
+        if self.discover_job.is_some() {
+            anyhow::bail!("already searching");
+        }
+        // With a description, only marked references go along, not whichever one happens to be selected.
+        let targets = if prompt.trim().is_empty() || !self.marked.is_empty() { self.targets() } else { Vec::new() };
+        if prompt.trim().is_empty() && targets.is_empty() {
+            anyhow::bail!("usage: :discover <what to look for>, or select references first");
+        }
+        let (name, profile) = self.lib.llm_profile(None)?;
+        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
+        let openalex = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.secrets.get(OPENALEX_ACCOUNT).cloned());
+        self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
+        self.status = format!("asking {name} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
+        Ok(())
+    }
+
+    pub fn poll_discover(&mut self) {
+        let Some(rx) = &self.discover_job else { return };
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!("the search stopped")),
+        };
+        self.discover_job = None;
+        match result {
+            Ok(found) if found.is_empty() => self.status = "discover: no papers found".into(),
+            Ok(found) => {
+                self.status = format!("discover: {} papers, {} found in OpenAlex", found.len(), found.iter().filter(|c| c.work.is_some()).count());
+                self.found = found;
+                // The LLM only knows the papers it was given, so it suggests others the library has.
+                let mut found = std::mem::take(&mut self.found);
+                found.sort_by_key(|c| self.found_in_library(c));
+                self.found = found;
+                self.found_sel = 0;
+                self.mode = Mode::Found;
+            }
+            Err(e) => self.status = format!("discover: {e:#}"),
+        }
+    }
+
+    /// Whether the suggestion is in the library already, by DOI or title.
+    pub fn found_in_library(&self, c: &Candidate) -> bool {
+        let doi = c.work.as_ref().and_then(|w| w.doi.clone()).or(c.found.doi.clone());
+        doi.is_some_and(|d| self.lib.find_doi(&d).is_some()) || self.lib.refs.iter().any(|r| graph::same_title(&r.title, c.title()))
+    }
+
+    fn found_key(&mut self, k: KeyEvent) {
+        let n = self.found.len();
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => self.found_sel = (self.found_sel + 1).min(n.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => self.found_sel = self.found_sel.saturating_sub(1),
+            KeyCode::Char('a') | KeyCode::Enter => match self.found.get(self.found_sel) {
+                Some(c) if self.found_in_library(c) => self.status = "already in the library".into(),
+                Some(c) => match c.id() {
+                    Some(id) if self.job.is_none() => self.submit(Prompt::Add, &id),
+                    Some(_) => self.status = "still adding; try again in a moment".into(),
+                    None => self.status = "no DOI or URL to add it by".into(),
+                },
+                None => {}
+            },
+            KeyCode::Char('o') => {
+                if let Some(id) = self.found.get(self.found_sel).and_then(Candidate::id) {
+                    let url = if id.starts_with("10.") { format!("https://doi.org/{id}") } else { id };
+                    self.xdg_open(url);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+    }
+
     fn summarize(&mut self, args: &str, all: bool, overwrite: bool, command: &str) -> anyhow::Result<()> {
         if self.summarizer.is_some() {
             anyhow::bail!("a summarization is already running (:cancel stops it)");
@@ -1701,18 +1805,7 @@ impl App {
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
-        let env = profile.key_env().to_string();
-        let key = std::env::var(&env).ok().filter(|k| !k.is_empty());
-        let key = match key {
-            Some(k) => Some(k),
-            None if profile.needs_key() => {
-                let Some(k) = self.secret(&yeda_secrets::llm_account(&env), &env, Retry::Command(command.into())) else {
-                    return Ok(());
-                };
-                Some(k)
-            }
-            None => yeda_secrets::get(&yeda_secrets::llm_account(&env)).ok().flatten(),
-        };
+        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();

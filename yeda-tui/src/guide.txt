@@ -189,6 +189,17 @@ KEY BINDINGS
   Space separates the keys of a sequence: "g g". :keys lists every binding
   in effect and every action.
 
+FINDING PAPERS  ( :discover [what] )
+
+  :discover asks the default LLM profile for papers like the selected or
+  marked references; with a description (:discover swarm exploration
+  under comms loss) it looks for that, with the marked references as
+  context. An Anthropic profile searches the web; an OpenAI-compatible one
+  only if the server does (Perplexity, OpenAI's search models). Every
+  suggestion is looked up in OpenAlex: ✓ found, ? not found (it may not
+  exist), ◎ already in the library. a adds the paper by its DOI or URL, o
+  opens it, q closes the list; :found opens it again.
+
 TABLES  ( :table [name], T )
 
   Define literature tables in yeda.toml under [tables.<name>], each with its
