@@ -10,6 +10,8 @@ yeda import-table <table name> <file.csv> [library dir]
 yeda copy-pdfs <from location> <to location> [library dir]
 ```
 
+Without a library dir, yeda uses the current folder if it is a library (it has `yeda.toml` or `refs/`), else `library` from `~/.config/yeda/config.toml` (`library = "~/papers"`), else the current folder.
+
 When a WebDAV password or LLM API key is needed and not in the Secret Service, yeda asks for it in a masked prompt and offers to save it there. If the server rejects a saved password, it asks again.
 
 `import-zotero` imports the items, annotations, child notes (as `notes/<key>.md`), tag colours and saved searches that aren't in the library yet. It reads a copy of the database, so Zotero can stay open.

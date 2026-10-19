@@ -33,6 +33,31 @@ const USAGE: &str = "usage: yeda [library dir]
        yeda import-table <table name> <file.csv> [library dir]
        yeda copy-pdfs <from location> <to location> [library dir]";
 
+/// `arg` if given; else the current folder if it is a library; else `library` from config.toml; else the current folder.
+fn library_dir(arg: Option<&String>) -> Result<PathBuf> {
+    if let Some(a) = arg {
+        return Ok(a.into());
+    }
+    let here = PathBuf::from(".");
+    if here.join("yeda.toml").exists() || here.join("refs").is_dir() {
+        return Ok(here);
+    }
+    #[derive(serde::Deserialize)]
+    struct Machine {
+        library: Option<String>,
+    }
+    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
+    let text = config.as_deref().map(yeda_fs::read_optional).transpose()?.flatten();
+    let machine: Option<Machine> = text.map(|t| toml::from_str(&t)).transpose().context("config.toml")?;
+    Ok(match machine.and_then(|m| m.library) {
+        Some(l) => match (l.strip_prefix("~/"), dirs::home_dir()) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => l.into(),
+        },
+        None => here,
+    })
+}
+
 pub fn load_library(dir: &Path) -> Result<Library> {
     let machine = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
     let mut lib = yeda_fs::load_library(dir, machine.as_deref(), dirs::home_dir().as_deref())?;
@@ -85,7 +110,7 @@ fn main() -> Result<()> {
             to
         });
         let zotero = args.get(1).context(USAGE)?;
-        let lib = Path::new(args.get(2).map_or(".", String::as_str));
+        let lib = &library_dir(args.get(2))?;
         println!("{}", import_zotero(Path::new(zotero), lib)?);
         if let Some(to) = pdfs_to {
             copy_pdfs(ZOTERO_LOCATION, &to.context(USAGE)?, lib)?;
@@ -94,11 +119,11 @@ fn main() -> Result<()> {
     }
     if args.first().map(String::as_str) == Some("copy-pdfs") {
         let (Some(from), Some(to)) = (args.get(1), args.get(2)) else { anyhow::bail!(USAGE) };
-        return copy_pdfs(from, to, Path::new(args.get(3).map_or(".", String::as_str)));
+        return copy_pdfs(from, to, &library_dir(args.get(3))?);
     }
     if args.first().map(String::as_str) == Some("import-table") {
         let (Some(name), Some(csv)) = (args.get(1), args.get(2)) else { anyhow::bail!(USAGE) };
-        let dir = Path::new(args.get(3).map_or(".", String::as_str));
+        let dir = &library_dir(args.get(3))?;
         let mut lib = load_library(dir)?;
         let csv = fs::read_to_string(csv).with_context(|| csv.clone())?;
         let (report, effects) = tables::import_csv(&mut lib, name, &csv)?;
@@ -106,7 +131,7 @@ fn main() -> Result<()> {
         println!("{report}");
         return Ok(());
     }
-    let dir = args.first().map(PathBuf::from).unwrap_or_else(|| ".".into());
+    let dir = library_dir(args.first())?;
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
     let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
