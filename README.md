@@ -44,9 +44,13 @@ user = "yuvve"
 "To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
 
 [tables.lit]                     # literature table, filled by an LLM
-columns = ["method", "hardware/sim"]
-describe = { method = "Algorithm family, a few words." }
+columns = ["contribution", "group", "subproblem"]
 prompt = "Multi-robot coordination papers."  # optional, added to yeda's instructions
+
+[tables.lit.describe]            # optional guidance per column
+contribution = "What the paper adds, in plain words; no jargon."
+group = "The topic it works on: a short label many papers share."
+subproblem = "The problem it tackles and why earlier work falls short."
 
 [llm.claude]
 provider = "anthropic"           # or "openai" for any OpenAI-compatible server

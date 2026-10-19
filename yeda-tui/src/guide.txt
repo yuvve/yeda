@@ -209,9 +209,17 @@ TABLES  ( :table [name], T )
   what the table is for:
 
     [tables.lit]
-    columns = ["contribution", "method"]
-    describe = { method = "Algorithm family, a few words." }
+    columns = ["contribution", "group", "subproblem"]
     prompt = "Multi-robot coordination papers."
+
+    [tables.lit.describe]
+    contribution = "What the paper adds, in plain words; no jargon."
+    group = "The topic it works on: a short label many papers share."
+    subproblem = "The problem it tackles and why earlier work falls short."
+
+  The LLM sees a column's values from other papers and reuses one when it
+  fits, so a column like group sorts papers into shared topics; :graph col
+  group clusters them.
 
   :summarize [table] fills the selected reference's row using an LLM profile
   from [llm.<name>]; each paper's rows are kept in notes/<key>.ai.toml.
