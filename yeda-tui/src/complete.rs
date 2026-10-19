@@ -36,8 +36,8 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
     let tables = || lib.tables.keys().cloned().collect::<Vec<_>>();
     let locations = || lib.locations.keys().chain(lib.remotes.keys()).cloned().collect::<Vec<_>>();
     let mut options = match (command.trim_end_matches('!'), args.len()) {
-        ("summarize" | "summarize-all", 0) | ("export", 0) => tables(),
-        ("summarize" | "summarize-all", 1) => lib.llm.keys().cloned().collect(),
+        ("summarize", 0) | ("export", 0) => tables(),
+        ("summarize", 1) => lib.llm.keys().cloned().collect(),
         ("table", 0) => [tables(), vec!["close".into(), "rename".into()]].concat(),
         ("table", 1) if args[0] == "rename" => tables(),
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
@@ -70,10 +70,8 @@ mod tests {
     fn completes_commands_and_arguments() {
         let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[llm.claude]\nprovider = \"anthropic\"\nmodel = \"m\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
-        let mut c = Completion::new(&lib, "summ").unwrap();
-        assert_eq!(c.candidates, ["summarize", "summarize-all"]);
-        c.step(true);
-        assert_eq!(c.line(), "summarize-all");
+        let c = Completion::new(&lib, "summ").unwrap();
+        assert_eq!(c.candidates, ["summarize"]);
         assert_eq!(Completion::new(&lib, "summarize! l").unwrap().candidates, ["lab", "lit"]);
         assert_eq!(Completion::new(&lib, "summarize lit ").unwrap().line(), "summarize lit claude");
         assert_eq!(Completion::new(&lib, "table ").unwrap().candidates, ["close", "lab", "lit", "rename"]);

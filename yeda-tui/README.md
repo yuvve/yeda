@@ -37,7 +37,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `c` | Show only the current column; again to show all. Below 120 terminal columns the right column is hidden, below 80 the library column too |
 | Mouse | A click selects and focuses; the wheel moves the selection in the column under the pointer |
 | `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
-| `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference; with more than one, `r`, `R`, `t`, `m` and `x` ask y/n first, and `dd` always does |
+| `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference; with more than one, `r`, `R`, `t`, `m`, `x`, `:summarize` and `:fetch` ask y/n first, and `dd` always does; `V` then `G` marks the whole list |
 | `f` | Filter by field in a popup (edits the same query as `/`); Ctrl-D/Ctrl-U move between boxes; values the library has are suggested, Ctrl-N/Ctrl-P pick one and Tab completes it; Ctrl-L clears the box, Ctrl-X every box |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
@@ -64,7 +64,6 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `:table [name]` | A table of the selected or marked references in the right column; without a name, the only table or one picked from a list: `h`/`l` pick a column, `Enter` shows a cell in full, `e` edits it in `$EDITOR`, `s` sorts, `/` searches and `f` filters the column; `Esc`, `q` or `:table close` closes it |
 | `:table rename <old> <new>` | Rename a table in `yeda.toml` and in every `notes/<key>.ai.toml` |
 | `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM, kept in `notes/<key>.ai.toml`, following the table's `prompt` and `describe`; without a table name, pick one from a list; `!` overwrites filled cells |
-| `:summarize-all[!] [table] [profile]` | The same for every visible reference |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
 | `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
