@@ -955,7 +955,7 @@ impl App {
     /// Types pasted text into the open prompt; ignored in modes where letters are commands.
     pub fn on_paste(&mut self, text: &str) {
         let add = matches!(self.mode, Mode::Prompt(Prompt::Add));
-        if !matches!(self.mode, Mode::Prompt(_) | Mode::Search | Mode::SideSearch | Mode::Pick | Mode::Filter) {
+        if !matches!(self.mode, Mode::Prompt(_) | Mode::Search | Mode::SideSearch | Mode::Pick | Mode::Filter | Mode::Setup) {
             return;
         }
         // Lines separate identifiers in a pasted list; elsewhere a newline would only end the prompt.
