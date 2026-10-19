@@ -82,8 +82,10 @@ CITATION GRAPH  ( :graph [citations] )
   the whole list).
 
   The graph shows the seeds (⊚, or ⊙ when opened while exploring), other
-  library papers citing or cited by them (◎), and the 20 papers outside the
-  library linked to the most seeds (○). Rows are years, newest at the top.
+  library papers citing or cited by them (◎), the 20 papers outside the
+  library linked to the most seeds (○), and the papers most co-cited with
+  each seed, unconnected if they cite nothing shown. Rows are years, newest
+  at the top.
   Only the selected paper's citations are drawn: yellow to papers it cites,
   magenta from papers citing it, the one to the picked paper bright. It
   stays in the right column and follows the reference list.

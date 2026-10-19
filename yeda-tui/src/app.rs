@@ -2623,7 +2623,6 @@ impl App {
             self.status = format!("graph: nothing to show{unknown}");
             return;
         }
-        self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", f.graph.nodes.len(), f.graph.edges.len());
         let mut graph = f.graph;
         let (tab, by_year, ego) = self.graph.as_ref().map_or((GraphTab::Cites, false, false), |g| (g.tab, g.by_year, g.ego));
         // A rebuild after opening a paper keeps the exploration; a new :graph starts over.
@@ -2640,6 +2639,8 @@ impl App {
                 graph.add_cocited(i, list, &keys);
             }
         }
+        graph.relayout();
+        self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", graph.nodes.iter().filter(|n| !n.hidden).count(), graph.edges.len());
         for n in graph.nodes.iter_mut() {
             n.explored = explored.contains(&n.id);
         }
