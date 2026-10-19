@@ -35,7 +35,8 @@ pub enum Mode {
     SideSearch,
     Pick,
     Prompt(Prompt),
-    ConfirmDelete,
+    /// Asking y/n before `App::confirming` runs.
+    Confirm,
     /// The `:secrets` menu.
     Secrets,
     Filter,
@@ -119,6 +120,15 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("table-search", "show only rows with every word in some cell"),
     ("table-filter", "show only rows whose cell in this column matches (!x: doesn't; \"\": empty)"),
     ("table-clear", "close the cell, else clear search and filters, else close the table"),
+];
+
+/// Actions that change every marked reference, asked about first: action, and what it does.
+const CONFIRM_MANY: [(&str, &str); 5] = [
+    ("status-next", "change the reading status of"),
+    ("status-prev", "change the reading status of"),
+    ("tags", "change the tags of"),
+    ("move", "move"),
+    ("extract", "extract annotations into"),
 ];
 
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -482,6 +492,10 @@ pub struct App {
     pub sort_sel: usize,
     pub form: Option<FilterForm>,
     pub setup: Option<SetupForm>,
+    /// The action `Mode::Confirm` asks about, with its arguments.
+    confirming: Option<(String, String)>,
+    /// The next `action` call was confirmed already.
+    confirmed: bool,
     discover_job: Option<Receiver<anyhow::Result<Vec<Candidate>>>>,
     pub found: Vec<Candidate>,
     pub found_sel: usize,
@@ -560,6 +574,8 @@ impl App {
             sort_sel: 0,
             form: None,
             setup: None,
+            confirming: None,
+            confirmed: false,
             discover_job: None,
             found: Vec::new(),
             found_sel: 0,
@@ -692,13 +708,19 @@ impl App {
         match self.mode {
             Mode::Normal => self.normal_key(k),
             Mode::Secrets => self.secrets_key(k),
-            Mode::ConfirmDelete => {
+            Mode::Confirm => {
                 self.mode = Mode::Normal;
-                if k.code == KeyCode::Char('y') {
-                    match self.current_filter().clone() {
+                let pending = self.confirming.take();
+                match pending {
+                    Some((action, _)) if k.code == KeyCode::Char('y') && action == "delete" => match self.current_filter().clone() {
                         Filter::Search(name, _) if self.pane == Pane::Sidebar => self.delete_search(&name),
                         _ => self.delete_selected(),
+                    },
+                    Some((action, args)) if k.code == KeyCode::Char('y') => {
+                        self.confirmed = true;
+                        self.action(&action, &args);
                     }
+                    _ => self.status = "cancelled".into(),
                 }
             }
             Mode::Pick => self.pick_key(k),
@@ -744,6 +766,16 @@ impl App {
 
     /// Runs the action `name` from `ACTIONS`; false if there is none.
     fn action(&mut self, name: &str, args: &str) -> bool {
+        let n = self.targets().len();
+        if !std::mem::take(&mut self.confirmed)
+            && n > 1
+            && let Some((_, what)) = CONFIRM_MANY.iter().find(|(a, _)| *a == name)
+        {
+            self.status = format!("{what} {n} marked references? (y/n)");
+            self.confirming = Some((name.into(), args.into()));
+            self.mode = Mode::Confirm;
+            return true;
+        }
         let half = (self.page / 2).max(1) as isize;
         match name {
             "down" => self.step(1),
@@ -760,17 +792,20 @@ impl App {
             "delete" => match (self.pane, self.current_filter()) {
                 (Pane::Sidebar, Filter::Search(name, _)) => {
                     self.status = format!("delete saved search '{name}'? (y/n)");
-                    self.mode = Mode::ConfirmDelete;
+                    self.confirming = Some(("delete".into(), String::new()));
+                    self.mode = Mode::Confirm;
                 }
                 (Pane::List, _) => match self.targets()[..] {
                     [] => {}
                     [i] => {
                         self.status = format!("delete {}? (y/n)", self.lib.refs[i].key);
-                        self.mode = Mode::ConfirmDelete;
+                        self.confirming = Some(("delete".into(), String::new()));
+                    self.mode = Mode::Confirm;
                     }
                     ref many => {
                         self.status = format!("delete {} marked references? (y/n)", many.len());
-                        self.mode = Mode::ConfirmDelete;
+                        self.confirming = Some(("delete".into(), String::new()));
+                    self.mode = Mode::Confirm;
                     }
                 },
                 _ => {}
