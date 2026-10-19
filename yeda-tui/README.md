@@ -37,7 +37,7 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 | `c` | Show only the current column; again to show all. Below 120 terminal columns the right column is hidden, below 80 the library column too |
 | Mouse | A click selects and focuses; the wheel moves the selection in the column under the pointer |
 | `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
-| `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference |
+| `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference; with more than one, `r`, `R`, `t`, `m` and `x` ask y/n first, and `dd` always does |
 | `f` | Filter by field in a popup (edits the same query as `/`); Ctrl-D/Ctrl-U move between boxes; values the library has are suggested, Ctrl-N/Ctrl-P pick one and Tab completes it; Ctrl-L clears the box, Ctrl-X every box |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
