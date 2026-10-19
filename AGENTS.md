@@ -10,6 +10,9 @@
 - **Secrets** (passwords, API keys, tokens) live only in the system secret store, through yeda-secrets, never in a file.
 - **No backward compatibility:** yeda is a personal project. Replace old formats and behaviour outright, with no compatibility modes or migrations, and say what the user has to redo.
 
+## Interface
+- A command acts on the selected reference, or on the marked ones when there are any. Don't add a separate command for every reference (like the former `:summarize-all`): marking the whole list (`V G`) covers it.
+
 ## Testing
 - `cargo test --workspace`; `npx tsc --noEmit` in yeda-android.
 - CI runs `cargo clippy --workspace --all-targets -- -D warnings` on the latest stable Rust, which may be newer than the local default; run it with that version (`rustup toolchain install <version>`, then `cargo +<version> clippy …`).
@@ -26,6 +29,7 @@
 
 ## Workflow
 - Every change starts from a GitHub issue. Work on a branch `<issue number>-<short-name>` and open a PR that says `Closes #<n>`.
+- A PR that changes only Markdown files skips CI and is merged right away; any other PR is merged once CI passes.
 - Give every new issue one Eisenhower label, and work in that order, oldest first within a quadrant:
   - `Q1 do first`: urgent and important;
   - `Q2 plan`: important;
