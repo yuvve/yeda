@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(c.citing("W2919115771", 3).unwrap().len(), 3);
         let urls = c.pdf_urls("10.48550/arxiv.1706.03762").unwrap();
         assert!(urls.iter().any(|u| u.contains("arxiv.org")), "{urls:?}");
-        let pdf = crate::fulltext::download(urls.iter().find(|u| u.contains("arxiv.org")).unwrap(), None).unwrap();
+        let pdf = crate::fulltext::download(urls.iter().find(|u| u.contains("arxiv.org")).unwrap()).unwrap();
         assert!(yeda_core::fulltext::is_pdf(&pdf));
     }
 }

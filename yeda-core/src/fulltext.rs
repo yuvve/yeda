@@ -91,20 +91,32 @@ pub fn page_gist(html: &str) -> String {
     squeeze(&text).chars().take(200).collect()
 }
 
-pub fn ieee_pdf(page: &str) -> Option<String> {
+/// What to do on an IEEE Xplore page, directly or through a proxy.
+#[derive(Debug, PartialEq)]
+pub enum Ieee {
+    /// A document page: open its PDF page, as the PDF button does.
+    Document { stamp: String },
+    /// The PDF page, which shows the PDF in a frame: download it.
+    Stamp { pdf: String },
+}
+
+pub fn ieee(page: &str) -> Option<Ieee> {
     let (scheme, rest) = page.split_once("://")?;
     let (host, path) = rest.split_once('/')?;
     if !(host == "ieeexplore.ieee.org" || host.starts_with("ieeexplore-ieee-org.")) {
         return None;
     }
-    let number = match path.strip_prefix("document/") {
-        Some(rest) => rest.split(['/', '?', '#']).next()?,
-        None => path.strip_prefix("stamp/stamp.jsp?")?.split('&').find_map(|p| p.strip_prefix("arnumber="))?,
+    let (number, document) = match path.strip_prefix("document/") {
+        Some(rest) => (rest.split(['/', '?', '#']).next()?, true),
+        None => (path.strip_prefix("stamp/stamp.jsp?")?.split('&').find_map(|p| p.strip_prefix("arnumber="))?, false),
     };
     if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some(format!("{scheme}://{host}/stampPDF/getPDF.jsp?tp=&arnumber={number}&ref="))
+    Some(match document {
+        true => Ieee::Document { stamp: format!("{scheme}://{host}/stamp/stamp.jsp?tp=&arnumber={number}") },
+        false => Ieee::Stamp { pdf: format!("{scheme}://{host}/stampPDF/getPDF.jsp?tp=&arnumber={number}&ref=") },
+    })
 }
 
 /// ScienceDirect's PDF link for a `/science/article/pii/<PII>` page, directly or through the
@@ -198,14 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn finds_ieee_pdfs() {
-        let pdf = |n: &str, host: &str| format!("https://{host}/stampPDF/getPDF.jsp?tp=&arnumber={n}&ref=");
+    fn finds_ieee_pages() {
         let proxied = "ieeexplore-ieee-org.proxy.lib.ltu.se";
-        assert_eq!(ieee_pdf("https://ieeexplore-ieee-org.proxy.lib.ltu.se/document/10015635/"), Some(pdf("10015635", proxied)));
-        assert_eq!(ieee_pdf("https://ieeexplore.ieee.org/document/8993024"), Some(pdf("8993024", "ieeexplore.ieee.org")));
-        assert_eq!(ieee_pdf("https://ieeexplore-ieee-org.proxy.lib.ltu.se/stamp/stamp.jsp?tp=&arnumber=10015635"), Some(pdf("10015635", proxied)));
-        assert_eq!(ieee_pdf("https://ieeexplore.ieee.org/search/x"), None);
-        assert_eq!(ieee_pdf("https://link.springer.com/document/123"), None);
+        let stamp = |n: &str, host: &str| Some(Ieee::Document { stamp: format!("https://{host}/stamp/stamp.jsp?tp=&arnumber={n}") });
+        assert_eq!(ieee("https://ieeexplore-ieee-org.proxy.lib.ltu.se/document/10015635/"), stamp("10015635", proxied));
+        assert_eq!(ieee("https://ieeexplore.ieee.org/document/8993024"), stamp("8993024", "ieeexplore.ieee.org"));
+        let pdf = Some(Ieee::Stamp { pdf: format!("https://{proxied}/stampPDF/getPDF.jsp?tp=&arnumber=10015635&ref=") });
+        assert_eq!(ieee("https://ieeexplore-ieee-org.proxy.lib.ltu.se/stamp/stamp.jsp?tp=&arnumber=10015635"), pdf);
+        assert_eq!(ieee("https://ieeexplore.ieee.org/search/x"), None);
+        assert_eq!(ieee("https://link.springer.com/document/123"), None);
     }
 
     #[test]
