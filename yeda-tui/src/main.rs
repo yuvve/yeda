@@ -11,6 +11,7 @@ mod setup;
 mod sync;
 mod table;
 mod ui;
+mod wizard;
 
 use anyhow::{Context, Result};
 use app::App;
@@ -28,10 +29,86 @@ use yeda_core::library::{self, Library};
 use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
+       yeda import   (a form that moves a Zotero library, PDFs included, to a new yeda library)
        yeda read <file.pdf> [--annotations <dir>] [--page N]
        yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
        yeda import-table <table name> <file.csv> [library dir]
        yeda copy-pdfs <from location> <to location> [library dir]";
+
+/// `yeda import`: asks in a form, then imports, adds the PDF location, copies every PDF there
+/// from wherever Zotero had it, and makes the library the default if asked.
+fn import_wizard() -> Result<()> {
+    let config = ensure_config()?;
+    let mut term = ratatui::init();
+    execute!(std::io::stdout(), event::EnableBracketedPaste)?;
+    let answers = wizard::run(&mut term, "~/yeda");
+    let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
+    ratatui::restore();
+    let Some(a) = answers? else { return Ok(()) };
+    let dir = &a.library;
+    fs::create_dir_all(dir)?;
+    println!("{}", import_zotero(&a.zotero, dir)?);
+    if a.dest != wizard::Dest::Zotero {
+        let mut lib = load_library(dir)?;
+        let location: toml::Value = match &a.dav {
+            Some((dav, _)) => toml::Table::from_iter([("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
+            None => {
+                fs::create_dir_all(&a.folder)?;
+                a.folder.to_string_lossy().into_owned().into()
+            }
+        };
+        let effect = lib.update_config(|t| {
+            library::config_section(t, "locations")?.insert(a.name.clone(), location);
+            Ok(())
+        })?;
+        yeda_fs::apply(dir, vec![effect])?;
+        if let Some((dav, password)) = &a.dav {
+            remember_password(dav, password);
+            if let Err(e) = yeda_secrets::set(&yeda_secrets::webdav_account(&dav.user, &dav.url), password) {
+                eprintln!("the WebDAV password wasn't saved to the secret store ({e:#}); yeda will ask for it next time");
+            }
+        }
+        let lib = load_library(dir)?;
+        let sources: std::collections::BTreeSet<String> = lib.refs.iter().filter_map(|r| Some(r.pdf.as_ref()?.location.clone())).filter(|l| *l != a.name).collect();
+        for from in sources {
+            copy_pdfs(&from, &a.name, dir)?;
+        }
+    }
+    if a.make_default {
+        set_default_library(config.as_deref(), dir)?;
+    }
+    println!("done; open it with: yeda{}", if a.make_default { String::new() } else { format!(" {}", dir.display()) });
+    Ok(())
+}
+
+/// `~/.config/yeda/config.toml`, written from the template when it doesn't exist.
+fn ensure_config() -> Result<Option<PathBuf>> {
+    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
+    if let Some(path) = config.as_deref().filter(|p| !p.exists()) {
+        fs::create_dir_all(path.parent().unwrap())?;
+        yeda_fs::write_atomic(path, CONFIG_TEMPLATE.as_bytes())?;
+    }
+    Ok(config)
+}
+
+/// Sets `library =` in config.toml, replacing the line that sets or shows it, so the comments stay.
+fn set_default_library(config: Option<&Path>, dir: &Path) -> Result<()> {
+    let Some(config) = config else { return Ok(()) };
+    let home = dirs::home_dir();
+    let shown = match home.as_deref().and_then(|h| dir.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => dir.display().to_string(),
+    };
+    let line = format!("library = {}", toml::Value::String(shown));
+    let text = fs::read_to_string(config).unwrap_or_default();
+    let at = text.lines().position(|l| l.trim_start_matches(['#', ' ']).starts_with("library ="));
+    let text = match at {
+        Some(i) => text.lines().enumerate().map(|(n, l)| if n == i { line.as_str() } else { l }).collect::<Vec<_>>().join("\n") + "\n",
+        None => format!("{line}\n{text}"),
+    };
+    yeda_fs::write_atomic(config, text.as_bytes())?;
+    Ok(())
+}
 
 /// Written to `~/.config/yeda/config.toml` when there is none.
 const CONFIG_TEMPLATE: &str = r#"# Settings for this machine. Any yeda.toml setting can also go here, overriding the library's.
@@ -103,7 +180,8 @@ fn import_zotero(zotero: &Path, dir: &Path) -> Result<String> {
                 poppler::render_area(src.pdf?, page, rect).ok()
             })
         };
-        let (report, effects) = zotero::import(&db, zotero, load_library(dir)?, dirs::home_dir().as_deref(), &mut image)?;
+        let linked = zotero_pref("baseAttachmentPath").map(PathBuf::from);
+        let (report, effects) = zotero::import(&db, zotero, linked.as_deref(), load_library(dir)?, dirs::home_dir().as_deref(), &mut image)?;
         eprint!("\rwriting {} files…{:60}", effects.len(), "");
         yeda_fs::apply(dir, effects)?;
         eprint!("\r{:80}\r", "");
@@ -123,6 +201,9 @@ fn main() -> Result<()> {
         let job: yeda_reader_lib::fetch::Job = serde_json::from_reader(std::io::stdin()).context("fetch: a job as JSON on stdin")?;
         yeda_reader_lib::fetch::run(job);
         return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("import") {
+        return import_wizard();
     }
     if args.first().map(String::as_str) == Some("import-zotero") {
         let mut args = args.clone();
@@ -153,11 +234,7 @@ fn main() -> Result<()> {
         println!("{report}");
         return Ok(());
     }
-    let config = dirs::config_dir().map(|d| d.join("yeda/config.toml"));
-    if let Some(path) = config.as_deref().filter(|p| !p.exists()) {
-        fs::create_dir_all(path.parent().unwrap())?;
-        yeda_fs::write_atomic(path, CONFIG_TEMPLATE.as_bytes())?;
-    }
+    let config = ensure_config()?;
     let dir = library_dir(args.first())?;
     let dir = dir.canonicalize().unwrap_or(dir);
     let lib = load_library(&dir)?;
@@ -201,16 +278,19 @@ fn ask_password(label: &str) -> Result<String> {
 /// The location `import-zotero` creates for Zotero's storage folder.
 const ZOTERO_LOCATION: &str = "zotero";
 
-/// Zotero's file-sync WebDAV folder, from its preferences, if it syncs files over WebDAV.
-fn zotero_webdav() -> Option<library::Dav> {
+/// A string setting `extensions.zotero.<name>` from Zotero's preferences.
+fn zotero_pref(name: &str) -> Option<String> {
     let base = dirs::home_dir()?.join(".zotero/zotero");
     let profiles = fs::read_to_string(base.join("profiles.ini")).ok()?;
     let profile = profiles.lines().find_map(|l| l.strip_prefix("Path="))?;
     let prefs = fs::read_to_string(base.join(profile).join("prefs.js")).ok()?;
-    let pref = |name: &str| {
-        let line = prefs.lines().find(|l| l.contains(&format!("\"extensions.zotero.sync.storage.{name}\"")))?;
-        line.rsplit(", \"").next()?.split('"').next().map(String::from)
-    };
+    let line = prefs.lines().find(|l| l.contains(&format!("\"extensions.zotero.{name}\"")))?;
+    line.rsplit(", \"").next()?.split('"').next().map(String::from)
+}
+
+/// Zotero's file-sync WebDAV folder, from its preferences, if it syncs files over WebDAV.
+fn zotero_webdav() -> Option<library::Dav> {
+    let pref = |name: &str| zotero_pref(&format!("sync.storage.{name}"));
     if pref("protocol")? != "webdav" {
         return None;
     }
@@ -222,10 +302,14 @@ fn zotero_webdav() -> Option<library::Dav> {
 /// The WebDAV password for `dav`, from the secret store or asked for in the terminal.
 fn dav_password(dav: &library::Dav) -> Result<String> {
     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+    if let Some(p) = KNOWN_PASSWORDS.lock().unwrap().get(&account) {
+        return Ok(p.clone());
+    }
     if let Ok(Some(p)) = yeda_secrets::get(&account) {
         return Ok(p);
     }
     let p = ask_password(&format!("{}@{}", dav.user, dav.url))?;
+    remember_password(dav, &p);
     if std::io::stdin().is_terminal() {
         eprint!("save it in the secret store? [y/N] ");
         let mut answer = String::new();
@@ -235,6 +319,13 @@ fn dav_password(dav: &library::Dav) -> Result<String> {
         }
     }
     Ok(p)
+}
+
+/// WebDAV passwords entered or tested in this run, by secret-store account, so a run asks once.
+static KNOWN_PASSWORDS: std::sync::Mutex<std::collections::BTreeMap<String, String>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn remember_password(dav: &library::Dav, password: &str) {
+    KNOWN_PASSWORDS.lock().unwrap().insert(yeda_secrets::webdav_account(&dav.user, &dav.url), password.into());
 }
 
 /// A file from Zotero's WebDAV, where attachment `KEY/file` is stored as `KEY.zip`. Only reads.

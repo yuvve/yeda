@@ -34,7 +34,8 @@ pub type LoadImage<'a> = dyn FnMut(&ImageSource) -> Option<Vec<u8>> + 'a;
 
 /// Imports every item of Zotero's database `db` not yet in `lib`. `zotero` is the Zotero data
 /// folder, used to build attachment paths. Returns a report and the changes to apply.
-pub fn import(db: &Connection, zotero: &Path, mut lib: Library, home: Option<&Path>, image: &mut LoadImage) -> Result<(String, Vec<Effect>)> {
+/// `linked` is Zotero's base folder for relative linked files (its `baseAttachmentPath` setting).
+pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Library, home: Option<&Path>, image: &mut LoadImage) -> Result<(String, Vec<Effect>)> {
     let mut effects = Vec::new();
     let mut new_locations = Vec::new();
     ensure_location(&mut lib, &mut new_locations, "zotero", &zotero.join("storage"));
@@ -125,11 +126,13 @@ pub fn import(db: &Connection, zotero: &Path, mut lib: Library, home: Option<&Pa
         r.collections = ids.iter().filter_map(|c| collections.get(c).cloned()).collect();
         r.collections.sort();
 
-        let attachments = attachments(db, id, zotero)?;
+        let attachments = attachments(db, id, zotero, linked)?;
         let pdf_file = attachments.iter().find_map(|(_, path)| path.clone());
         if let Some(file) = &pdf_file {
-            if let Some(home) = home.filter(|h| file.starts_with(h)) {
-                ensure_location(&mut lib, &mut new_locations, "home", home);
+            // Linked files can be anywhere: under the home folder, else under the root.
+            match home.filter(|h| file.starts_with(h)) {
+                Some(home) => ensure_location(&mut lib, &mut new_locations, "home", home),
+                None => ensure_location(&mut lib, &mut new_locations, "files", file.ancestors().last().unwrap_or(file)),
             }
             r.pdf = locate(&lib, file);
         }
@@ -376,7 +379,7 @@ fn image_rect(position: &str) -> Option<(u32, [f32; 4])> {
 }
 
 /// PDF attachments of `item` as (attachment id, resolved file); `None` when the file cannot be located.
-fn attachments(db: &Connection, item: i64, zotero: &Path) -> Result<Vec<(i64, Option<PathBuf>)>> {
+fn attachments(db: &Connection, item: i64, zotero: &Path, linked: Option<&Path>) -> Result<Vec<(i64, Option<PathBuf>)>> {
     let mut stmt = db.prepare_cached(&format!(
         "SELECT a.itemID, i.key, a.linkMode, a.path FROM itemAttachments a JOIN items i USING(itemID)
          WHERE a.parentItemID = ?1 AND a.contentType = 'application/pdf' AND a.itemID {NOT_DELETED} ORDER BY a.itemID"
@@ -388,11 +391,11 @@ fn attachments(db: &Connection, item: i64, zotero: &Path) -> Result<Vec<(i64, Op
     for row in rows {
         let (id, key, mode, path) = row?;
         let path = path.unwrap_or_default();
-        // linkMode 0/1: stored in storage/<key>/; 2: linked file. Paths relative to Zotero's
-        // "linked attachment base directory" (attachments:) need a preference we don't read.
-        let file = match (mode, path.strip_prefix("storage:")) {
-            (0 | 1, Some(name)) => Some(zotero.join("storage").join(key).join(name)),
-            (2, None) if Path::new(&path).is_absolute() => Some(PathBuf::from(path)),
+        // linkMode 0/1: stored in storage/<key>/; 2: linked file, absolute or relative to the base folder.
+        let file = match (mode, path.strip_prefix("storage:"), path.strip_prefix("attachments:")) {
+            (0 | 1, Some(name), _) => Some(zotero.join("storage").join(key).join(name)),
+            (2, _, Some(rest)) => linked.map(|base| base.join(rest)),
+            (2, None, None) if Path::new(&path).is_absolute() => Some(PathBuf::from(path)),
             _ => None,
         };
         out.push((id, file));
@@ -523,6 +526,26 @@ mod tests {
     fn converts_note_html() {
         let html = r#"<div data-schema-version="9"><h1>Summary</h1><p>Cats &amp; dogs<br/>are <b>fluid</b>.</p></div>"#;
         assert_eq!(html_to_text(html), "Summary\nCats & dogs\nare fluid.");
+    }
+
+    #[test]
+    fn finds_stored_and_linked_attachments() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE items (itemID INTEGER, key TEXT);
+             CREATE TABLE itemAttachments (itemID INTEGER, parentItemID INTEGER, linkMode INTEGER, path TEXT, contentType TEXT);
+             CREATE TABLE deletedItems (itemID INTEGER);
+             INSERT INTO items VALUES (2, 'STORED'), (3, 'ABS'), (4, 'REL');
+             INSERT INTO itemAttachments VALUES
+               (2, 1, 1, 'storage:a.pdf', 'application/pdf'),
+               (3, 1, 2, '/data/papers/b.pdf', 'application/pdf'),
+               (4, 1, 2, 'attachments:sub/c.pdf', 'application/pdf');",
+        )
+        .unwrap();
+        let files = |linked| attachments(&db, 1, Path::new("/z"), linked).unwrap().into_iter().map(|(_, f)| f).collect::<Vec<_>>();
+        let p = |s: &str| Some(PathBuf::from(s));
+        assert_eq!(files(Some(Path::new("/base"))), [p("/z/storage/STORED/a.pdf"), p("/data/papers/b.pdf"), p("/base/sub/c.pdf")]);
+        assert_eq!(files(None)[2], None);
     }
 
     #[test]
