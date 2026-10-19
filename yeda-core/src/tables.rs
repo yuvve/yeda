@@ -38,9 +38,10 @@ pub struct Job {
 const SYSTEM: &str = "You fill in one row of a literature-review table about a research paper. \
 Fill it objectively: report what the paper itself says and does. Make no assumptions about who will read \
 the table, or about the researcher's own work, interests or plans. \
-Each row stands on its own: describe this paper independently and never compare it with, rank it against, \
-or refer to other papers in the table, including the example rows, which are style references only. \
-The one exception is a column with existing values: reuse a value when it fits this paper closely. \
+Each row stands on its own: describe this paper independently. Never bring up another paper because it is \
+in the table, and never compare this paper with or rank it against the others; the example rows are style \
+references only, except that in a column with existing values you reuse a value when it fits this paper closely. \
+Name another work only where this paper itself cites or builds on it. \
 Where the paper does not say something, write \"Not stated.\" \
 Follow each column's guidance when given; it takes precedence over the rules above and over the example rows. \
 Otherwise match the style, depth and length of the example rows when there are any. Write plain text, not Markdown.";
