@@ -38,7 +38,8 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
     let mut options = match (command.trim_end_matches('!'), args.len()) {
         ("summarize" | "summarize-all", 0) | ("export", 0) => tables(),
         ("summarize" | "summarize-all", 1) => lib.llm.keys().cloned().collect(),
-        ("table", 0) => [tables(), vec!["close".into()]].concat(),
+        ("table", 0) => [tables(), vec!["close".into(), "rename".into()]].concat(),
+        ("table", 1) if args[0] == "rename" => tables(),
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
         ("graph", 1) if args[0] == "col" => lib.tables.values().flat_map(|t| t.columns.clone()).collect(),
         ("fetch", 0) | ("attach", 1) => locations(),
@@ -75,7 +76,8 @@ mod tests {
         assert_eq!(c.line(), "summarize-all");
         assert_eq!(Completion::new(&lib, "summarize! l").unwrap().candidates, ["lab", "lit"]);
         assert_eq!(Completion::new(&lib, "summarize lit ").unwrap().line(), "summarize lit claude");
-        assert_eq!(Completion::new(&lib, "table ").unwrap().candidates, ["close", "lab", "lit"]);
+        assert_eq!(Completion::new(&lib, "table ").unwrap().candidates, ["close", "lab", "lit", "rename"]);
+        assert_eq!(Completion::new(&lib, "table rename l").unwrap().candidates, ["lab", "lit"]);
         assert!(Completion::new(&lib, "cite ie").unwrap().candidates.contains(&"ieee".to_string()));
         assert_eq!(Completion::new(&lib, "graph c").unwrap().candidates, ["citations", "close", "col"]);
         assert_eq!(Completion::new(&lib, "setup llm ").unwrap().candidates, ["claude"]);

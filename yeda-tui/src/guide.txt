@@ -213,6 +213,7 @@ TABLES  ( :table [name], T )
 
   :summarize [table] fills the selected reference's row using an LLM profile
   from [llm.<name>]; each paper's rows are kept in notes/<key>.ai.toml.
+  :table rename <old> <new> renames a table there and in yeda.toml.
   Without a table name and with several tables, a list to pick from opens;
   Tab completes the name on the command line.
 
