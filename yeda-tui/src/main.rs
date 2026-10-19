@@ -2,6 +2,7 @@ mod app;
 mod citations;
 mod cluster;
 mod complete;
+mod discover;
 mod fetch;
 mod keys;
 mod log;
@@ -288,6 +289,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_graph();
         app.poll_fetch();
         app.poll_setup();
+        app.poll_discover();
         app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
