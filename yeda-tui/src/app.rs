@@ -1149,12 +1149,19 @@ impl App {
             },
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
             KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
+            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
             KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
             KeyCode::Backspace => {
                 form.values[form.sel].pop();
             }
             KeyCode::Char(c) if !ctrl => form.values[form.sel].push(c),
             _ => {}
+        }
+        if let Some(form) = &mut self.setup
+            && form.kind == setup::Kind::Llm
+            && form.sel == 1
+        {
+            form.provider_changed();
         }
     }
 
@@ -1192,6 +1199,7 @@ impl App {
             let table = entry.as_table_mut().unwrap();
             if kind == setup::Kind::Llm {
                 table.remove("base_url");
+                table.remove("api_key_env");
             }
             table.extend(job.section);
             Ok(())

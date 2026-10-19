@@ -21,6 +21,21 @@ pub struct SetupForm {
     pub testing: bool,
     /// The saved search's name before editing.
     pub old: Option<String>,
+    /// The edited profile's own `api_key_env`, kept when its provider has no preset one.
+    key_env: Option<String>,
+}
+
+/// Providers the form knows: name, API, base URL, and the variable (and secret) its key goes under.
+pub const PRESETS: [(&str, Provider, &str, Option<&str>); 5] = [
+    ("anthropic", Provider::Anthropic, "https://api.anthropic.com", None),
+    ("openai", Provider::Openai, "https://api.openai.com/v1", None),
+    ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai", Some("GEMINI_API_KEY")),
+    ("mistral", Provider::Openai, "https://api.mistral.ai/v1", Some("MISTRAL_API_KEY")),
+    ("openrouter", Provider::Openai, "https://openrouter.ai/api/v1", Some("OPENROUTER_API_KEY")),
+];
+
+fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str, Option<&'static str>)> {
+    PRESETS.iter().find(|p| p.0 == name.trim().to_lowercase())
 }
 
 /// What the form saves, once its connection works.
@@ -37,10 +52,12 @@ impl SetupForm {
         let values = match kind {
             Kind::Llm => match lib.llm.get(name) {
                 Some(p) => {
-                    let provider = if p.provider == Provider::Anthropic { "anthropic" } else { "openai" };
-                    vec![name.into(), provider.into(), p.model.clone(), p.base_url.clone().unwrap_or_default(), String::new()]
+                    let builtin = if p.provider == Provider::Anthropic { &PRESETS[0] } else { &PRESETS[1] };
+                    let url = p.base_url.clone().unwrap_or(builtin.2.into());
+                    let provider = PRESETS.iter().find(|q| q.1 == p.provider && q.2 == url.trim_end_matches('/')).unwrap_or(builtin).0;
+                    vec![name.into(), provider.into(), p.model.clone(), url, String::new()]
                 }
-                None => vec![name.into(), "anthropic".into(), String::new(), String::new(), String::new()],
+                None => vec![name.into(), "anthropic".into(), String::new(), PRESETS[0].2.into(), String::new()],
             },
             Kind::Webdav => match lib.remotes.get(name) {
                 Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), String::new()],
@@ -54,7 +71,31 @@ impl SetupForm {
         };
         let sel = if name.is_empty() { 0 } else { 1 };
         let old = (kind == Kind::Search).then(|| name.to_string());
-        SetupForm { kind, values, sel, testing: false, old }
+        let key_env = lib.llm.get(name).filter(|_| kind == Kind::Llm).and_then(|p| p.api_key_env.clone());
+        SetupForm { kind, values, sel, testing: false, old, key_env }
+    }
+
+    /// Picks the next (or previous) provider preset, filling in its base URL.
+    pub fn cycle_provider(&mut self, back: bool) {
+        let at = PRESETS.iter().position(|p| p.0 == self.values[1].trim().to_lowercase());
+        let n = PRESETS.len();
+        let next = match (at, back) {
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+            (None, _) => 0,
+        };
+        self.values[1] = PRESETS[next].0.into();
+        self.provider_changed();
+    }
+
+    /// A known provider replaces the base URL, unless one was typed that no preset has.
+    pub fn provider_changed(&mut self) {
+        let url = self.values[3].trim();
+        if let Some(p) = preset(&self.values[1])
+            && (url.is_empty() || PRESETS.iter().any(|q| q.2 == url))
+        {
+            self.values[3] = p.2.into();
+        }
     }
 
     /// Each field's label and hint.
@@ -62,9 +103,9 @@ impl SetupForm {
         match self.kind {
             Kind::Llm => &[
                 ("Name", "used as :summarize <table> <name>"),
-                ("Provider", "anthropic, or openai for any OpenAI-compatible server"),
+                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter"),
                 ("Model", "e.g. claude-opus-5-5"),
-                ("Base URL", "for a server other than the provider's own"),
+                ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
                 ("API key", "kept in the secret store; empty for a local server"),
             ],
             Kind::Webdav => &[
@@ -102,15 +143,27 @@ impl SetupForm {
         let mut t = toml::Table::new();
         let setup = match self.kind {
             Kind::Llm => {
-                t.insert("provider".into(), v[1].to_lowercase().into());
+                let known = preset(v[1]);
+                let api = match known {
+                    Some((_, Provider::Anthropic, ..)) => "anthropic".to_string(),
+                    Some(_) => "openai".to_string(),
+                    None => v[1].to_lowercase(),
+                };
+                t.insert("provider".into(), api.clone().into());
                 t.insert("model".into(), v[2].into());
-                if !v[3].is_empty() {
-                    t.insert("base_url".into(), v[3].into());
+                // The provider's own address is yeda's default, and leaving it out keeps the key required.
+                let url = v[3].trim_end_matches('/');
+                let builtin = PRESETS.iter().any(|q| q.0 == api && q.2 == url);
+                if !url.is_empty() && !builtin {
+                    t.insert("base_url".into(), url.into());
+                }
+                if let Some(env) = known.and_then(|p| p.3).map(String::from).or(self.key_env.clone()) {
+                    t.insert("api_key_env".into(), env.into());
                 }
                 if v[2].is_empty() {
                     bail!("give the model's name");
                 }
-                let p = Profile::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the provider is anthropic or openai"))?;
+                let p = Profile::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the provider is one of {}", PRESETS.map(|p| p.0).join(", ")))?;
                 if p.needs_key() && self.secret().is_none() {
                     bail!("{} needs an API key", if p.provider == Provider::Anthropic { "Anthropic" } else { "OpenAI" });
                 }
@@ -179,13 +232,26 @@ mod tests {
         let lib = Library::parse(Some("[llm.local]\nprovider = \"openai\"\nmodel = \"qwen\"\nbase_url = \"http://localhost:8080/v1\"\n"), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "local", &lib);
         assert_eq!(f.values, ["local", "openai", "qwen", "http://localhost:8080/v1", ""]);
+        let mut g = SetupForm::new(Kind::Llm, "new", &lib);
+        assert_eq!(g.values[1..4], ["anthropic", "", "https://api.anthropic.com"]);
+        g.cycle_provider(false);
+        g.cycle_provider(false);
+        g.values[2] = "gemini-x".into();
+        g.values[4] = "k".into();
+        assert_eq!(g.values[3], "https://generativelanguage.googleapis.com/v1beta/openai");
+        let (t, s) = g.section().unwrap();
+        assert_eq!((t["provider"].as_str(), t["api_key_env"].as_str()), (Some("openai"), Some("GEMINI_API_KEY")));
+        assert_eq!(account(&s), "llm:GEMINI_API_KEY");
+        g.cycle_provider(true);
+        g.cycle_provider(true);
+        assert!(!g.section().unwrap().0.contains_key("base_url"));
         let (t, _) = f.section().unwrap();
         assert_eq!(t.get("base_url").and_then(|v| v.as_str()), Some("http://localhost:8080/v1"));
 
         let mut f = SetupForm::new(Kind::Llm, "claude", &lib);
         f.values[2] = "claude-opus-5-5".into();
         assert!(f.section().unwrap_err().to_string().contains("API key"));
-        f.values[1] = "gemini".into();
+        f.values[1] = "cohere".into();
         assert!(f.section().is_err());
 
         let mut f = SetupForm::new(Kind::Webdav, "dav", &lib);
