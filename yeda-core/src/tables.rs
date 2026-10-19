@@ -1,6 +1,6 @@
 use crate::Effect;
 use crate::annotations::Annotation;
-use crate::library::{Library, Ref, config_section};
+use crate::library::{Library, Ref};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -209,18 +209,13 @@ pub fn import_csv(lib: &mut Library, name: &str, csv: &str) -> Result<(String, V
     let mut rd = csv::Reader::from_reader(csv.as_bytes());
     let mut effects = Vec::new();
     let headers: Vec<String> = rd.headers()?.iter().map(String::from).collect();
-    let columns: Vec<String> = headers.iter().filter(|h| !BUILTIN.contains(&h.as_str())).cloned().collect();
-    let known = lib.tables.get(name).map(|t| t.columns.clone()).unwrap_or_default();
-    let added: Vec<String> = columns.iter().filter(|c| !known.contains(c)).cloned().collect();
-    if !added.is_empty() {
-        effects.push(lib.update_config(|t| {
-            let def = config_section(config_section(t, "tables")?, name)?;
-            let cols = def.entry("columns").or_insert_with(|| toml::Value::Array(vec![]));
-            let cols = cols.as_array_mut().context("tables.<name>.columns is not an array")?;
-            cols.extend(added.iter().map(|c| toml::Value::String(c.clone())));
-            Ok(())
-        })?);
-    }
+    let Some(table) = lib.tables.get(name).cloned() else {
+        anyhow::bail!("no table named '{name}' in yeda.toml (tables: {})", lib.tables.keys().cloned().collect::<Vec<_>>().join(", "));
+    };
+    // Only columns both sides have: the CSV's others are left out, the table's others stay as they are.
+    let ignored: Vec<&str> = headers.iter().map(String::as_str).filter(|h| !BUILTIN.contains(h) && !table.columns.iter().any(|c| c == h)).collect();
+    let ignored = ignored.join(", ");
+    let wanted = |h: &str| table.columns.iter().any(|c| c == h);
 
     let by_key: HashMap<String, usize> = lib.refs.iter().enumerate().map(|(i, r)| (r.key.clone(), i)).collect();
     let by_title: HashMap<String, usize> = lib.refs.iter().enumerate().map(|(i, r)| (normalize(&r.title), i)).collect();
@@ -238,7 +233,7 @@ pub fn import_csv(lib: &mut Library, name: &str, csv: &str) -> Result<(String, V
         let row: Row = headers
             .iter()
             .zip(record.iter())
-            .filter(|(h, v)| !BUILTIN.contains(&h.as_str()) && !v.trim().is_empty())
+            .filter(|(h, v)| wanted(h) && !v.trim().is_empty())
             .map(|(h, v)| (h.clone(), v.to_string()))
             .collect();
         merge(&mut lib.refs[i], name, row, true);
@@ -248,6 +243,9 @@ pub fn import_csv(lib: &mut Library, name: &str, csv: &str) -> Result<(String, V
     let mut report = format!("imported {imported} rows into table '{name}'");
     if !unmatched.is_empty() {
         let _ = write!(report, "; no matching reference for: {}", unmatched.join(", "));
+    }
+    if !ignored.is_empty() {
+        let _ = write!(report, "; columns not in the table, left out: {ignored}");
     }
     Ok((report, effects))
 }
@@ -296,16 +294,14 @@ mod tests {
         let refs = [("a2020".to_string(), "title = \"Alpha\"\n".to_string()), ("b2021".into(), "title = \"Beta\"\n".into())];
         let mut lib = Library::parse(Some(cfg), None, refs, None).unwrap();
         let (report, effects) = import_csv(&mut lib, "lit", "key,title,method,venue\n,ALPHA,CBBA,ICRA\nzzz,,x,y\n").unwrap();
-        assert!(report.contains("imported 1 rows") && report.contains("zzz"), "{report}");
-        assert_eq!(effects.len(), 2);
-        assert_eq!(lib.refs[0].tables["lit"]["venue"], "ICRA");
+        assert!(report.contains("imported 1 rows") && report.contains("zzz") && report.contains("left out: venue"), "{report}");
+        assert_eq!(effects.len(), 1);
+        assert!(!lib.refs[0].tables["lit"].contains_key("venue"));
         let Effect::Write { path, .. } = &effects[0] else { panic!() };
-        assert_eq!(path, "yeda.toml");
-        let Effect::Write { path, .. } = &effects[1] else { panic!() };
         assert_eq!(path, "notes/a2020.ai.toml");
-        lib.tables.get_mut("lit").unwrap().columns.push("venue".into());
+        assert!(import_csv(&mut lib, "other", "key,method\n").unwrap_err().to_string().contains("tables: lit"));
         let (csv, n) = export_csv(&lib, "lit").unwrap();
         assert_eq!(n, 1);
-        assert_eq!(csv, "key,title,authors,year,method,venue\na2020,Alpha,,,CBBA,ICRA\n");
+        assert_eq!(csv, "key,title,authors,year,method\na2020,Alpha,,,CBBA\n");
     }
 }
