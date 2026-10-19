@@ -10,6 +10,8 @@ pub enum Kind {
     Webdav,
     /// Editing a saved search; nothing to test.
     Search,
+    /// The optional OpenAlex API key, which only goes to the secret store.
+    Openalex,
 }
 
 /// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; or a saved search being edited.
@@ -44,6 +46,7 @@ pub enum Setup {
     Llm(Profile),
     Webdav(Dav),
     Search(SavedSearch),
+    Openalex,
 }
 
 impl SetupForm {
@@ -68,8 +71,9 @@ impl SetupForm {
                 let sort = s.and_then(|s| Some(format!("{}{}", if s.descending { "-" } else { "" }, sort_name(s.sort?))));
                 vec![name.into(), s.map(|s| s.query.clone()).unwrap_or_default(), sort.unwrap_or_default()]
             }
+            Kind::Openalex => vec![String::new()],
         };
-        let sel = if name.is_empty() { 0 } else { 1 };
+        let sel = if name.is_empty() || kind == Kind::Openalex { 0 } else { 1 };
         let old = (kind == Kind::Search).then(|| name.to_string());
         let key_env = lib.llm.get(name).filter(|_| kind == Kind::Llm).and_then(|p| p.api_key_env.clone());
         SetupForm { kind, values, sel, testing: false, old, key_env }
@@ -114,6 +118,7 @@ impl SetupForm {
                 ("User", ""),
                 ("Password", "kept in the secret store"),
             ],
+            Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
             Kind::Search => &[
                 ("Name", ""),
                 ("Query", "as typed after /"),
@@ -123,7 +128,7 @@ impl SetupForm {
     }
 
     pub fn name(&self) -> &str {
-        self.values[0].trim()
+        if self.kind == Kind::Openalex { "openalex" } else { self.values[0].trim() }
     }
 
     pub fn secret(&self) -> Option<String> {
@@ -180,6 +185,8 @@ impl SetupForm {
                 t.insert("user".into(), v[2].into());
                 Setup::Webdav(Dav::deserialize(toml::Value::Table(t.clone()))?)
             }
+            Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
+            Kind::Openalex => Setup::Openalex,
             Kind::Search => {
                 let (descending, field) = match v[2].strip_prefix('-') {
                     Some(f) => (true, f),
@@ -202,6 +209,7 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
         Setup::Llm(p) => yeda_net::llm::ping(p, secret),
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Search(_) => Ok(()),
+        Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
     }
 }
 
@@ -211,6 +219,7 @@ pub fn account(setup: &Setup) -> String {
         Setup::Llm(p) => yeda_secrets::llm_account(p.key_env()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Search(_) => String::new(),
+        Setup::Openalex => yeda_secrets::OPENALEX.into(),
     }
 }
 
