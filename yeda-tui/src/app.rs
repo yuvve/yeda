@@ -145,6 +145,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":discover [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described; a adds one"),
     (":found", "the papers the last :discover found"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
+    (":setup openalex", "set the optional OpenAlex API key, testing it first"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
@@ -1235,6 +1236,12 @@ impl App {
             self.secrets.insert(account.clone(), secret.clone());
             self.rejected.remove(&account);
         }
+        if kind == setup::Kind::Openalex {
+            self.setup = None;
+            self.mode = Mode::Normal;
+            self.status = format!("saved the OpenAlex key to the secret store{stored}");
+            return;
+        }
         let section = if kind == setup::Kind::Llm { "llm" } else { "locations" };
         let result = self.lib.update_config(|t| {
             let entry = config_section(t, section)?.entry(name.clone()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -1614,8 +1621,9 @@ impl App {
                     let kind = match kind {
                         "llm" => setup::Kind::Llm,
                         "webdav" => setup::Kind::Webdav,
+                        "openalex" => setup::Kind::Openalex,
                         _ => {
-                            self.status = "usage: :setup llm|webdav [name]".into();
+                            self.status = "usage: :setup llm|webdav [name], or :setup openalex".into();
                             return;
                         }
                     };

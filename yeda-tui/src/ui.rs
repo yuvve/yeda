@@ -416,6 +416,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         crate::setup::Kind::Llm => "LLM profile",
         crate::setup::Kind::Webdav => "WebDAV location",
         crate::setup::Kind::Search => "Saved search",
+        crate::setup::Kind::Openalex => "OpenAlex API key",
     };
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
