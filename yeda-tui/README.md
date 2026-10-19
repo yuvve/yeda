@@ -14,6 +14,8 @@ yeda copy-pdfs <from location> <to location> [library dir]
 
 `yeda import` moves a Zotero library to a new yeda library in one go. A form asks for Zotero's data folder, the library folder, where the PDFs go (copied to a folder, uploaded to a WebDAV folder that is tested and created if missing, or left in Zotero's storage) and whether to make it the default library. It then imports, and copies every PDF there: from Zotero's storage, from linked files (including ones relative to Zotero's base folder for linked attachments), and from Zotero's WebDAV for files missing locally. `import-zotero` and `copy-pdfs` do the same steps one at a time. `yeda init` is the same form without the Zotero part: it creates an empty library with its PDF location (a folder, a WebDAV folder, or none yet).
 
+`import-table` fills a table from a CSV file, matching rows to references by `key` or else `title`. Only the columns both the CSV and the table have are imported; the others are named in the report.
+
 Without a library dir, yeda uses the current folder if it is a library (it has `yeda.toml` or `refs/`), else `library` from `~/.config/yeda/config.toml` (`library = "~/papers"`), else the current folder.
 
 When a WebDAV password or LLM API key is needed and not in the Secret Service, yeda asks for it in a masked prompt and offers to save it there. If the server rejects a saved password, it asks again.
