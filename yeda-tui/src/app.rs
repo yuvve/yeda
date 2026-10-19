@@ -134,7 +134,6 @@ const CONFIRM_MANY: [(&str, &str); 5] = [
 pub const COMMANDS: &[(&str, &str)] = &[
     (":save <name>", "save the current search"),
     (":summarize[!] [table] [profile]", "fill the reference's table row with an LLM; ! overwrites"),
-    (":summarize-all[!] [table] [profile]", "the same for every visible reference"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
@@ -716,9 +715,15 @@ impl App {
                         Filter::Search(name, _) if self.pane == Pane::Sidebar => self.delete_search(&name),
                         _ => self.delete_selected(),
                     },
+                    Some((action, command)) if k.code == KeyCode::Char('y') && action == "command" => {
+                        self.confirmed = true;
+                        self.submit(Prompt::Command, &command);
+                        self.confirmed = false;
+                    }
                     Some((action, args)) if k.code == KeyCode::Char('y') => {
                         self.confirmed = true;
                         self.action(&action, &args);
+                        self.confirmed = false;
                     }
                     _ => self.status = "cancelled".into(),
                 }
@@ -1584,11 +1589,9 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
-                (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) if args.trim().is_empty() && self.lib.tables.len() > 1 => {
-                    self.pick_table(cmd, "")
-                }
-                (cmd @ ("summarize" | "summarize!" | "summarize-all" | "summarize-all!"), args) => {
-                    if let Err(e) = self.summarize(args, cmd.starts_with("summarize-all"), cmd.ends_with('!'), text) {
+                (cmd @ ("summarize" | "summarize!"), args) if args.trim().is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, ""),
+                (cmd @ ("summarize" | "summarize!"), args) => {
+                    if let Err(e) = self.summarize(args, cmd.ends_with('!'), text) {
                         self.status = format!("{e:#}");
                     }
                 }
@@ -1827,7 +1830,19 @@ impl App {
         }
     }
 
-    fn summarize(&mut self, args: &str, all: bool, overwrite: bool, command: &str) -> anyhow::Result<()> {
+    /// Asks y/n before `command` runs on `n` references, unless it is one or this run was confirmed;
+    /// true when it may go ahead now.
+    fn confirm_many(&mut self, what: &str, n: usize, command: &str) -> bool {
+        if std::mem::take(&mut self.confirmed) || n < 2 {
+            return true;
+        }
+        self.status = format!("{what} {n} references? (y/n)");
+        self.confirming = Some(("command".into(), command.into()));
+        self.mode = Mode::Confirm;
+        false
+    }
+
+    fn summarize(&mut self, args: &str, overwrite: bool, command: &str) -> anyhow::Result<()> {
         if self.summarizer.is_some() {
             anyhow::bail!("a summarization is already running (:cancel stops it)");
         }
@@ -1835,7 +1850,7 @@ impl App {
         let table_name = self.table_name(words.next())?;
         let (profile_name, profile) = self.lib.llm_profile(words.next())?;
         let table = self.lib.tables[&table_name].clone();
-        let targets: Vec<usize> = if all { self.visible.clone() } else { self.targets() };
+        let targets = self.targets();
         if targets.is_empty() {
             anyhow::bail!("no reference selected");
         }
@@ -1850,6 +1865,9 @@ impl App {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
         let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        if !self.confirm_many(&format!("summarize into {table_name}"), jobs.len(), command) {
+            return Ok(());
+        }
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
@@ -2881,6 +2899,9 @@ impl App {
             None => None,
         };
         let targets = self.targets();
+        if !self.confirm_many("fetch PDFs for", targets.iter().filter(|&&i| self.lib.refs[i].pdf.is_none()).count(), command) {
+            return;
+        }
         let items: Vec<fetch::Item> = targets
             .iter()
             .map(|&i| &self.lib.refs[i])
