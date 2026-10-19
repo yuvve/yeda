@@ -2171,8 +2171,20 @@ impl App {
     }
 
     fn toggle_right(&mut self, view: RightView) {
-        self.right = if self.right == view { RightView::Details } else { view };
-        self.pane = if self.right == RightView::Details { Pane::List } else { Pane::Right };
+        if self.right == view {
+            return self.back_to_details();
+        }
+        self.right = view;
+        self.pane = Pane::Right;
+    }
+
+    /// Closes the right column's view; a maximized right column goes back to all columns.
+    fn back_to_details(&mut self) {
+        if self.pane == Pane::Right {
+            self.focus = false;
+        }
+        self.right = RightView::Details;
+        self.pane = Pane::List;
     }
 
     fn table_command(&mut self, args: &str) {
@@ -2198,8 +2210,7 @@ impl App {
     fn close_table(&mut self) {
         self.table = None;
         if self.right == RightView::Tables {
-            self.right = RightView::Details;
-            self.pane = Pane::List;
+            self.back_to_details();
         }
     }
 
@@ -2370,8 +2381,7 @@ impl App {
     fn close_graph(&mut self) {
         self.graph = None;
         if self.right == RightView::Graph {
-            self.right = RightView::Details;
-            self.pane = Pane::List;
+            self.back_to_details();
         }
     }
 
@@ -2620,8 +2630,7 @@ impl App {
     fn close_cluster(&mut self) {
         self.cluster = None;
         if self.right == RightView::Clusters {
-            self.right = RightView::Details;
-            self.pane = Pane::List;
+            self.back_to_details();
         }
     }
 
