@@ -138,6 +138,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
     (":sync", "commit, pull and push the library with git"),
+    (":git-init [url]", "make the library folder a git repository and commit it; with a URL, push it there as origin"),
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
@@ -463,6 +464,8 @@ pub struct App {
     /// A file for $EDITOR, and the line to start at.
     pub edit: Option<(PathBuf, Option<usize>)>,
     pub sync: bool,
+    /// `:git-init`, run outside the TUI like `sync`, with its remote if given.
+    pub git_init: Option<Option<String>>,
     pub job: Option<Job>,
     picker: Picker,
     summarizer: Option<Summarizer>,
@@ -549,6 +552,7 @@ impl App {
             quit: false,
             edit: None,
             sync: false,
+            git_init: None,
             job: None,
             picker,
             summarizer: None,
@@ -1637,6 +1641,7 @@ impl App {
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
                 ("sync", _) => self.sync = true,
+                ("git-init", url) => self.git_init = Some(Some(url.trim().to_string()).filter(|u| !u.is_empty())),
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
                 ("table", args) => self.table_command(args.trim()),
                 ("fetch", args) => self.fetch_command(args.trim(), text),
