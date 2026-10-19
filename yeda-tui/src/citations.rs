@@ -29,6 +29,8 @@ pub struct Fetched {
     pub unknown: Vec<String>,
     /// Each opened paper's references and citing works.
     pub lists: Vec<(String, Lists)>,
+    /// Per seed, the works cited with it most, with how many of its citing works cite both.
+    pub cocited: Vec<(String, Vec<(Work, usize)>)>,
 }
 
 pub enum Msg {
@@ -197,7 +199,14 @@ fn run(req: Request, tx: &Sender<Msg>) -> Result<Fetched> {
         let pick = |ids: &[String]| ids.iter().filter_map(|i| works.get(i).cloned()).collect();
         lists.push((id.clone(), Lists { cites: pick(&references), cited_by: pick(citing.get(id).map_or(&[][..], Vec::as_slice)) }));
     }
-    Ok(Fetched { graph, matched, unknown, lists })
+    let mut cocited = Vec::new();
+    for s in &seeds {
+        let top: Vec<(String, usize)> = graph::cocitations(s, &Known { works: &works, citing: &citing }).into_iter().take(req.settings.outside).collect();
+        let ids: Vec<String> = top.iter().map(|(id, _)| id.clone()).collect();
+        load_or_fetch(&cache, &client, &mut misses, &ids, &mut works, &progress, "co-cited works")?;
+        cocited.push((s.clone(), top.into_iter().filter_map(|(id, n)| Some((works.get(&id)?.clone(), n))).collect()));
+    }
+    Ok(Fetched { graph, matched, unknown, lists, cocited })
 }
 
 /// All references of a work and its most cited citing works, as `Graph::extend` takes them.

@@ -89,9 +89,11 @@ CITATION GRAPH  ( :graph [citations] )
   stays in the right column and follows the reference list.
 
   The list under it has tabs, switched with Tab and shift-Tab: Seeds, Cites
-  → (what the selected paper cites), ← Cited by, ▲ Top cited and ▼ Top
-  citing (outside papers cited by or citing the seeds). Rows show the year
-  and OpenAlex's citation count; s sorts by either. Cites and Cited by list
+  → (what the selected paper cites), ← Cited by, ⇄ Co-cited (for a seed:
+  papers cited together with it, ×n by how many of its citing works), ▲
+  Top cited and ▼ Top citing (outside papers cited by or citing the
+  seeds). Rows show the year and OpenAlex's citation count; s sorts by
+  either. Cites and Cited by list
   papers in the graph until a paper is opened with Enter. Opening one makes
   it a seed (⊙ if it wasn't one; the starting seeds are ⊚): the graph is
   rebuilt with its citing works, its full reference list and everything
