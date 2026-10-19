@@ -293,6 +293,30 @@ impl Library {
         Ok(Effect::write(ai_path(&r.key), toml::to_string(&r.tables)?))
     }
 
+    /// Renames a table in yeda.toml and in every paper's LLM file.
+    pub fn rename_table(&mut self, old: &str, new: &str) -> Result<Vec<Effect>> {
+        if new.is_empty() || self.tables.contains_key(new) {
+            bail!("there is a table named '{new}' already");
+        }
+        let in_shared = self.shared.get("tables").and_then(|t| t.get(old)).is_some();
+        if !in_shared {
+            bail!("no table '{old}' in {CONFIG}");
+        }
+        let mut effects = vec![self.update_config(|t| {
+            let tables = config_section(t, "tables")?;
+            let def = tables.remove(old).context("no such table")?;
+            tables.insert(new.into(), def);
+            Ok(())
+        })?];
+        for r in self.refs.iter().filter(|r| r.tables.contains_key(old)) {
+            let mut r = r.clone();
+            let row = r.tables.remove(old).unwrap_or_default();
+            r.tables.insert(new.into(), row);
+            effects.push(self.save_ai(&r)?);
+        }
+        Ok(effects)
+    }
+
     /// Reads `notes/<key>.ai.toml` into the reference's tables; a file without its reference is ignored.
     pub fn load_ai(&mut self, key: &str, text: &str) -> Result<()> {
         if let Some(r) = self.refs.iter_mut().find(|r| r.key == key) {
@@ -374,6 +398,23 @@ fn expand_home(p: &str, home: Option<&Path>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn renames_tables() {
+        let refs = [("a", "title = \"A\"\n"), ("b", "title = \"B\"\n")].map(|(k, t)| (k.to_string(), t.to_string()));
+        let mut lib = Library::parse(Some("[tables.lit]\ncolumns = [\"m\"]\n[tables.other]\ncolumns = []\n"), None, refs, None).unwrap();
+        lib.load_ai("a", "[lit]\nm = \"x\"\n[other]\n").unwrap();
+        assert!(lib.rename_table("lit", "other").is_err());
+        assert!(lib.rename_table("nope", "phd").is_err());
+        let effects = lib.rename_table("lit", "phd").unwrap();
+        assert_eq!(effects.len(), 2);
+        let text = |e: &Effect| match e {
+            Effect::Write { bytes, .. } => String::from_utf8(bytes.clone()).unwrap(),
+            _ => panic!(),
+        };
+        assert!(text(&effects[0]).contains("[tables.phd]") && !text(&effects[0]).contains("[tables.lit]"));
+        assert!(text(&effects[1]).contains("[phd]") && text(&effects[1]).contains("m = \"x\""));
+    }
+
     #[test]
     fn saves_searches_with_their_order() {
         let mut lib = Library::parse(Some("[searches]\nold = { query = \"tag:x\" }\n"), None, [], None).unwrap();

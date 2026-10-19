@@ -139,6 +139,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
     (":table close", "close the table"),
+    (":table rename <old> <new>", "rename a table in yeda.toml and in every paper's LLM file"),
     (":cite [format]", "copy the selected or marked references: bibtex, ident (DOI, arXiv ID, ISBN or URL), a style (ieee, apa, …) or a .csl file"),
     (":fetch [location]", "find and attach PDFs for the selected or marked references (:help explains it)"),
     (":keys", "this list"),
@@ -2296,6 +2297,20 @@ impl App {
     fn table_command(&mut self, args: &str) {
         if args == "close" {
             return self.close_table();
+        }
+        if let Some(rest) = args.strip_prefix("rename") {
+            let [old, new] = rest.split_whitespace().collect::<Vec<_>>()[..] else {
+                return self.status = "usage: :table rename <old> <new>".into();
+            };
+            let effects = self.lib.rename_table(old, new);
+            if self.apply(effects) {
+                self.reload();
+                if let Some(t) = self.table.as_mut().filter(|t| t.name == old) {
+                    t.name = new.into();
+                }
+                self.status = format!("renamed table {old} to {new}");
+            }
+            return;
         }
         if args.is_empty() {
             return self.pick_table("table", "");
