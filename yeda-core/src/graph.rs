@@ -112,18 +112,28 @@ impl Graph {
         self.edges.dedup();
     }
 
-    /// Records node `i`'s co-cited works, adding them as hidden nodes where they aren't in the graph yet.
+    /// Records node `i`'s co-cited works and shows them, with edges to the works they cite; call
+    /// `relayout` after the last. Works citing them aren't known, so some float alone.
     /// OpenAlex answers a merged work's old id with the surviving work, so two entries can be one node.
     pub fn add_cocited(&mut self, i: usize, cocited: &[(Work, usize)], keys: &HashMap<String, String>) {
         let mut list: Vec<(usize, usize)> = Vec::new();
         for (w, n) in cocited {
             let j = self.node_for(w, keys);
+            self.nodes[j].hidden = false;
+            let cites: Vec<usize> = w.references.iter().filter_map(|r| self.find(r)).filter(|&k| k != j).collect();
+            self.edges.extend(cites.into_iter().map(|k| (j, k)));
             match list.iter_mut().find(|(k, _)| *k == j) {
                 Some((_, m)) => *m = (*m).max(*n),
                 None => list.push((j, *n)),
             }
         }
         self.nodes[i].cocited = list;
+        self.edges.sort();
+        self.edges.dedup();
+    }
+
+    pub fn relayout(&mut self) {
+        self.years = layout(&mut self.nodes, &self.edges);
     }
 
     /// The node for `w`, added hidden if the graph doesn't have it.
@@ -425,6 +435,8 @@ mod tests {
         g.add_cocited(0, &[(works["Y"].clone(), 1), (works["Y"].clone(), 1)], &HashMap::new());
         assert_eq!(g.nodes[0].cocited.len(), 1);
         let (j, n) = g.nodes[0].cocited[0];
-        assert_eq!((g.nodes[j].id.as_str(), g.nodes[j].hidden, n), ("Y", true, 1));
+        assert_eq!((g.nodes[j].id.as_str(), g.nodes[j].hidden, n), ("Y", false, 1));
+        g.relayout();
+        assert!(g.years.contains(&Some(2010)));
     }
 }
