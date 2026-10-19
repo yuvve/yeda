@@ -432,7 +432,7 @@ fn draw_found(f: &mut Frame, app: &App, main: Rect) {
         .map(|c| {
             let mark = if app.found_in_library(c) { "◎" } else if c.work.is_some() { "✓" } else { "?" };
             let year = c.found.year.or(c.work.as_ref().and_then(|w| w.year)).map(|y| y.to_string()).unwrap_or_default();
-            let head = Line::raw(format!("{mark} {year:4}  {:<16.16} {}", c.found.authors, c.title()));
+            let head = Line::raw(format!("{mark} {year:4}  {:<16.16} {}", c.authors(), c.title()));
             let why: String = c.found.why.chars().take(width).collect();
             ListItem::new(vec![head, Line::raw(format!("        {why}")).dim()])
         })

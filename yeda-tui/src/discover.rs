@@ -20,6 +20,12 @@ impl Candidate {
     pub fn title(&self) -> &str {
         self.work.as_ref().map_or(&self.found.title, |w| &w.title)
     }
+
+    /// OpenAlex's first author, else what the LLM wrote.
+    pub fn authors(&self) -> String {
+        let work = self.work.as_ref().filter(|w| !w.authors.is_empty());
+        work.map_or(self.found.authors.clone(), |w| format!("{}{}", graph::surname(&w.authors[0]), if w.authors.len() > 1 { " et al." } else { "" }))
+    }
 }
 
 /// Asks the LLM in the background, then looks each suggestion up in OpenAlex.

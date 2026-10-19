@@ -1741,6 +1741,10 @@ impl App {
             Ok(found) => {
                 self.status = format!("discover: {} papers, {} found in OpenAlex", found.len(), found.iter().filter(|c| c.work.is_some()).count());
                 self.found = found;
+                // The LLM only knows the papers it was given, so it suggests others the library has.
+                let mut found = std::mem::take(&mut self.found);
+                found.sort_by_key(|c| self.found_in_library(c));
+                self.found = found;
                 self.found_sel = 0;
                 self.mode = Mode::Found;
             }
