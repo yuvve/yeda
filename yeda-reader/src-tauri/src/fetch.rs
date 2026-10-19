@@ -89,6 +89,13 @@ fn download_in_page(window: &WebviewWindow, url: &str) {
     let _ = window.eval(format!("(() => {{ const a = document.createElement('a'); a.href = {url}; a.download = ''; document.body.appendChild(a); a.click(); }})()"));
 }
 
+/// Replaces the window's page with `html`, which keeps the page's address, so the page's own
+/// scripts (a bot check) run as they would have there.
+fn show_page(window: &WebviewWindow, html: &str) {
+    let html = serde_json::to_string(html).unwrap();
+    let _ = window.eval(format!("document.open(); document.write({html}); document.close();"));
+}
+
 /// Has WebKit download `url` itself, which reaches `on_download` like any download.
 fn download_natively(window: &WebviewWindow, url: &str) {
     // ponytail: WebKitGTK only; elsewhere the viewer's own download button remains.
@@ -257,9 +264,20 @@ fn through_proxy(window: &WebviewWindow, job: &Job, paper: &Paper, proxy: Option
                 // IEEE's pages fail their bot check, or show the PDF in a frame, which fires no download.
                 if let Some(pdf) = fulltext::ieee_pdf(&url).filter(|p| !tried.contains(p)) {
                     tried.push(pdf.clone());
-                    match fetch_with_cookies(window, &pdf).ok().and_then(save) {
-                        Some(step) => return step,
-                        None => download_in_page(window, &pdf),
+                    match fetch_with_cookies(window, &pdf) {
+                        Ok(bytes) => {
+                            if let Some(step) = save(bytes) {
+                                return step;
+                            }
+                        }
+                        // A bot check or an access page: shown, so it can be passed or the paper skipped.
+                        Err(e) => match yeda_net::fulltext::page_instead(&e) {
+                            Some(page) => {
+                                report(&Outcome::Visited { key: paper.key.clone(), page: format!("IEEE answered: {}", fulltext::page_gist(page)) });
+                                show_page(window, page);
+                            }
+                            None => download_in_page(window, &pdf),
+                        },
                     }
                 }
                 let _ = window.eval(&script);

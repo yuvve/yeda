@@ -62,6 +62,35 @@ pub fn proxied_host(url: &str, proxy_host: &str) -> Option<String> {
 
 /// IEEE Xplore's PDF for a `/document/<number>` or `stamp/stamp.jsp?arnumber=<number>` page,
 /// directly or through the proxy.
+/// What an HTML page says, for a log line: its title, else the start of its visible text.
+pub fn page_gist(html: &str) -> String {
+    let lower = html.to_lowercase();
+    let title = lower.find("<title").and_then(|i| {
+        let start = i + lower[i..].find('>')? + 1;
+        Some(html[start..start + lower[start..].find("</title")?].to_string())
+    });
+    let squeeze = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some(t) = title.map(|t| squeeze(&t)).filter(|t| !t.is_empty()) {
+        return t;
+    }
+    let mut text = String::new();
+    let mut rest = html;
+    while let Some(i) = rest.find('<') {
+        text.push_str(&rest[..i]);
+        text.push(' ');
+        let tag = rest[i..].to_lowercase();
+        // A script or style element's content isn't text on the page.
+        let skip_to = ["<script", "<style"].iter().find(|t| tag.starts_with(**t)).and_then(|t| tag.find(&format!("</{}", &t[1..])));
+        let after = skip_to.unwrap_or(0) + i;
+        rest = match rest[after..].find('>') {
+            Some(j) => &rest[after + j + 1..],
+            None => "",
+        };
+    }
+    text.push_str(rest);
+    squeeze(&text).chars().take(200).collect()
+}
+
 pub fn ieee_pdf(page: &str) -> Option<String> {
     let (scheme, rest) = page.split_once("://")?;
     let (host, path) = rest.split_once('/')?;
@@ -135,6 +164,13 @@ pub fn max_pages(r: &Ref) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sums_up_pages() {
+        assert_eq!(page_gist("<html><head><TITLE> Access\n denied </TITLE></head><body>x</body></html>"), "Access denied");
+        let challenge = "<html><head><title></title><script>var a = '<b>';</script><style>p{}</style></head><body><div>Max challenge attempts exceeded.</div> <p>Please refresh the page to try again!</p></body></html>";
+        assert_eq!(page_gist(challenge), "Max challenge attempts exceeded. Please refresh the page to try again!");
+    }
 
     #[test]
     fn limits_pages() {
