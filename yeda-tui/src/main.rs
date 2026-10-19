@@ -30,25 +30,32 @@ use yeda_core::{tables, zotero};
 
 const USAGE: &str = "usage: yeda [library dir]
        yeda import   (a form that moves a Zotero library, PDFs included, to a new yeda library)
+       yeda init     (the same form for a new, empty library)
        yeda read <file.pdf> [--annotations <dir>] [--page N]
        yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
        yeda import-table <table name> <file.csv> [library dir]
        yeda copy-pdfs <from location> <to location> [library dir]";
 
-/// `yeda import`: asks in a form, then imports, adds the PDF location, copies every PDF there
-/// from wherever Zotero had it, and makes the library the default if asked.
-fn import_wizard() -> Result<()> {
+/// `yeda import` and `yeda init`: asks in a form, then (importing) imports from Zotero, adds the
+/// PDF location, copies every imported PDF there, and makes the library the default if asked.
+fn wizard(import: bool) -> Result<()> {
     let config = ensure_config()?;
     let mut term = ratatui::init();
     execute!(std::io::stdout(), event::EnableBracketedPaste)?;
-    let answers = wizard::run(&mut term, "~/yeda");
+    let answers = wizard::run(&mut term, import, "~/yeda");
     let _ = execute!(std::io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     let Some(a) = answers? else { return Ok(()) };
     let dir = &a.library;
     fs::create_dir_all(dir)?;
-    println!("{}", import_zotero(&a.zotero, dir)?);
-    if a.dest != wizard::Dest::Zotero {
+    // An empty yeda.toml is what makes a folder a library.
+    if !dir.join(library::CONFIG).exists() {
+        yeda_fs::write_atomic(&dir.join(library::CONFIG), b"")?;
+    }
+    if import {
+        println!("{}", import_zotero(&a.zotero, dir)?);
+    }
+    if a.dest != wizard::Dest::Nowhere {
         let mut lib = load_library(dir)?;
         let location: toml::Value = match &a.dav {
             Some((dav, _)) => toml::Table::from_iter([("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
@@ -202,8 +209,8 @@ fn main() -> Result<()> {
         yeda_reader_lib::fetch::run(job);
         return Ok(());
     }
-    if args.first().map(String::as_str) == Some("import") {
-        return import_wizard();
+    if let Some(command @ ("import" | "init")) = args.first().map(String::as_str) {
+        return wizard(command == "import");
     }
     if args.first().map(String::as_str) == Some("import-zotero") {
         let mut args = args.clone();

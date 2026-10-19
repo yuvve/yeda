@@ -6,12 +6,13 @@ The terminal interface. The binary is `yeda`.
 yeda [library dir]
 yeda read <file.pdf> [--annotations <dir>] [--page N]
 yeda import
+yeda init
 yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
 yeda import-table <table name> <file.csv> [library dir]
 yeda copy-pdfs <from location> <to location> [library dir]
 ```
 
-`yeda import` moves a Zotero library to a new yeda library in one go. A form asks for Zotero's data folder, the library folder, where the PDFs go (copied to a folder, uploaded to a WebDAV folder that is tested and created if missing, or left in Zotero's storage) and whether to make it the default library. It then imports, and copies every PDF there: from Zotero's storage, from linked files (including ones relative to Zotero's base folder for linked attachments), and from Zotero's WebDAV for files missing locally. `import-zotero` and `copy-pdfs` do the same steps one at a time.
+`yeda import` moves a Zotero library to a new yeda library in one go. A form asks for Zotero's data folder, the library folder, where the PDFs go (copied to a folder, uploaded to a WebDAV folder that is tested and created if missing, or left in Zotero's storage) and whether to make it the default library. It then imports, and copies every PDF there: from Zotero's storage, from linked files (including ones relative to Zotero's base folder for linked attachments), and from Zotero's WebDAV for files missing locally. `import-zotero` and `copy-pdfs` do the same steps one at a time. `yeda init` is the same form without the Zotero part: it creates an empty library with its PDF location (a folder, a WebDAV folder, or none yet).
 
 Without a library dir, yeda uses the current folder if it is a library (it has `yeda.toml` or `refs/`), else `library` from `~/.config/yeda/config.toml` (`library = "~/papers"`), else the current folder.
 
