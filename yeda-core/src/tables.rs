@@ -42,7 +42,7 @@ Each row stands on its own: describe this paper independently and never compare 
 or refer to other papers in the table, including the example rows, which are style references only. \
 The one exception is a column with existing values: reuse a value when it fits this paper closely. \
 Where the paper does not say something, write \"Not stated.\" \
-Follow each column's guidance when given; it takes precedence over the example rows. \
+Follow each column's guidance when given; it takes precedence over the rules above and over the example rows. \
 Otherwise match the style, depth and length of the example rows when there are any. Write plain text, not Markdown.";
 
 /// `annotations` are the paper's own; `None` when the row has nothing left to fill (and `overwrite` is off).
