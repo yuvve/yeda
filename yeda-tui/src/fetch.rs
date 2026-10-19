@@ -56,7 +56,7 @@ fn run(req: Request, tx: &Sender<Msg>) {
         send(Msg::Progress(format!("fetch {}/{}: {}…", n + 1, req.items.len(), item.key)));
         let Some(doi) = &item.doi else {
             let urls = item.openalex.as_deref().map(|id| client.pdf_urls_by_id(id).unwrap_or_default()).unwrap_or_default();
-            match urls.iter().find_map(|u| yeda_net::fulltext::download(u, None).ok()) {
+            match urls.iter().find_map(|u| yeda_net::fulltext::download(u).ok()) {
                 Some(pdf) => {
                     let file = req.downloads.join(&item.file);
                     match std::fs::write(&file, pdf) {
@@ -71,7 +71,7 @@ fn run(req: Request, tx: &Sender<Msg>) {
         // Open-access copies first, then the publisher directly, which works on campus by IP.
         let open = client.pdf_urls(doi).unwrap_or_default();
         let urls = open.into_iter().chain(fulltext::publisher_urls(doi, &req.settings));
-        match urls.into_iter().find_map(|u| yeda_net::fulltext::download(&u, None).ok()) {
+        match urls.into_iter().find_map(|u| yeda_net::fulltext::download(&u).ok()) {
             Some(pdf) => {
                 let file = req.downloads.join(&item.file);
                 match std::fs::write(&file, pdf) {
