@@ -171,12 +171,17 @@ const AI: &str = ".ai.toml";
 
 /// The citekey of a `notes/` file name, or `None` if it isn't an LLM file.
 pub fn ai_key(file_name: &str) -> Option<&str> {
-    file_name.strip_suffix(AI).filter(|k| !k.is_empty())
+    file_name.strip_suffix(AI).filter(|k| valid_key(k))
 }
 
 /// The citekey of a `refs/` file name, or `None` if it isn't a reference file.
 pub fn ref_key(file_name: &str) -> Option<&str> {
-    file_name.strip_suffix(".toml").filter(|k| !k.is_empty())
+    file_name.strip_suffix(".toml").filter(|k| valid_key(k))
+}
+
+/// Whether `key` is safe as a file and folder name: `.` and `..` would escape their folders.
+pub fn valid_key(key: &str) -> bool {
+    key.starts_with(|c: char| c.is_ascii_alphanumeric()) && key.chars().all(|c| c.is_ascii_alphanumeric() || "-_:.".contains(c))
 }
 
 impl Library {
@@ -409,6 +414,14 @@ fn expand_home(p: &str, home: Option<&Path>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejects_keys_that_escape_their_folder() {
+        assert_eq!(ref_key("smith2020.toml"), Some("smith2020"));
+        assert_eq!(ref_key("...toml"), None);
+        assert_eq!(ref_key("..toml"), None);
+        assert!(!valid_key("a/b"));
+    }
+
     #[test]
     fn renames_tables() {
         let refs = [("a", "title = \"A\"\n"), ("b", "title = \"B\"\n")].map(|(k, t)| (k.to_string(), t.to_string()));
