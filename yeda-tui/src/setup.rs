@@ -23,20 +23,18 @@ pub struct SetupForm {
     pub testing: bool,
     /// The saved search's name before editing.
     pub old: Option<String>,
-    /// The edited profile's own `api_key_env`, kept when its provider has no preset one.
-    key_env: Option<String>,
 }
 
-/// Providers the form knows: name, API, base URL, and the variable (and secret) its key goes under.
-pub const PRESETS: [(&str, Provider, &str, Option<&str>); 5] = [
-    ("anthropic", Provider::Anthropic, "https://api.anthropic.com", None),
-    ("openai", Provider::Openai, "https://api.openai.com/v1", None),
-    ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai", Some("GEMINI_API_KEY")),
-    ("mistral", Provider::Openai, "https://api.mistral.ai/v1", Some("MISTRAL_API_KEY")),
-    ("openrouter", Provider::Openai, "https://openrouter.ai/api/v1", Some("OPENROUTER_API_KEY")),
+/// Providers the form knows: name, API and base URL.
+pub const PRESETS: [(&str, Provider, &str); 5] = [
+    ("anthropic", Provider::Anthropic, "https://api.anthropic.com"),
+    ("openai", Provider::Openai, "https://api.openai.com/v1"),
+    ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai"),
+    ("mistral", Provider::Openai, "https://api.mistral.ai/v1"),
+    ("openrouter", Provider::Openai, "https://openrouter.ai/api/v1"),
 ];
 
-fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str, Option<&'static str>)> {
+fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str)> {
     PRESETS.iter().find(|p| p.0 == name.trim().to_lowercase())
 }
 
@@ -75,8 +73,7 @@ impl SetupForm {
         };
         let sel = if name.is_empty() || kind == Kind::Openalex { 0 } else { 1 };
         let old = (kind == Kind::Search).then(|| name.to_string());
-        let key_env = lib.llm.get(name).filter(|_| kind == Kind::Llm).and_then(|p| p.api_key_env.clone());
-        SetupForm { kind, values, sel, testing: false, old, key_env }
+        SetupForm { kind, values, sel, testing: false, old }
     }
 
     /// Picks the next (or previous) provider preset, filling in its base URL.
@@ -162,9 +159,6 @@ impl SetupForm {
                 if !url.is_empty() && !builtin {
                     t.insert("base_url".into(), url.into());
                 }
-                if let Some(env) = known.and_then(|p| p.3).map(String::from).or(self.key_env.clone()) {
-                    t.insert("api_key_env".into(), env.into());
-                }
                 if v[2].is_empty() {
                     bail!("give the model's name");
                 }
@@ -216,7 +210,7 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
 /// The secret-store account the secret is kept under.
 pub fn account(setup: &Setup) -> String {
     match setup {
-        Setup::Llm(p) => yeda_secrets::llm_account(p.key_env()),
+        Setup::Llm(p) => yeda_secrets::llm_account(p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Search(_) => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
@@ -249,8 +243,8 @@ mod tests {
         g.values[4] = "k".into();
         assert_eq!(g.values[3], "https://generativelanguage.googleapis.com/v1beta/openai");
         let (t, s) = g.section().unwrap();
-        assert_eq!((t["provider"].as_str(), t["api_key_env"].as_str()), (Some("openai"), Some("GEMINI_API_KEY")));
-        assert_eq!(account(&s), "llm:GEMINI_API_KEY");
+        assert_eq!(t["provider"].as_str(), Some("openai"));
+        assert_eq!(account(&s), "llm:https://generativelanguage.googleapis.com/v1beta/openai");
         g.cycle_provider(true);
         g.cycle_provider(true);
         assert!(!g.section().unwrap().0.contains_key("base_url"));

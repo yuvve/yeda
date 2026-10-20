@@ -125,7 +125,7 @@ CITATION GRAPH  ( :graph [citations] )
   shared by everyone on your IP address; a free key (from
   openalex.org/settings/api) has its own, larger one. :secrets sets it
   and keeps it in the system secret store, never in a file. You are also
-  asked when the keyless budget runs out, and OPENALEX_API_KEY works too.
+  asked when the keyless budget runs out.
 
 TAG AND COLUMN GRAPHS  ( :graph tags, :graph col <column> )
 

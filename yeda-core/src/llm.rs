@@ -13,8 +13,6 @@ pub struct Profile {
     pub provider: Provider,
     pub model: String,
     pub base_url: Option<String>,
-    /// Name of the environment variable holding the API key; keys never live in config files.
-    pub api_key_env: Option<String>,
     pub max_tokens: Option<u32>,
     /// Anthropic `output_config.effort`.
     pub effort: Option<String>,
@@ -32,11 +30,12 @@ impl Profile {
         self.provider == Provider::Anthropic || self.base_url.is_none()
     }
 
-    /// The environment variable holding this profile's API key.
-    pub fn key_env(&self) -> &str {
-        self.api_key_env.as_deref().unwrap_or(match self.provider {
-            Provider::Anthropic => "ANTHROPIC_API_KEY",
-            Provider::Openai => "OPENAI_API_KEY",
-        })
+    /// Where requests, and so the API key, go.
+    pub fn url(&self) -> &str {
+        let default = match self.provider {
+            Provider::Anthropic => "https://api.anthropic.com",
+            Provider::Openai => "https://api.openai.com/v1",
+        };
+        self.base_url.as_deref().unwrap_or(default).trim_end_matches('/')
     }
 }

@@ -25,11 +25,11 @@ pub struct Reply {
 
 const ANTHROPIC_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
 
-/// `key` is the value of the profile's `key_env()` variable, if set.
+/// `key` is the API key stored for the profile's `url()`, if any.
 pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let key = key.filter(|k| !k.is_empty());
     if key.is_none() && p.needs_key() {
-        bail!("set {} to your API key (or api_key_env in the llm profile)", p.key_env());
+        bail!("no API key for {}", p.url());
     }
     match p.provider {
         Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
@@ -57,7 +57,7 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
 }
 
 fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
-    let base = p.base_url.as_deref().unwrap_or("https://api.anthropic.com").trim_end_matches('/');
+    let base = p.url();
     let mut content = Vec::new();
     let mut note = None;
     match &prompt.paper {
@@ -106,7 +106,7 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
 }
 
 fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
-    let base = p.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
+    let base = p.url();
     let mut note = None;
     let mut user = prompt.text.clone();
     if let Some(paper) = &prompt.paper {
@@ -153,12 +153,12 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
     let key = key.filter(|k| !k.is_empty());
     if key.is_none() && p.needs_key() {
-        bail!("set {} to your API key (or api_key_env in the llm profile)", p.key_env());
+        bail!("no API key for {}", p.url());
     }
     match p.provider {
         Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
         Provider::Openai => {
-            let base = p.base_url.as_deref().unwrap_or("https://api.openai.com/v1").trim_end_matches('/');
+            let base = p.url();
             let body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
             let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
             let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
@@ -168,7 +168,7 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
 }
 
 fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
-    let base = p.base_url.as_deref().unwrap_or("https://api.anthropic.com").trim_end_matches('/');
+    let base = p.url();
     let headers = [("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
     let mut messages = vec![json!({"role": "user", "content": text})];
     // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.

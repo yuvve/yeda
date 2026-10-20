@@ -1255,7 +1255,6 @@ impl App {
             let table = entry.as_table_mut().unwrap();
             if kind == setup::Kind::Llm {
                 table.remove("base_url");
-                table.remove("api_key_env");
             }
             table.extend(job.section);
             Ok(())
@@ -1762,14 +1761,14 @@ impl App {
 
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
     /// `command` is the whole command line, run again once a missing API key is entered.
-    /// The profile's API key, if it has one: from its environment variable, else the secret store,
-    /// else a prompt, after which `command` runs again. `None` while prompting.
+    /// The API key stored for the profile's server, else a prompt naming the server, after which
+    /// `command` runs again. `None` while prompting.
     fn llm_key(&mut self, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
-        let env = profile.key_env().to_string();
-        match std::env::var(&env).ok().filter(|k| !k.is_empty()) {
-            Some(k) => Some(Some(k)),
-            None if profile.needs_key() => self.secret(&yeda_secrets::llm_account(&env), &env, Retry::Command(command.into())).map(Some),
-            None => Some(yeda_secrets::get(&yeda_secrets::llm_account(&env)).ok().flatten()),
+        let account = yeda_secrets::llm_account(profile.url());
+        if profile.needs_key() {
+            self.secret(&account, &format!("API key sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
+        } else {
+            Some(yeda_secrets::get(&account).ok().flatten())
         }
     }
 
@@ -1786,7 +1785,7 @@ impl App {
         let (name, profile) = self.lib.llm_profile(None)?;
         let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
         let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
-        let openalex = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.secrets.get(OPENALEX_ACCOUNT).cloned());
+        let openalex = self.secrets.get(OPENALEX_ACCOUNT).cloned();
         self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
         self.status = format!("asking {name} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
         Ok(())
@@ -2022,31 +2021,30 @@ impl App {
 
     /// Every secret the configuration can use, with where each is set.
     fn open_secrets(&mut self) {
-        let mut items: Vec<(String, String, Option<String>)> = Vec::new();
+        let mut items: Vec<(String, String)> = Vec::new();
         for (name, dav) in &self.lib.remotes {
-            items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url), None));
+            items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
         }
         for (name, profile) in self.lib.llm.iter().filter(|(_, p)| p.needs_key()) {
-            let env = profile.key_env().to_string();
-            items.push((yeda_secrets::llm_account(&env), format!("LLM {name}: {env}"), Some(env)));
+            items.push((yeda_secrets::llm_account(profile.url()), format!("LLM {name}: {}", profile.url())));
         }
-        items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into(), Some("OPENALEX_API_KEY".into())));
+        items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
         let mut seen = HashSet::new();
-        items.retain(|(account, _, _)| seen.insert(account.clone()));
+        items.retain(|(account, _)| seen.insert(account.clone()));
         self.secret_items = items
             .into_iter()
-            .map(|(account, label, env)| {
-                let status = match env.filter(|e| std::env::var(e).is_ok_and(|v| !v.is_empty())) {
-                    Some(e) => format!("from ${e}"),
-                    None if self.secrets.contains_key(&account) => "this session".into(),
-                    None => match yeda_secrets::get(&account) {
+            .map(|(account, label)| {
+                let status = if self.secrets.contains_key(&account) {
+                    "this session".into()
+                } else {
+                    match yeda_secrets::get(&account) {
                         Ok(Some(_)) => "in the secret store".into(),
                         Ok(None) => "not set".into(),
                         Err(e) => {
                             self.status = format!("{e:#}");
                             "secret store unavailable".into()
                         }
-                    },
+                    }
                 };
                 SecretItem { account, label, status }
             })
@@ -2617,7 +2615,7 @@ impl App {
 
     #[allow(clippy::too_many_arguments)]
     fn start_graph(&mut self, seeds: Vec<String>, explored: Vec<String>, opened: Vec<String>, refresh: bool, command: &str, scope: &str, focus: Option<String>) {
-        let key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
+        let key = self.openalex_key();
         let keyless = key.is_none();
         let rx = citations::spawn(citations::Request {
             refs: self.lib.refs.clone(),
@@ -2936,7 +2934,7 @@ impl App {
             (Some(d), _) => d.clone(),
             (None, _) => dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("yeda/downloads"),
         };
-        let openalex_key = std::env::var("OPENALEX_API_KEY").ok().filter(|k| !k.is_empty()).or_else(|| self.openalex_key());
+        let openalex_key = self.openalex_key();
         let request = fetch::Request { items, settings: self.lib.fulltext.clone(), downloads, openalex_key };
         self.status = "fetch: starting…".into();
         self.fetch_job = Some(FetchJob { rx: fetch::spawn(request), location, password, added: vec![], failed: vec![] });
