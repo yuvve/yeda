@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"build:reader": "cd reader && npm ci && export NODE_OPTIONS=--openssl-legacy-provider && PDFJS_CONFIG=web bash pdfjs/build && npx webpack --config-name web",
-		"build": "rm -rf dist && cp -r reader/build/web dist && sed 's#</body>#<script type=\"module\" src=\"main.js\"></script></body>#' reader/build/web/reader.html > dist/index.html && esbuild src/main.ts --bundle --format=esm --outfile=dist/main.js",
+		"build": "rm -rf src-tauri/dist && cp -r reader/build/web src-tauri/dist && sed 's#</body>#<script type=\"module\" src=\"main.js\"></script></body>#' reader/build/web/reader.html > src-tauri/dist/index.html && esbuild src/main.ts --bundle --format=esm --outfile=src-tauri/dist/main.js",
 		"check": "tsc --noEmit",
 		"tauri": "tauri"
 	},

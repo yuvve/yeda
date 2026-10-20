@@ -3,6 +3,8 @@ name = "yeda-secrets"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
+description = "yeda's passwords and API keys in the system secret store"
+repository = "https://github.com/yuvve/yeda"
 
 [dependencies]
 anyhow = "1.0.104"

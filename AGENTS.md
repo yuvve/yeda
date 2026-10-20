@@ -38,4 +38,5 @@
 
   Urgent means broken, blocking the user now, or risking data or secrets. Important means it serves reading and annotating, the library's integrity or security.
 - Keep no TODO or plan files in the repository; plans go in the issue.
+- Publishing to crates.io is done by the user: `cargo build -p yeda` (which builds the reader's `dist/` and Tauri's schemas, both shipped in the yeda-reader crate), then `cargo publish --workspace --exclude yeda-android`.
 - After merging a PR that changes what goes into the Android app (yeda-android, yeda-reader, or the crates it uses), tag main `android-vYYYY.MM.DD` (add `.2`, `.3` for later builds that day) and push the tag. That builds the APK and publishes it as a release.

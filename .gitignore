@@ -1,5 +1,5 @@
 /target/
 node_modules
-/yeda-reader/dist/
+/yeda-reader/src-tauri/dist/
 /yeda-*/src-tauri/gen/schemas/
 /yeda-android/dist/

@@ -3,7 +3,9 @@ name = "yeda-fs"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
+description = "Reads and writes a yeda library on the local filesystem"
+repository = "https://github.com/yuvve/yeda"
 
 [dependencies]
 anyhow = "1.0.104"
-yeda-core = { path = "../yeda-core" }
+yeda-core = { path = "../yeda-core", version = "0.1.0" }
