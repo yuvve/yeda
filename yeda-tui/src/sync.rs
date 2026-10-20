@@ -39,6 +39,19 @@ fn add_all(dir: &Path) -> Result<()> {
     stdout(dir, &["add", "-A", "--", ".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"]).map(drop)
 }
 
+/// Git carries no PDFs and none of yeda's atomic-write temporaries.
+pub const GITIGNORE: &str = "*.tmp\n*.pdf\n*.PDF\n";
+/// Syncthing must leave `.git` alone: it and git writing one repository corrupt it.
+pub const STIGNORE: &str = ".git\n*.tmp\n";
+
+/// Writes `path` unless it exists, so an ignore file the user wrote is kept.
+pub fn write_new(path: &Path, contents: &str) -> Result<()> {
+    if !path.exists() {
+        yeda_fs::write_atomic(path, contents.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Makes the library folder a repository with everything committed; with `url`, adds it as
 /// `origin` and pushes there, so `run` works afterwards.
 pub fn init(dir: &Path, url: Option<&str>) -> Result<String> {
@@ -46,10 +59,7 @@ pub fn init(dir: &Path, url: Option<&str>) -> Result<String> {
         bail!("the library folder is a git repository already");
     }
     stdout(dir, &["init", "-q"])?;
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        yeda_fs::write_atomic(&ignore, b"*.tmp\n*.pdf\n*.PDF\n")?;
-    }
+    write_new(&dir.join(".gitignore"), GITIGNORE)?;
     add_all(dir)?;
     stdout(dir, &["commit", "-q", "-m", "yeda library"])?;
     let Some(url) = url else { return Ok("git repository created; git remote add origin <url> connects it for :sync".into()) };

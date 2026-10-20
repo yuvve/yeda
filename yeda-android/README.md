@@ -1,22 +1,44 @@
 # yeda-android
 
-An Android app (Tauri v2) with a library browser and yeda-reader built in for PDFs. The interface is high-contrast and has no animations, for e-ink screens.
+<!-- embed -->
+The Android app is for reading and annotating your library on a phone or tablet. Adding references, citation graphs, literature tables, finding PDFs and citing stay in the terminal app. The interface is high-contrast and has no animations, so it suits e-ink screens.
 
-It is for reading and annotating; adding references, citation graphs, literature tables, finding PDFs and citing stay on the desktop. The browser has:
-- collections, tags in their colours, saved searches, field and fuzzy search, a filter form and sorting;
-- reading status, tags, collections and tag colours, and deleting a reference;
-- previewing annotations with their images, and extracting a PDF's embedded annotations;
-- attaching a PDF, to a local or a WebDAV location, and opening PDFs from WebDAV;
-- editing the Markdown note and the raw reference file;
-- git sync over HTTPS (⟳): commit everything, merge `origin`'s branch of the same name and push. Conflicting `annotations.toml` files are merged by annotation `id`; any other conflict stops the sync. Settings can also clone a library repository into an empty folder.
+Install the APK from the [releases](https://github.com/yuvve/yeda/releases).
 
-In the reader, once a pen has been used, the pen draws and a finger pans (two fingers zoom) under the drawing tools, a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, fitted, turned by swiping, with black ink and no animation.
+<p>
+  <img src="screenshots/list.png" width="200" alt="Reference list">
+  <img src="screenshots/detail.png" width="200" alt="A paper">
+  <img src="screenshots/annotations.png" width="200" alt="Annotations">
+  <img src="screenshots/reader.png" width="200" alt="Reader">
+</p>
 
-The app reads the library through all-files access, and the library folder is chosen with the system folder picker. A PDF location whose folder isn't found on the device is asked for once and remembered. The app also registers for "Open with" on PDFs; annotations then go in a sidecar `<file>.annotations/` folder.
+## Getting started
 
-Settings live in `settings.toml` in the app's data folder. It holds the library folder, plus anything the desktop's `~/.config/yeda/config.toml` takes, such as per-device `[locations]`. It acts as the library's machine config and can be edited as text in the app. WebDAV and git passwords or tokens go in the Android Keystore, never in this file. Settings → WebDAV location adds a location after a test login: `[locations.<name>]` goes to `yeda.toml`, the password to the Keystore.
+On first start, pick the library folder with the system folder picker and allow all-files access. To get a library onto the device, sync its folder with Syncthing, or clone its git repository from Settings into an empty folder. When a PDF location's folder isn't found on the device, the app asks for it once.
 
-Where yeda-tui uses poppler, the app uses the pdf.js that ships with the reader. It supplies the highlight text and image PNGs for extracted annotations.
+## Main window
+
+- **All ▾**: pick a collection, tag or saved search.
+- **Search**: the same search as the terminal app, such as `author:smith tag:ml`; a search can be saved.
+- **Filter**: a form for searching by field. **▲ key** sorts.
+- **⟳**: git sync. **⚙**: settings.
+
+Tap a paper to open it. There you open or replace its PDF, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
+
+## Reading and annotating
+
+The reader is the same as on the desktop. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
+
+PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
+
+## Sync
+
+⟳ commits everything, merges `origin`'s branch of the same name and pushes, over HTTPS. Conflicting annotation files are merged annotation by annotation; any other conflict stops the sync.
+
+## Settings
+
+Settings → WebDAV location adds a WebDAV folder for PDFs after a test login. Settings can also be edited as text: the library folder, and `[locations]` for folders on this device. Passwords and tokens are kept in the Android Keystore.
+<!-- /embed -->
 
 ## Building
 
@@ -27,4 +49,4 @@ npx tauri android build --apk --target aarch64     # needs ANDROID_HOME and NDK_
 npm run build && cargo run -p yeda-android         # the same app on the desktop
 ```
 
-`src-tauri/gen/android` is committed because `MainActivity.kt` (the folder picker, file access and "Open with" bridge) and `AndroidManifest.xml` are customized. CI builds a signed APK on every push to `main`.
+`src-tauri/gen/android` is committed because it is customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a release.

@@ -4,7 +4,7 @@ The library format and the logic on top of it. It reads no files, makes no netwo
 
 | Module | Contents |
 |---|---|
-| `library` | `Library::parse` from `yeda.toml`, the machine config and `refs/*.toml`; saving, deleting and config edits as effects; PDF path resolution; reading status |
+| `library` | `Library::parse` from `yeda.toml`, the device config and `refs/*.toml`; saving, deleting and config edits as effects; PDF path resolution; reading status |
 | `browse` | Sidebar entries (saved searches, collections, tags) and the references a filter and query select |
 | `search` | Query parsing (`field:value`, `\|` alternatives, `!` negation, `""` for an empty field), fuzzy matching, and composing a query from fields |
 | `annotations` | `annotations.toml`: typed parsing, merge and delete by `id`, and extraction of the annotations embedded in a PDF |
@@ -20,5 +20,3 @@ Some operations need things core can't provide itself, so the caller passes them
 
 - PDF extraction takes the PDF's bytes, optionally `pdftotext -bbox` output, and a callback that renders a region to PNG.
 - Zotero import takes an open `rusqlite::Connection` and a callback that returns an annotation image's PNG.
-
-`Effect::Write` must be applied atomically, because several clients write the same files.

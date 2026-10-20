@@ -2533,7 +2533,7 @@ impl App {
     /// Opens `pdf` for the selected reference, with its annotations folder.
     fn launch_reader(&mut self, pdf: &std::path::Path) {
         let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
-        let mut words = self.lib.reader.as_deref().unwrap_or_default().split_whitespace();
+        let mut words = self.lib.reader.as_deref().filter(|r| *r != "default").unwrap_or_default().split_whitespace();
         let mut command = match words.next() {
             Some(program) => Command::new(program),
             None => {

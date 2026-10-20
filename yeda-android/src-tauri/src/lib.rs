@@ -21,9 +21,8 @@ fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
-/// Per-device settings in the app's data folder (`settings.toml`): the library folder, and
-/// everything else the library's machine config takes, e.g. `[locations]` overriding `yeda.toml`
-/// for folders that live elsewhere on this device. Secrets go in the Keystore, never here.
+/// The device config, in the app's data folder (`settings.toml`): the library folder, and
+/// `[locations]` for folders that live elsewhere on this device. Secrets go in the Keystore, never here.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -151,7 +150,7 @@ fn settings_text(app: AppHandle) -> Res<String> {
     Ok(yeda_fs::read_optional(&settings_path(&app).map_err(err)?).map_err(err)?.unwrap_or_default())
 }
 
-/// Replaces `settings.toml`, once it parses both as settings and as a machine config.
+/// Replaces `settings.toml`, once it parses both as settings and as a device config.
 #[tauri::command]
 fn save_settings_text(app: AppHandle, state: State<Shared>, text: String) -> Res<()> {
     toml::from_str::<Settings>(&text).map_err(|e| e.to_string())?;

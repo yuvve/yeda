@@ -52,6 +52,8 @@ fn wizard(import: bool) -> Result<()> {
     if !dir.join(library::CONFIG).exists() {
         yeda_fs::write_atomic(&dir.join(library::CONFIG), b"")?;
     }
+    sync::write_new(&dir.join(".gitignore"), sync::GITIGNORE)?;
+    sync::write_new(&dir.join(".stignore"), sync::STIGNORE)?;
     if import {
         println!("{}", import_zotero(&a.zotero, dir)?);
     }
@@ -61,6 +63,7 @@ fn wizard(import: bool) -> Result<()> {
             Some((dav, _)) => toml::Table::from_iter([("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
             None => {
                 fs::create_dir_all(&a.folder)?;
+                sync::write_new(&a.folder.join(".stignore"), "*.tmp\n")?;
                 a.folder.to_string_lossy().into_owned().into()
             }
         };
@@ -118,12 +121,16 @@ fn set_default_library(config: Option<&Path>, dir: &Path) -> Result<()> {
 }
 
 /// Written to `~/.config/yeda/config.toml` when there is none.
-const CONFIG_TEMPLATE: &str = r#"# Settings for this machine. Any yeda.toml setting can also go here, overriding the library's.
+const CONFIG_TEMPLATE: &str = r#"# Settings for this device. Everything else goes in the library's yeda.toml.
 
 # The library yeda opens when given no folder and not started inside one.
 # library = "~/papers"
 
-# This machine's folders for the library's PDF locations.
+# The PDF reader: "default" is yeda's own. Another command is run as <command> <pdf>
+# --annotations <dir>, and yeda sees only the annotations it saves in the PDF (x extracts them).
+# reader = "default"
+
+# This device's folders for the library's PDF locations.
 # [locations]
 # zotero = "~/Zotero/storage"
 
