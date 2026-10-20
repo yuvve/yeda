@@ -23,7 +23,7 @@ pub struct Reply {
     pub note: Option<String>,
 }
 
-const ANTHROPIC_PDF_LIMIT: usize = 32 * 1024 * 1024;
+const ANTHROPIC_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
 
 /// `key` is the value of the profile's `key_env()` variable, if set.
 pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
@@ -61,12 +61,13 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
     let mut content = Vec::new();
     let mut note = None;
     match &prompt.paper {
-        Some(paper) if paper.pdf.len() <= ANTHROPIC_PDF_LIMIT => {
+        // The limit is on the whole request, where the PDF is base64.
+        Some(paper) if paper.pdf.len().div_ceil(3) * 4 + prompt.text.len() + prompt.system.len() <= ANTHROPIC_REQUEST_LIMIT => {
             let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
             content.push(json!({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}));
         }
         Some(paper) => {
-            note = Some("PDF over 32 MB; sent extracted text instead".to_string());
+            note = Some("PDF too large for the request limit (32 MB); sent extracted text instead".to_string());
             content.push(json!({"type": "text", "text": format!("Paper text:\n{}", (paper.text)()?)}));
         }
         None => note = Some("no PDF; summarized from metadata and notes only".into()),
