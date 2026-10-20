@@ -1,15 +1,20 @@
 [package]
-name = "yeda-tui"
+name = "yeda"
 version = "0.1.0"
 edition = "2024"
+authors = ["yuvve"]
 license = "AGPL-3.0-only"
+description = "A reference manager built on plain-text files and a terminal interface"
+repository = "https://github.com/yuvve/yeda"
+keywords = ["reference-manager", "bibliography", "research", "citations", "tui"]
+categories = ["command-line-utilities", "science", "visualization"]
 
 [dependencies]
-yeda-core = { path = "../yeda-core", features = ["zotero"] }
-yeda-fs = { path = "../yeda-fs" }
-yeda-net = { path = "../yeda-net" }
-yeda-reader = { path = "../yeda-reader/src-tauri" }
-yeda-secrets = { path = "../yeda-secrets" }
+yeda-core = { path = "../yeda-core", version = "0.1.0", features = ["zotero"] }
+yeda-fs = { path = "../yeda-fs", version = "0.1.0" }
+yeda-net = { path = "../yeda-net", version = "0.1.0" }
+yeda-reader = { path = "../yeda-reader/src-tauri", version = "0.1.0" }
+yeda-secrets = { path = "../yeda-secrets", version = "0.1.0" }
 anyhow = "1.0.104"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
