@@ -2,6 +2,8 @@
 
 The terminal interface. The binary is `yeda`.
 
+**All of yeda's code and documentation is written by AI (Claude). The author directs what it should do and tests it by using it, but has not read or reviewed the code.**
+
 ```sh
 yeda [library dir]                     # open a library
 yeda init                              # create a library
