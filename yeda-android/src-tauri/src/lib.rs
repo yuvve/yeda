@@ -646,13 +646,10 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    git::init();
     let browser = browser_handler();
     let reader = yeda_reader_lib::invoke_handler();
     tauri::Builder::default()
-        .setup(|app| {
-            git::init(&app.path().app_cache_dir()?);
-            Ok(())
-        })
         .manage(Current::default())
         .manage(Shared::default())
         // Each generated handler consumes the call, so route by name instead of trying one then the other.

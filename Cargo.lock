@@ -7681,7 +7681,9 @@ name = "yeda-android"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "foreign-types 0.3.2",
  "git2",
+ "libgit2-sys",
  "openssl",
  "serde",
  "serde_json",
