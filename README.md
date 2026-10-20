@@ -123,7 +123,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key can also come from an environment variable: `api_key_env` in the profile, by default `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key is stored for its server's address, so a key is only sent to the server it was entered for.
 
 ## Keys and commands
 
