@@ -126,8 +126,9 @@ const CONFIG_TEMPLATE: &str = r#"# Settings for this device. Everything else goe
 # The library yeda opens when given no folder and not started inside one.
 # library = "~/papers"
 
-# The PDF reader command, run as <reader> <pdf> --annotations <dir>; default: yeda's own.
-# reader = "zathura"
+# The PDF reader: "default" is yeda's own. Another command is run as <command> <pdf>
+# --annotations <dir>, and yeda sees only the annotations it saves in the PDF (x extracts them).
+# reader = "default"
 
 # This device's folders for the library's PDF locations.
 # [locations]

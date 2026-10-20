@@ -1,12 +1,12 @@
 # yeda
 
-A reference manager whose library is a folder of plain TOML and Markdown files.
+A reference manager, and an alternative to Zotero, built around a terminal interface and a library of plain-text files. The library is a folder of TOML and Markdown that works with git, and PDFs are kept in local or WebDAV folders.
 
-| Component | What it is |
+| Component | What it does |
 |---|---|
-| [yeda-tui](yeda-tui) | Terminal interface with vim keybindings; start here |
-| [yeda-reader](yeda-reader) | Desktop PDF reader and annotator |
-| [yeda-android](yeda-android) | Android app: library browser with the reader built in |
+| [yeda-tui](yeda-tui) | The `yeda` command: the terminal interface with vim keybindings, plus creating a library and importing one from Zotero |
+| [yeda-reader](yeda-reader) | Desktop PDF reader and annotator, built into `yeda` |
+| [yeda-android](yeda-android) | Android app for reading and annotating: library browser with the reader built in |
 | [yeda-core](yeda-core) | Library format and logic; does no I/O |
 | [yeda-net](yeda-net) | Metadata lookup, LLM requests and WebDAV transfers |
 | [yeda-fs](yeda-fs) | Reads a library folder and writes changes to it |
@@ -28,51 +28,20 @@ PDFs are kept outside the library folder, in *locations*: local folders or WebDA
 
 ## Settings
 
-`yeda.toml`, in the library, holds the settings every device shares:
+`yeda.toml` holds what every device shares, such as the locations and saved searches:
 
 ```toml
-default_llm = "claude"
-
 [locations]
 pdfs = "~/yeda-pdfs"             # a local folder
 dav = { url = "https://dav.example.com/yeda/", user = "me" }
 
 [searches]
 "To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
-
-[tables.lit]                     # a literature table, filled in by an LLM
-columns = ["contribution", "group", "subproblem"]
-
-[tables.lit.describe]            # optional: what each column should hold
-contribution = "What the paper adds, in plain words; no jargon."
-group = "The topic it works on: a short label many papers share."
-subproblem = "The problem it tackles and why earlier work falls short."
-
-[llm.claude]
-provider = "anthropic"           # or "openai" for any OpenAI-compatible server
-model = "claude-opus-5-5"
 ```
 
-The device config, `~/.config/yeda/config.toml`, holds what differs between devices. yeda creates it with these settings commented out:
+Each device also has its own config, which may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop (see [yeda-tui](yeda-tui)), the app's settings on Android.
 
-```toml
-library = "~/yeda"               # the library yeda opens by default
-reader = "zathura"               # PDF reader command; default: yeda's own
-
-[locations]                      # this device's folder for a location
-pdfs = "/mnt/papers"
-
-[keys.normal]                    # key bindings; see yeda-tui
-"F" = "cite ieee"
-```
-
-A setting in the wrong file is an error that names the right one. On Android, the app's settings are the device config.
-
-Passwords and API keys are never written to a file: they go in the system secret store, and yeda asks for them when they're missing.
-
-## Syncing
-
-Sync the library folder with git (`:sync`) or Syncthing, and the PDFs with WebDAV or Syncthing. `yeda init` and `yeda import` set the library up for either.
+All passwords and API keys are kept in the system secret store.
 
 ## Building
 
