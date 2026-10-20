@@ -58,6 +58,18 @@ yeda            # open it
 
 ![Reader](yeda-tui/screenshots/reader.png)
 
+The reader has vim keys:
+
+| Keys | Action |
+|---|---|
+| `j` `k` · `J` `K` · `Ctrl-d` `Ctrl-u` | scroll · turn the page · half a screen |
+| `gg` `G` · `5G` | first or last page · page 5 |
+| `/` `n` `N` | find, next, previous |
+| `+` `-` `=` | zoom in, out, reset |
+| `1t`…`7t` · `Esc` | highlight, underline, note, text, image, ink, eraser · back to the pointer |
+| `c` · `dd` · `y` | comment on the selected annotation · delete it · copy |
+| `o` · `a` | outline · annotations sidebar |
+
 ## Settings
 
 `~/.config/yeda/config.toml` holds this device's settings; yeda creates it with them commented out:
