@@ -2555,8 +2555,9 @@ impl App {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
-        if let Err(e) = result {
-            self.status = format!("{}: {e}", command.get_program().to_string_lossy());
+        match result {
+            Ok(child) => reap(child),
+            Err(e) => self.status = format!("{}: {e}", command.get_program().to_string_lossy()),
         }
     }
 
@@ -2864,8 +2865,9 @@ impl App {
     fn xdg_open(&mut self, target: impl AsRef<std::ffi::OsStr>) {
         // ponytail: xdg-open only; macOS would need `open`.
         let result = Command::new("xdg-open").arg(target).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-        if let Err(e) = result {
-            self.status = format!("xdg-open: {e}");
+        match result {
+            Ok(child) => reap(child),
+            Err(e) => self.status = format!("xdg-open: {e}"),
         }
     }
 
@@ -3042,4 +3044,9 @@ fn unreadable(lib: &Library) -> String {
         [(_, e)] => format!("left out a reference whose file doesn't parse: {e}"),
         [(_, e), ..] => format!("left out {} references whose files don't parse; the first: {e}", lib.unreadable.len()),
     }
+}
+
+/// Waits for `child` in the background, so it doesn't stay a zombie until yeda exits.
+fn reap(mut child: std::process::Child) {
+    std::thread::spawn(move || child.wait());
 }
