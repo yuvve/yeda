@@ -64,6 +64,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Runs `f` holding an exclusive lock on the folder `dir`, so read-merge-write cycles of its files
+/// in different processes (the reader and the TUI, say) don't interleave.
+pub fn locked<T>(dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
+    let lock = fs::File::open(dir).with_context(|| dir.display().to_string())?;
+    lock.lock().with_context(|| format!("locking {}", dir.display()))?;
+    f()
+}
+
 /// The server's version of a cached remote file, kept next to it.
 fn version_path(cached: &Path) -> PathBuf {
     let mut p = cached.as_os_str().to_owned();
@@ -107,6 +116,15 @@ fn remove(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locks_the_folder_while_running() {
+        let dir = std::env::temp_dir().join(format!("yeda-fs-lock-test-{}", std::process::id()));
+        let held = locked(&dir, || Ok(fs::File::open(&dir)?.try_lock().is_err())).unwrap();
+        assert!(held);
+        assert!(fs::File::open(&dir).unwrap().try_lock().is_ok());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn applies_effects_and_loads() {

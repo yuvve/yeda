@@ -2200,16 +2200,16 @@ impl App {
     fn extract_from(&mut self, i: usize) -> anyhow::Result<usize> {
         let r = &self.lib.refs[i];
         let key = r.key.clone();
-        let result = self.lib.pdf_path(r).and_then(|pdf| {
-            let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
+        let pdf = self.lib.pdf_path(r)?;
+        let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
+        let words = poppler::word_boxes(&pdf)?;
+        yeda_fs::locked(&self.path(&library::annotations_dir(&key)), || {
             let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&key)))?;
-            let words = poppler::word_boxes(&pdf)?;
             let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
-            annotations::sync_from_pdf(&library::annotations_dir(&key), existing.as_deref(), &bytes, Some(&words), &mut render)
-        });
-        let (n, effects) = result?;
-        yeda_fs::apply(&self.dir, effects)?;
-        Ok(n)
+            let (n, effects) = annotations::sync_from_pdf(&library::annotations_dir(&key), existing.as_deref(), &bytes, Some(&words), &mut render)?;
+            yeda_fs::apply(&self.dir, effects)?;
+            Ok(n)
+        })
     }
 
     fn load_annotations(&self, key: &str) -> Vec<Annotation> {

@@ -83,20 +83,24 @@ fn load_annotations(current: State<Current>) -> Result<Vec<Json>, String> {
 #[tauri::command]
 fn save_annotations(current: State<Current>, annotations: Vec<Map<String, Json>>) -> Result<(), String> {
     current.with(|doc| {
-        let path = annotations_file(doc);
-        let merged = annotations::merge(yeda_fs::read_optional(&path)?.as_deref(), annotations)?;
-        Ok(yeda_fs::write_atomic(&path, merged.as_bytes())?)
+        yeda_fs::locked(&doc.annotations, || {
+            let path = annotations_file(doc);
+            let merged = annotations::merge(yeda_fs::read_optional(&path)?.as_deref(), annotations)?;
+            Ok(yeda_fs::write_atomic(&path, merged.as_bytes())?)
+        })
     })
 }
 
 #[tauri::command]
 fn delete_annotations(current: State<Current>, ids: Vec<String>) -> Result<(), String> {
     current.with(|doc| {
-        let path = annotations_file(doc);
-        let (kept, images) = annotations::delete(yeda_fs::read_optional(&path)?.as_deref(), &ids)?;
-        yeda_fs::write_atomic(&path, kept.as_bytes())?;
-        let effects = images.into_iter().map(yeda_core::Effect::remove);
-        yeda_fs::apply(&doc.annotations, effects)
+        yeda_fs::locked(&doc.annotations, || {
+            let path = annotations_file(doc);
+            let (kept, images) = annotations::delete(yeda_fs::read_optional(&path)?.as_deref(), &ids)?;
+            yeda_fs::write_atomic(&path, kept.as_bytes())?;
+            let effects = images.into_iter().map(yeda_core::Effect::remove);
+            yeda_fs::apply(&doc.annotations, effects)
+        })
     })
 }
 
