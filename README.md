@@ -1,34 +1,184 @@
 # yeda
 
+<!-- The yeda-tui and yeda-android parts are copied from their READMEs by scripts/readme.py; edit those instead. -->
+<!-- yeda-tui -->
 ## AI usage disclaimer
 
 **🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs. 💩🤖**
 
 ## About
 
-A reference manager, and an alternative to Zotero, built around a terminal interface and a library of plain-text files. The library is a folder of TOML and Markdown that works with git, and PDFs are kept in local or WebDAV folders.
+yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder.
 
-The terminal interface does everything:
-- adding references by DOI, arXiv ID or ISBN, and importing a Zotero library;
-- collections, tags, reading status, search, filters and saved searches;
-- a PDF reader and annotator with vim keys, and Markdown notes;
-- finding PDFs, open access or through a library proxy;
-- citation graphs of the papers a reference cites and is cited by;
-- literature tables: an LLM reads each paper and answers the same questions for all of them, one row per paper;
-- finding related papers: an LLM searches for papers like the selected ones, checked against OpenAlex;
-- citing as BibTeX or in a citation style, and syncing with git.
+From one terminal window, with vim keys, you can:
+- add references by DOI, arXiv ID or ISBN, or import your whole Zotero library;
+- organize them with collections, tags, reading status, search and saved searches;
+- read and annotate PDFs in the built-in reader, and keep Markdown notes;
+- find PDFs, open access or through your library's proxy;
+- explore citation graphs of what a paper cites and what cites it;
+- compare papers in literature tables an LLM fills in, and find related papers;
+- cite as BibTeX or in a citation style.
 
-The Android app is a companion for reading and annotating: it browses, searches and organizes the library, syncs it with git, and has the same reader, with pen support.
+An Android app reads and annotates the same library.
 
-| Component | What it does |
-|---|---|
-| [yeda-tui](yeda-tui) | The `yeda` command: the terminal interface with vim keybindings, plus creating a library and importing one from Zotero |
-| [yeda-reader](yeda-reader) | Desktop PDF reader and annotator, built into `yeda` |
-| [yeda-android](yeda-android) | Android app for reading and annotating: library browser with the reader built in |
-| [yeda-core](yeda-core) | Library format and logic; does no I/O |
-| [yeda-net](yeda-net) | Metadata lookup, LLM requests and WebDAV transfers |
-| [yeda-fs](yeda-fs) | Reads a library folder and writes changes to it |
-| [yeda-secrets](yeda-secrets) | Passwords and API keys in the system secret store |
+## Usage
+
+The binary is `yeda`.
+
+```sh
+yeda init       # once: create a library
+yeda import     # or instead of init: create it from Zotero
+yeda            # open it
+```
+
+`yeda <library dir>` opens a specific library. Without one, yeda opens the current folder if it is a library, else the default library.
+
+> **Inside yeda, press `?` for every key and command, and type `:help` for the full guide.**
+
+## Getting started
+
+`yeda init` creates an empty library. A form asks for its folder, where its PDFs go (a local folder, a WebDAV folder, or none yet), and whether it becomes the default library. The library is ready for git and Syncthing.
+
+`yeda import` creates a library from Zotero's; run it instead of `yeda init`. The same form also asks for Zotero's data folder. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
+
+## Main window
+
+![Main window](yeda-tui/screenshots/main.png)
+
+- **Library**: pick a collection, tag or saved search to filter the list.
+- **References**: your papers, with their reading status (✦ new, ○ to read, ◐ in progress, ● read; `r` changes it) and a dot per coloured tag. `/` searches, `s` sorts, `v` marks papers to act on together.
+- **Right column**: details of the selected paper by default; `:graph`, `A` (annotations) and `T` (table) show something else there.
+- **Bottom line**: messages, and what you type after `:` or `/`.
+
+`h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
+
+## Reading and annotating
+
+`o` opens the selected paper's PDF in yeda's reader, where you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
+
+![Reader](yeda-tui/screenshots/reader.png)
+
+## Settings
+
+`~/.config/yeda/config.toml` holds this device's settings; yeda creates it with them commented out:
+
+```toml
+library = "~/yeda"               # the default library
+reader = "default"               # yeda's own PDF reader
+
+[locations]                      # this device's folder for a location
+pdfs = "/mnt/papers"
+```
+
+`reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
+
+Extracting annotations from a PDF (`x`) needs poppler installed.
+
+## Graphs
+
+`:graph` draws a citation graph of the selected paper, or of the marked ones (`v`, `V`). Rows are years, newest at the top:
+
+![Citation graph](yeda-tui/screenshots/graph.png)
+
+- ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
+- yellow lines go to papers the selected one cites, magenta lines come from papers citing it
+
+In the graph, `Enter` opens a paper and grows the graph from it, and `a` adds it to the library.
+
+`:graph tags` and `:graph col <column>` group papers by their tags or by a literature table column instead. Data comes from OpenAlex and is cached. `:help` has the full guide.
+
+## LLM features
+
+Both features below use an LLM profile from the library's `yeda.toml`; `:setup llm` writes one:
+
+```toml
+default_llm = "claude"
+
+[llm.claude]
+provider = "anthropic"           # or "openai" for any OpenAI-compatible server
+model = "claude-opus-5-5"
+```
+
+### Literature tables
+
+A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. You define its columns in `yeda.toml`, each with an optional description of what it should hold:
+
+```toml
+[tables.lit]
+columns = ["contribution", "group", "subproblem"]
+
+[tables.lit.describe]
+contribution = "What the paper adds, in plain words; no jargon."
+group = "The topic it works on: a short label many papers share."
+subproblem = "The problem it tackles and why earlier work falls short."
+```
+
+`:summarize` has the LLM read each selected paper and fill in its row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
+
+`:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values.
+
+### Finding papers
+
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library, and `a` adds one.
+
+## Secrets
+
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key can also come from an environment variable: `api_key_env` in the profile, by default `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+
+## Keys and commands
+
+![The ? key list](yeda-tui/screenshots/keys.png)
+
+Every key runs a command, and every action is a command (`:annotations` is the same as `A`). `?` lists the keys and commands in effect; `:help` is the guide to searching, tables, graphs, fetching and the reader. Keys are rebound in `config.toml` under `[keys.<context>]`:
+
+```toml
+[keys.normal]
+"F" = "cite ieee"
+"x" = ""                         # unbinds x
+```
+<!-- /yeda-tui -->
+
+## Android app
+
+<!-- yeda-android -->
+The Android app is for reading and annotating your library on a phone or tablet. Adding references, citation graphs, literature tables, finding PDFs and citing stay in the terminal app. The interface is high-contrast and has no animations, so it suits e-ink screens.
+
+Install the APK from the [releases](https://github.com/yuvve/yeda/releases).
+
+<p>
+  <img src="yeda-android/screenshots/list.png" width="200" alt="Reference list">
+  <img src="yeda-android/screenshots/detail.png" width="200" alt="A paper">
+  <img src="yeda-android/screenshots/annotations.png" width="200" alt="Annotations">
+  <img src="yeda-android/screenshots/reader.png" width="200" alt="Reader">
+</p>
+
+### Getting started
+
+On first start, pick the library folder with the system folder picker and allow all-files access. To get a library onto the device, sync its folder with Syncthing, or clone its git repository from Settings into an empty folder. When a PDF location's folder isn't found on the device, the app asks for it once.
+
+### Main window
+
+- **All ▾**: pick a collection, tag or saved search.
+- **Search**: the same search as the terminal app, such as `author:smith tag:ml`; a search can be saved.
+- **Filter**: a form for searching by field. **▲ key** sorts.
+- **⟳**: git sync. **⚙**: settings.
+
+Tap a paper to open it. There you open or replace its PDF, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
+
+### Reading and annotating
+
+The reader is the same as on the desktop. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
+
+PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
+
+### Sync
+
+⟳ commits everything, merges `origin`'s branch of the same name and pushes, over HTTPS. Conflicting annotation files are merged annotation by annotation; any other conflict stops the sync.
+
+### Settings
+
+Settings → WebDAV location adds a WebDAV folder for PDFs after a test login. Settings can also be edited as text: the library folder, and `[locations]` for folders on this device. Passwords and tokens are kept in the Android Keystore.
+<!-- /yeda-android -->
 
 ## The library
 
@@ -44,7 +194,7 @@ The Android app is a companion for reading and annotating: it browses, searches 
 
 PDFs are kept outside the library folder, in *locations*: local folders or WebDAV folders, each holding `<citekey>/<file>`. WebDAV PDFs are cached locally.
 
-## Settings
+### Shared settings
 
 `yeda.toml` holds what every device shares, such as the locations and saved searches:
 
@@ -57,7 +207,7 @@ dav = { url = "https://dav.example.com/yeda/", user = "me" }
 "To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
 ```
 
-Each device also has its own config, which may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop (see [yeda-tui](yeda-tui)), the app's settings on Android.
+Each device also has its own config, which may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop, the app's settings on Android.
 
 All passwords and API keys are kept in the system secret store.
 

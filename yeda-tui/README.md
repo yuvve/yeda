@@ -1,5 +1,6 @@
 # yeda-tui
 
+<!-- embed -->
 ## AI usage disclaimer
 
 **🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs. 💩🤖**
@@ -17,7 +18,7 @@ From one terminal window, with vim keys, you can:
 - compare papers in literature tables an LLM fills in, and find related papers;
 - cite as BibTeX or in a citation style.
 
-An Android app reads and annotates the same library. Source and the other components: [github.com/yuvve/yeda](https://github.com/yuvve/yeda).
+An Android app reads and annotates the same library.
 
 ## Usage
 
@@ -49,6 +50,12 @@ yeda            # open it
 - **Bottom line**: messages, and what you type after `:` or `/`.
 
 `h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
+
+## Reading and annotating
+
+`o` opens the selected paper's PDF in yeda's reader, where you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
+
+![Reader](screenshots/reader.png)
 
 ## Settings
 
@@ -128,3 +135,4 @@ Every key runs a command, and every action is a command (`:annotations` is the s
 "F" = "cite ieee"
 "x" = ""                         # unbinds x
 ```
+<!-- /embed -->
