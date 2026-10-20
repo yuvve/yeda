@@ -67,5 +67,3 @@ All passwords and API keys are kept in the system secret store.
 git clone --recursive <this repo>
 cargo install --path yeda-tui      # the `yeda` binary, with the reader built in
 ```
-
-The first build needs Node.js and network access, to build the reader's web frontend. The repository is AGPL-3.0, as required by the zotero/reader fork it embeds.
