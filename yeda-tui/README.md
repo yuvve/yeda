@@ -31,6 +31,8 @@ yeda            # open it
 
 `yeda <library dir>` opens a specific library. Without one, yeda opens the current folder if it is a library, else the default library.
 
+> **Inside yeda, press `?` for every key and command, and type `:help` for the full guide.**
+
 ## Getting started
 
 `yeda init` creates an empty library. A form asks for its folder, where its PDFs go (a local folder, a WebDAV folder, or none yet), and whether it becomes the default library. The library is ready for git and Syncthing.
@@ -60,15 +62,7 @@ Extracting annotations from a PDF (`x`) needs poppler installed.
 - ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
 - yellow lines go to papers the selected one cites, magenta lines come from papers citing it
 
-| Key | Action |
-|---|---|
-| `j` / `k` | pick a paper |
-| `Enter` | open it and grow the graph from it |
-| `Backspace` | go back |
-| `Tab` | switch list: cites, cited by, co-cited, top cited, top citing |
-| `a` | add the paper to the library |
-| `o` | open its DOI in the browser |
-| `Esc` | close |
+In the graph, `Enter` opens a paper and grows the graph from it, and `a` adds it to the library.
 
 `:graph tags` and `:graph col <column>` group papers by their tags or by a literature table column instead. Data comes from OpenAlex and is cached. `:help` has the full guide.
 
