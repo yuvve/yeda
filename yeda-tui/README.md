@@ -39,6 +39,17 @@ yeda            # open it
 
 `yeda import` creates a library from Zotero's; run it instead of `yeda init`. The same form also asks for Zotero's data folder. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
 
+## Main window
+
+![Main window](screenshots/main.png)
+
+- **Library**: pick a collection, tag or saved search to filter the list.
+- **References**: your papers, with their reading status (✦ new, ○ to read, ◐ in progress, ● read; `r` changes it) and a dot per coloured tag. `/` searches, `s` sorts, `v` marks papers to act on together.
+- **Right column**: details of the selected paper by default; `:graph`, `A` (annotations) and `T` (table) show something else there.
+- **Bottom line**: messages, and what you type after `:` or `/`.
+
+`h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
+
 ## Settings
 
 `~/.config/yeda/config.toml` holds this device's settings; yeda creates it with them commented out:
@@ -58,6 +69,8 @@ Extracting annotations from a PDF (`x`) needs poppler installed.
 ## Graphs
 
 `:graph` draws a citation graph of the selected paper, or of the marked ones (`v`, `V`). Rows are years, newest at the top:
+
+![Citation graph](screenshots/graph.png)
 
 - ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
 - yellow lines go to papers the selected one cites, magenta lines come from papers citing it
@@ -105,6 +118,8 @@ subproblem = "The problem it tackles and why earlier work falls short."
 When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key can also come from an environment variable: `api_key_env` in the profile, by default `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
 ## Keys and commands
+
+![The ? key list](screenshots/keys.png)
 
 Every key runs a command, and every action is a command (`:annotations` is the same as `A`). `?` lists the keys and commands in effect; `:help` is the guide to searching, tables, graphs, fetching and the reader. Keys are rebound in `config.toml` under `[keys.<context>]`:
 

@@ -8,6 +8,7 @@ description = "A reference manager built on plain-text files and a terminal inte
 repository = "https://github.com/yuvve/yeda"
 keywords = ["reference-manager", "bibliography", "research", "citations", "tui"]
 categories = ["command-line-utilities", "science", "visualization"]
+exclude = ["screenshots"]
 
 [dependencies]
 yeda-core = { path = "../yeda-core", version = "0.1.0", features = ["zotero"] }
