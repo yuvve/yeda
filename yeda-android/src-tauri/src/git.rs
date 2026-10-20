@@ -41,40 +41,29 @@ impl<'a> Login<'a> {
     }
 }
 
-/// Points libgit2 at Android's CA certificates; the bundle is written into `cache`.
-pub fn init(cache: &Path) {
+/// Gives libgit2 Android's CA certificates.
+pub fn init() {
     #[cfg(target_os = "android")]
     unsafe {
-        // Android names its certificates by OpenSSL's pre-1.0 subject hash, which OpenSSL 3 doesn't
-        // look up, so the folder is useless as a cert dir. Since Android 14 the APEX copy is the one
-        // that gets updated.
+        // openssl-src builds OpenSSL for Android with `no-stdio`, so it can't read a CA file or
+        // folder; the certificates have to be handed over already parsed. Since Android 14 the
+        // APEX copy is the one that gets updated.
+        use foreign_types::ForeignType;
+        libgit2_sys::init();
         let dir = ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"]
             .into_iter()
             .find(|d| Path::new(d).is_dir());
-        if let Some(bundle) = dir.and_then(|d| write_cert_bundle(Path::new(d), cache).ok()) {
-            let _ = git2::opts::set_ssl_cert_file(bundle);
+        for entry in dir.and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten() {
+            if let Some(cert) = std::fs::read(entry.path()).ok().and_then(|pem| openssl::x509::X509::from_pem(&pem).ok()) {
+                // The store takes its own reference, so `cert` can be dropped.
+                libgit2_sys::git_libgit2_opts(libgit2_sys::GIT_OPT_ADD_SSL_X509_CERT as std::ffi::c_int, cert.as_ptr());
+            }
         }
         // Shared storage shows every folder as owned by the media provider, never by the app, so
         // libgit2's ownership check would refuse every library; any app with storage access can
         // write there anyway.
         let _ = git2::opts::set_verify_owner_validation(false);
     }
-    #[cfg(not(target_os = "android"))]
-    let _ = cache;
-}
-
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-fn write_cert_bundle(certs: &Path, cache: &Path) -> std::io::Result<std::path::PathBuf> {
-    let mut pem = Vec::new();
-    for entry in std::fs::read_dir(certs)? {
-        // Each file is a PEM block followed by a text dump, which OpenSSL's PEM reader skips.
-        pem.extend(std::fs::read(entry?.path())?);
-        pem.push(b'\n');
-    }
-    std::fs::create_dir_all(cache)?;
-    let bundle = cache.join("cacerts.pem");
-    std::fs::write(&bundle, pem)?;
-    Ok(bundle)
 }
 
 /// The URL of the library's remote, or `None` if the folder isn't itself a git repository.
