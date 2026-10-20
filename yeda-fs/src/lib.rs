@@ -36,7 +36,7 @@ pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> 
         for entry in fs::read_dir(&notes).with_context(|| notes.display().to_string())? {
             let path = entry?.path();
             if let Some(key) = path.file_name().and_then(|n| n.to_str()).and_then(library::ai_key) {
-                lib.load_ai(key, &fs::read_to_string(&path).with_context(|| path.display().to_string())?)?;
+                lib.load_ai(key, &fs::read_to_string(&path).with_context(|| path.display().to_string())?);
             }
         }
     }

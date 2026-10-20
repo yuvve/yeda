@@ -525,6 +525,7 @@ const HISTORY_LEN: usize = 200;
 impl App {
     pub fn new(dir: PathBuf, lib: Library, picker: Picker, keymap: Keymap) -> Self {
         let history = lib.cache.as_ref().and_then(|c| fs::read_to_string(c.join("history")).ok()).unwrap_or_default();
+        let status = unreadable(&lib);
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
             history_at: None,
@@ -549,7 +550,7 @@ impl App {
             clickable: Vec::new(),
             pending: Vec::new(),
             keymap,
-            status: String::new(),
+            status,
             quit: false,
             edit: None,
             sync: false,
@@ -696,6 +697,9 @@ impl App {
     pub fn reload(&mut self) {
         match crate::load_library(&self.dir) {
             Ok(lib) => {
+                if !lib.unreadable.is_empty() {
+                    self.status = unreadable(&lib);
+                }
                 self.lib = lib;
                 self.rebuild_sidebar();
             }
@@ -3030,4 +3034,12 @@ impl App {
 
 fn plural_suffix(n: usize) -> String {
     if n == 1 { String::new() } else { format!(" ({n} references)") }
+}
+
+fn unreadable(lib: &Library) -> String {
+    match lib.unreadable.as_slice() {
+        [] => String::new(),
+        [(_, e)] => format!("left out a reference whose file doesn't parse: {e}"),
+        [(_, e), ..] => format!("left out {} references whose files don't parse; the first: {e}", lib.unreadable.len()),
+    }
 }

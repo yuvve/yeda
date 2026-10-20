@@ -136,8 +136,8 @@ mod tests {
         let cfg = "[tables.lit]\ncolumns = [\"method\", \"hardware/sim\"]\n[tables.more]\ncolumns = [\"x\"]\n";
         let refs = [("a2020", "title = \"Alpha\"\nyear = 2020\n"), ("b2019", "title = \"Beta\"\nyear = 2019\n"), ("c2021", "title = \"Gamma\"\n")];
         let mut lib = Library::parse(Some(cfg), None, refs.map(|(k, t)| (k.to_string(), t.to_string())), None).unwrap();
-        lib.load_ai("a2020", "[lit]\nmethod = \"CBBA\"\n\"hardware/sim\" = \"ROS\"\n").unwrap();
-        lib.load_ai("b2019", "[lit]\nmethod = \"auction\"\n").unwrap();
+        lib.load_ai("a2020", "[lit]\nmethod = \"CBBA\"\n\"hardware/sim\" = \"ROS\"\n");
+        lib.load_ai("b2019", "[lit]\nmethod = \"auction\"\n");
         let names: Vec<String> = columns(&lib, "lit").into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["key", "title", "authors", "year", "method", "hardware/sim"]);
         let mut t = TableView::new("lit".into(), vec!["a2020".into(), "b2019".into(), "c2021".into()]);
