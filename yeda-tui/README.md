@@ -4,27 +4,38 @@
 
 **💩🤖 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs. 🤖💩**
 
+## About
+
+yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder.
+
+From one terminal window, with vim keys, you can:
+- add references by DOI, arXiv ID or ISBN, or import your whole Zotero library;
+- organize them with collections, tags, reading status, search and saved searches;
+- read and annotate PDFs in the built-in reader, and keep Markdown notes;
+- find PDFs, open access or through your library's proxy;
+- explore citation graphs of what a paper cites and what cites it;
+- compare papers in literature tables an LLM fills in, and find related papers;
+- cite as BibTeX or in a citation style.
+
+An Android app reads and annotates the same library. Source and the other components: [github.com/yuvve/yeda](https://github.com/yuvve/yeda).
+
 ## Usage
 
-The terminal interface. The binary is `yeda`.
+The binary is `yeda`.
 
 ```sh
-yeda [library dir]                     # open a library
-yeda init                              # create a library
-yeda import                            # create a library from Zotero
-yeda read <file.pdf> [--annotations <dir>] [--page N]
-yeda import-table <table> <file.csv> [library dir]
-yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
-yeda copy-pdfs <from location> <to location> [library dir]
+yeda init       # once: create a library
+yeda import     # or instead of init: create it from Zotero
+yeda            # open it
 ```
 
-Without a library dir, yeda opens the current folder if it is a library, else the default library.
+`yeda <library dir>` opens a specific library. Without one, yeda opens the current folder if it is a library, else the default library.
 
 ## Getting started
 
 `yeda init` creates an empty library. A form asks for its folder, where its PDFs go (a local folder, a WebDAV folder, or none yet), and whether it becomes the default library. The library is ready for git and Syncthing.
 
-`yeda import` creates a library from Zotero's. The same form also asks for Zotero's data folder. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
+`yeda import` creates a library from Zotero's; run it instead of `yeda init`. The same form also asks for Zotero's data folder. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
 
 `import-zotero` and `copy-pdfs` are the two steps of `yeda import`, one at a time.
 
@@ -43,6 +54,25 @@ pdfs = "/mnt/papers"
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
 Extracting annotations from a PDF (`x`) needs poppler installed.
+
+## Graphs
+
+`:graph` draws a citation graph of the selected paper, or of the marked ones (`v`, `V`). Rows are years, newest at the top:
+
+- ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
+- yellow lines go to papers the selected one cites, magenta lines come from papers citing it
+
+| Key | Action |
+|---|---|
+| `j` / `k` | pick a paper |
+| `Enter` | open it and grow the graph from it |
+| `Backspace` | go back |
+| `Tab` | switch list: cites, cited by, co-cited, top cited, top citing |
+| `a` | add the paper to the library |
+| `o` | open its DOI in the browser |
+| `Esc` | close |
+
+`:graph tags` and `:graph col <column>` group papers by their tags or by a literature table column instead. Data comes from OpenAlex and is cached. `:help` has the full guide.
 
 ## LLM features
 
