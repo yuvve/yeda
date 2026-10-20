@@ -54,7 +54,7 @@ yeda            # open it
 
 ## Reading and annotating
 
-`o` opens the selected paper's PDF in yeda's reader, where you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
+`o` opens the selected paper's PDF in yeda's reader, which you control with vim keys. There you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
 
 ![Reader](yeda-tui/screenshots/reader.png)
 
