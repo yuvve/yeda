@@ -6,5 +6,3 @@ Keeps secrets (WebDAV passwords, LLM API keys) in the system's secret store, nev
 - **Android:** the Keystore.
 
 Entries have service `yeda`, and an account of `webdav:<user>@<url>`, `llm:<ENV_VAR>`, `git:<remote url>` or `api:openalex`.
-
-For KeePassXC, enable *Settings → Secret Service Integration*. Then, in *Database Settings → Secret Service Integration*, expose the group that should hold yeda's entries.
