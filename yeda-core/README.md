@@ -20,5 +20,3 @@ Some operations need things core can't provide itself, so the caller passes them
 
 - PDF extraction takes the PDF's bytes, optionally `pdftotext -bbox` output, and a callback that renders a region to PNG.
 - Zotero import takes an open `rusqlite::Connection` and a callback that returns an annotation image's PNG.
-
-`Effect::Write` must be applied atomically, because several clients write the same files.

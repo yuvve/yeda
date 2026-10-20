@@ -1,6 +1,6 @@
 # yeda-android
 
-An Android app (Tauri v2) with a library browser and yeda-reader built in for PDFs. The interface is high-contrast and has no animations, for e-ink screens.
+An Android app with a library browser and yeda-reader built in for PDFs. The interface is high-contrast and has no animations, for e-ink screens.
 
 It is for reading and annotating; adding references, citation graphs, literature tables, finding PDFs and citing stay on the desktop. The browser has:
 - collections, tags in their colours, saved searches, field and fuzzy search, a filter form and sorting;
@@ -16,8 +16,6 @@ The app reads the library through all-files access, and the library folder is ch
 
 Settings live in `settings.toml` in the app's data folder. It is the device config: the library folder, and `[locations]` for folders elsewhere on this device. It can be edited as text in the app. WebDAV and git passwords or tokens go in the Android Keystore, never in this file. Settings → WebDAV location adds a location after a test login: `[locations.<name>]` goes to `yeda.toml`, the password to the Keystore.
 
-Where yeda-tui uses poppler, the app uses the pdf.js that ships with the reader. It supplies the highlight text and image PNGs for extracted annotations.
-
 ## Building
 
 ```sh
@@ -27,4 +25,4 @@ npx tauri android build --apk --target aarch64     # needs ANDROID_HOME and NDK_
 npm run build && cargo run -p yeda-android         # the same app on the desktop
 ```
 
-`src-tauri/gen/android` is committed because `MainActivity.kt` (the folder picker, file access and "Open with" bridge) and `AndroidManifest.xml` are customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a release.
+`src-tauri/gen/android` is committed because it is customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a release.

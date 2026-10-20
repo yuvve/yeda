@@ -42,7 +42,7 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
-A setting in the wrong file is reported, naming the right one. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+Extracting annotations from a PDF (`x`) needs poppler installed.
 
 ## LLM features
 
@@ -70,9 +70,9 @@ group = "The topic it works on: a short label many papers share."
 subproblem = "The problem it tackles and why earlier work falls short."
 ```
 
-`:summarize` sends each selected paper to the LLM (the PDF itself to Anthropic, its text to other servers), which fills in that paper's row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
+`:summarize` has the LLM read each selected paper and fill in its row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
 
-`:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values. Rows are kept in `notes/<citekey>.ai.toml`.
+`:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values.
 
 ### Finding papers
 
