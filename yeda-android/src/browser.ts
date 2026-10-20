@@ -493,7 +493,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			return;
 		}
 		const library = await invoke<string | null>('library');
-		const cloneUrl = h('input', { type: 'url', placeholder: 'https://user@host/library.git' });
+		const cloneUrl = h('input', { type: 'url', placeholder: 'https://github.com/user/library.git' });
 		show(button('← Back', () => run(showList)), h('h2', {}, 'Library folder'), h('p', {}, library ?? 'None chosen'),
 			button('Choose library folder', () => run(async () => {
 				const path = await pickFolder();

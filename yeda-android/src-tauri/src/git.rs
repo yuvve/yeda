@@ -41,16 +41,40 @@ impl<'a> Login<'a> {
     }
 }
 
-/// Android's OpenSSL build doesn't know where the system's CA certificates are.
-pub fn init() {
+/// Points libgit2 at Android's CA certificates; the bundle is written into `cache`.
+pub fn init(cache: &Path) {
     #[cfg(target_os = "android")]
     unsafe {
-        let _ = git2::opts::set_ssl_cert_dir("/system/etc/security/cacerts");
+        // Android names its certificates by OpenSSL's pre-1.0 subject hash, which OpenSSL 3 doesn't
+        // look up, so the folder is useless as a cert dir. Since Android 14 the APEX copy is the one
+        // that gets updated.
+        let dir = ["/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"]
+            .into_iter()
+            .find(|d| Path::new(d).is_dir());
+        if let Some(bundle) = dir.and_then(|d| write_cert_bundle(Path::new(d), cache).ok()) {
+            let _ = git2::opts::set_ssl_cert_file(bundle);
+        }
         // Shared storage shows every folder as owned by the media provider, never by the app, so
         // libgit2's ownership check would refuse every library; any app with storage access can
         // write there anyway.
         let _ = git2::opts::set_verify_owner_validation(false);
     }
+    #[cfg(not(target_os = "android"))]
+    let _ = cache;
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn write_cert_bundle(certs: &Path, cache: &Path) -> std::io::Result<std::path::PathBuf> {
+    let mut pem = Vec::new();
+    for entry in std::fs::read_dir(certs)? {
+        // Each file is a PEM block followed by a text dump, which OpenSSL's PEM reader skips.
+        pem.extend(std::fs::read(entry?.path())?);
+        pem.push(b'\n');
+    }
+    std::fs::create_dir_all(cache)?;
+    let bundle = cache.join("cacerts.pem");
+    std::fs::write(&bundle, pem)?;
+    Ok(bundle)
 }
 
 /// The URL of the library's remote, or `None` if the folder isn't itself a git repository.
