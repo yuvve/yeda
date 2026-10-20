@@ -30,6 +30,7 @@
 ## Workflow
 - Every change starts from a GitHub issue. Work on a branch `<issue number>-<short-name>` and open a PR that says `Closes #<n>`.
 - A PR that changes only Markdown files skips CI and is merged right away; any other PR is merged once CI passes.
+- Merge with `gh pr merge --squash --delete-branch`. GitHub deletes the branch on merge too; git can't tell a squash-merged branch is merged, so kept ones only pile up.
 - Give every new issue one Eisenhower label, and work in that order, oldest first within a quadrant:
   - `Q1 do first`: urgent and important;
   - `Q2 plan`: important;
