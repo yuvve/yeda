@@ -22,8 +22,6 @@ Without a library dir, yeda opens the current folder if it is a library, else th
 
 `import-zotero` and `copy-pdfs` are the two steps of `yeda import`, one at a time.
 
-`import-table` fills a table from a CSV file, matching rows by `key` or else `title`. CSV columns the table doesn't have are left out.
-
 ## Settings
 
 `~/.config/yeda/config.toml` holds this device's settings; yeda creates it with them commented out:
@@ -38,7 +36,11 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
-The library's `yeda.toml` holds the LLM profiles and the literature tables they fill:
+A setting in the wrong file is reported, naming the right one. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+
+## LLM features
+
+Both features below use an LLM profile from the library's `yeda.toml`; `:setup llm` writes one:
 
 ```toml
 default_llm = "claude"
@@ -46,17 +48,29 @@ default_llm = "claude"
 [llm.claude]
 provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
+```
 
+### Literature tables
+
+A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. You define its columns in `yeda.toml`, each with an optional description of what it should hold:
+
+```toml
 [tables.lit]
 columns = ["contribution", "group", "subproblem"]
 
-[tables.lit.describe]            # optional: what each column should hold
+[tables.lit.describe]
 contribution = "What the paper adds, in plain words; no jargon."
 group = "The topic it works on: a short label many papers share."
 subproblem = "The problem it tackles and why earlier work falls short."
 ```
 
-A setting in the wrong file is reported, naming the right one. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+`:summarize` sends each selected paper to the LLM (the PDF itself to Anthropic, its text to other servers), which fills in that paper's row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
+
+`:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values. Rows are kept in `notes/<citekey>.ai.toml`.
+
+### Finding papers
+
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library, and `a` adds one.
 
 ## Secrets
 

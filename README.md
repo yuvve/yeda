@@ -7,7 +7,9 @@ The terminal interface does everything:
 - collections, tags, reading status, search, filters and saved searches;
 - a PDF reader and annotator with vim keys, and Markdown notes;
 - finding PDFs, open access or through a library proxy;
-- citation graphs, literature tables filled in by an LLM, and finding related papers;
+- citation graphs of the papers a reference cites and is cited by;
+- literature tables: an LLM reads each paper and answers the same questions for all of them, one row per paper;
+- finding related papers: an LLM searches for papers like the selected ones, checked against OpenAlex;
 - citing as BibTeX or in a citation style, and syncing with git.
 
 The Android app is a companion for reading and annotating: it browses, searches and organizes the library, syncs it with git, and has the same reader, with pen support.
