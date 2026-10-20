@@ -2,6 +2,16 @@
 
 A reference manager, and an alternative to Zotero, built around a terminal interface and a library of plain-text files. The library is a folder of TOML and Markdown that works with git, and PDFs are kept in local or WebDAV folders.
 
+The terminal interface does everything:
+- adding references by DOI, arXiv ID or ISBN, and importing a Zotero library;
+- collections, tags, reading status, search, filters and saved searches;
+- a PDF reader and annotator with vim keys, and Markdown notes;
+- finding PDFs, open access or through a library proxy;
+- citation graphs, literature tables filled in by an LLM, and finding related papers;
+- citing as BibTeX or in a citation style, and syncing with git.
+
+The Android app is a companion for reading and annotating: it browses, searches and organizes the library, syncs it with git, and has the same reader, with pen support.
+
 | Component | What it does |
 |---|---|
 | [yeda-tui](yeda-tui) | The `yeda` command: the terminal interface with vim keybindings, plus creating a library and importing one from Zotero |

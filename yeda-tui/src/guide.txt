@@ -191,6 +191,22 @@ KEY BINDINGS
   Space separates the keys of a sequence: "g g". :keys lists every binding
   in effect and every action.
 
+THE READER  ( o, yeda read )
+
+  The PDF reader has vim keys:
+
+    j k                    scroll
+    J K Space Shift-Space  next / previous page
+    Ctrl-d Ctrl-u          half a page down / up
+    gg G NG                first / last / Nth page
+    / n N                  search, next / previous result
+    + - =                  zoom in / out / reset
+    o a                    toggle the outline / annotations sidebar
+    1t-7t                  highlight, underline, note, text, image, ink, eraser
+    Esc                    back to selection
+    dd c y                 delete the selected annotation / edit its comment /
+                           copy the selected text
+
 FINDING PAPERS  ( :discover [what] )
 
   :discover asks the default LLM profile for papers like the selected or
