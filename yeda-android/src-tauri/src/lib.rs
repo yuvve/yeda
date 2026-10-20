@@ -479,6 +479,15 @@ async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, ur
     })
 }
 
+fn empty(dir: &Path) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let _ = match entry.file_type() {
+            Ok(t) if t.is_dir() => std::fs::remove_dir_all(entry.path()),
+            _ => std::fs::remove_file(entry.path()),
+        };
+    }
+}
+
 /// Clones `url` into the empty folder `path` and makes it the library.
 #[tauri::command]
 async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: PathBuf) -> Res<OpenRef> {
@@ -487,8 +496,8 @@ async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: 
     }
     let dir = path.clone();
     let out = with_git_login(url.clone(), move |login| {
-        // A failed clone can leave a half-made repository, which would block the retry.
-        git::clone(&url, &dir, login).inspect_err(|_| drop(std::fs::remove_dir_all(dir.join(".git")))).map(|()| "cloned".into())
+        // The folder was empty, and what a failed clone leaves in it would block the retry.
+        git::clone(&url, &dir, login).inspect_err(|_| empty(&dir)).map(|()| "cloned".into())
     })
     .await?;
     if matches!(out, OpenRef::Synced { .. }) {
