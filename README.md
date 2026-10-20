@@ -1,7 +1,5 @@
 # yeda
 
-**All of yeda's code and documentation is written by AI (Claude). The author directs what it should do and tests it by using it, but has not read or reviewed the code.**
-
 A reference manager, and an alternative to Zotero, built around a terminal interface and a library of plain-text files. The library is a folder of TOML and Markdown that works with git, and PDFs are kept in local or WebDAV folders.
 
 The terminal interface does everything:
@@ -25,6 +23,10 @@ The Android app is a companion for reading and annotating: it browses, searches 
 | [yeda-net](yeda-net) | Metadata lookup, LLM requests and WebDAV transfers |
 | [yeda-fs](yeda-fs) | Reads a library folder and writes changes to it |
 | [yeda-secrets](yeda-secrets) | Passwords and API keys in the system secret store |
+
+## AI usage disclaimer
+
+All of yeda's code and documentation is written by AI (Claude). The author directs what it should do and tests it by using it, but has not read or reviewed the code.
 
 ## The library
 

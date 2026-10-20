@@ -2,8 +2,6 @@
 
 The terminal interface. The binary is `yeda`.
 
-**All of yeda's code and documentation is written by AI (Claude). The author directs what it should do and tests it by using it, but has not read or reviewed the code.**
-
 ```sh
 yeda [library dir]                     # open a library
 yeda init                              # create a library
@@ -15,6 +13,10 @@ yeda copy-pdfs <from location> <to location> [library dir]
 ```
 
 Without a library dir, yeda opens the current folder if it is a library, else the default library.
+
+## AI usage disclaimer
+
+All of yeda's code and documentation is written by AI (Claude). The author directs what it should do and tests it by using it, but has not read or reviewed the code.
 
 ## Getting started
 
