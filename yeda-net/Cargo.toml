@@ -2,7 +2,10 @@
 name = "yeda-net"
 version = "0.1.0"
 edition = "2024"
+authors = ["yuvve"]
 license = "AGPL-3.0-only"
+description = "yeda's networking: metadata lookup, LLM requests and WebDAV transfers"
+repository = "https://github.com/yuvve/yeda"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -10,4 +13,4 @@ base64 = "0.23.1"
 serde_json = "1.0.154"
 toml = { version = "1.1.8", features = ["preserve_order"] }
 ureq = "3.4.2"
-yeda-core = { path = "../yeda-core" }
+yeda-core = { path = "../yeda-core", version = "0.1.0" }

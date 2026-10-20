@@ -2,7 +2,10 @@
 name = "yeda-core"
 version = "0.1.0"
 edition = "2024"
+authors = ["yuvve"]
 license = "AGPL-3.0-only"
+description = "yeda's library format and logic, without I/O"
+repository = "https://github.com/yuvve/yeda"
 
 [features]
 zotero = ["dep:rusqlite"]

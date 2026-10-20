@@ -2,7 +2,13 @@
 name = "yeda-reader"
 version = "0.1.0"
 edition = "2024"
+authors = ["yuvve"]
 license = "AGPL-3.0-only"
+description = "yeda's PDF reader and annotator"
+repository = "https://github.com/yuvve/yeda"
+# The built frontend ships in the crate, so a build from crates.io needs no npm; so do the
+# schemas tauri-build writes, since a published build script must leave its source unchanged.
+include = ["src", "capabilities", "icons", "dist", "gen/schemas", "build.rs", "tauri.conf.json"]
 
 [lib]
 name = "yeda_reader_lib"
@@ -15,9 +21,9 @@ anyhow = "1.0.104"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
-yeda-core = { path = "../../yeda-core" }
-yeda-fs = { path = "../../yeda-fs" }
-yeda-net = { path = "../../yeda-net" }
+yeda-core = { path = "../../yeda-core", version = "0.1.0" }
+yeda-fs = { path = "../../yeda-fs", version = "0.1.0" }
+yeda-net = { path = "../../yeda-net", version = "0.1.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0.2"
