@@ -139,6 +139,9 @@ pub struct Library {
     pub fulltext: crate::fulltext::Settings,
     pub cite: CiteSettings,
     pub refs: Vec<Ref>,
+    /// References left out because a file of theirs doesn't parse, with the error. Their keys stay
+    /// taken, so nothing overwrites those files.
+    pub unreadable: Vec<(String, String)>,
     /// `yeda.toml` as loaded, so config edits keep keys this version doesn't know.
     shared: toml::Table,
 }
@@ -236,7 +239,10 @@ impl Library {
             }
         }
         for (key, text) in refs {
-            lib.refs.push(parse_ref(key, &text)?);
+            match parse_ref(key.clone(), &text) {
+                Ok(r) => lib.refs.push(r),
+                Err(e) => lib.unreadable.push((key, format!("{e:#}"))),
+            }
         }
         lib.refs.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(lib)
@@ -294,7 +300,7 @@ impl Library {
         }
         std::iter::once(base.clone())
             .chain((2..).map(|n| format!("{base}_{n}")))
-            .find(|k| self.get(k).is_none())
+            .find(|k| !self.key_taken(k))
             .unwrap()
     }
 
@@ -334,11 +340,19 @@ impl Library {
     }
 
     /// Reads `notes/<key>.ai.toml` into the reference's tables; a file without its reference is ignored.
-    pub fn load_ai(&mut self, key: &str, text: &str) -> Result<()> {
-        if let Some(r) = self.refs.iter_mut().find(|r| r.key == key) {
-            r.tables = toml::from_str(text).with_context(|| ai_path(key))?;
+    pub fn load_ai(&mut self, key: &str, text: &str) {
+        let Some(i) = self.refs.iter().position(|r| r.key == key) else { return };
+        match toml::from_str(text) {
+            Ok(tables) => self.refs[i].tables = tables,
+            Err(e) => {
+                self.refs.remove(i);
+                self.unreadable.push((key.into(), format!("{}: {e}", ai_path(key))));
+            }
         }
-        Ok(())
+    }
+
+    pub fn key_taken(&self, key: &str) -> bool {
+        self.get(key).is_some() || self.unreadable.iter().any(|(k, _)| k == key)
     }
 
     /// Removes a reference with its annotations and notes.
@@ -431,7 +445,7 @@ mod tests {
     fn renames_tables() {
         let refs = [("a", "title = \"A\"\n"), ("b", "title = \"B\"\n")].map(|(k, t)| (k.to_string(), t.to_string()));
         let mut lib = Library::parse(Some("[tables.lit]\ncolumns = [\"m\"]\n[tables.other]\ncolumns = []\n"), None, refs, None).unwrap();
-        lib.load_ai("a", "[lit]\nm = \"x\"\n[other]\n").unwrap();
+        lib.load_ai("a", "[lit]\nm = \"x\"\n[other]\n");
         assert!(lib.rename_table("lit", "other").is_err());
         assert!(lib.rename_table("nope", "phd").is_err());
         let effects = lib.rename_table("lit", "phd").unwrap();
@@ -466,6 +480,17 @@ mod tests {
     }
 
     #[test]
+    fn leaves_out_unreadable_references_but_keeps_their_keys() {
+        let refs = [("a", "title = \"A\"\n"), ("smith2020", "title = \n")].map(|(k, t)| (k.to_string(), t.to_string()));
+        let mut lib = Library::parse(None, None, refs, None).unwrap();
+        lib.load_ai("a", "not toml [");
+        assert!(lib.refs.is_empty());
+        assert_eq!(lib.unreadable.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["smith2020", "a"]);
+        let r = Ref { authors: vec!["Smith, J.".into()], year: Some(2020), ..Default::default() };
+        assert_eq!(lib.unique_key(&r), "smith2020_2");
+    }
+
+    #[test]
     fn save_parse_roundtrip() {
         let mut r = Ref {
             key: "smith2020".into(),
@@ -489,7 +514,7 @@ mod tests {
         assert_eq!(ai_key("smith2020.ai.toml"), Some("smith2020"));
         let shared = "[locations]\npapers = \"~/papers\"\n";
         let mut lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
-        lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap()).unwrap();
+        lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap());
         assert_eq!(lib.refs, vec![r]);
         assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/h/papers/smith.pdf"));
     }

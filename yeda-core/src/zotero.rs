@@ -142,7 +142,7 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
 
         r.key = citation_key
             .map(|k| k.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:.".contains(*c)).collect::<String>())
-            .filter(|k| library::valid_key(k) && lib.get(k).is_none())
+            .filter(|k| library::valid_key(k) && !lib.key_taken(k))
             .unwrap_or_else(|| lib.unique_key(&r));
         effects.push(lib.save(&r)?);
 
