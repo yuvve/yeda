@@ -85,7 +85,11 @@ pub fn run(dir: &Path) -> Result<String> {
         if conflicts.is_empty() {
             bail!("git pull failed");
         }
-        resolve(dir, conflicts.lines())?;
+        // Left mid-merge, the next :sync would commit the conflict markers.
+        if let Err(e) = resolve(dir, conflicts.lines()) {
+            output(dir, &["merge", "--abort"])?;
+            return Err(e);
+        }
     }
     if !interactive(dir, &["push", "-q"])? {
         bail!("git push failed");
@@ -97,7 +101,6 @@ pub fn run(dir: &Path) -> Result<String> {
 fn resolve<'a>(dir: &Path, conflicts: impl Iterator<Item = &'a str>) -> Result<()> {
     let (ours, others): (Vec<_>, Vec<_>) = conflicts.partition(|p| p.ends_with(annotations::FILE));
     if !others.is_empty() {
-        stdout(dir, &["merge", "--abort"])?;
         bail!("merge aborted, conflicts in: {}; resolve them with git", others.join(", "));
     }
     for path in ours {
@@ -112,4 +115,38 @@ fn resolve<'a>(dir: &Path, conflicts: impl Iterator<Item = &'a str>) -> Result<(
     }
     stdout(dir, &["commit", "-q", "--no-edit"])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_annotation_merge_leaves_no_merge_in_progress() {
+        let root = std::env::temp_dir().join(format!("yeda-sync-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        stdout(&root, &["init", "-q", "--bare", "remote.git"]).unwrap();
+        let file = format!("annotations/a/{}", annotations::FILE);
+        let write = |dir: &Path, text: &str| yeda_fs::write_atomic(&dir.join(&file), text.as_bytes()).unwrap();
+        let clone = |name: &str| {
+            stdout(&root, &["clone", "-q", "remote.git", name]).unwrap();
+            let dir = root.join(name);
+            stdout(&dir, &["config", "user.email", "t@t"]).unwrap();
+            stdout(&dir, &["config", "user.name", "t"]).unwrap();
+            dir
+        };
+        let a = clone("a");
+        write(&a, "");
+        add_all(&a).unwrap();
+        stdout(&a, &["commit", "-q", "-m", "base"]).unwrap();
+        stdout(&a, &["push", "-q", "-u", "origin", "HEAD"]).unwrap();
+        let b = clone("b");
+        write(&a, "[[annotation]]\nid = \"x\"\n");
+        write(&b, "not toml [[\n");
+        run(&a).unwrap();
+        assert!(run(&b).is_err());
+        assert!(!b.join(".git/MERGE_HEAD").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
