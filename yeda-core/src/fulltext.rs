@@ -60,11 +60,9 @@ pub fn proxied_host(url: &str, proxy_host: &str) -> Option<String> {
     Some(format!("{scheme}://{host}.{proxy_host}{path}"))
 }
 
-/// IEEE Xplore's PDF for a `/document/<number>` or `stamp/stamp.jsp?arnumber=<number>` page,
-/// directly or through the proxy.
 /// What an HTML page says, for a log line: its title, else the start of its visible text.
 pub fn page_gist(html: &str) -> String {
-    let lower = html.to_lowercase();
+    let lower = html.to_ascii_lowercase();
     let title = lower.find("<title").and_then(|i| {
         let start = i + lower[i..].find('>')? + 1;
         Some(html[start..start + lower[start..].find("</title")?].to_string())
@@ -78,7 +76,7 @@ pub fn page_gist(html: &str) -> String {
     while let Some(i) = rest.find('<') {
         text.push_str(&rest[..i]);
         text.push(' ');
-        let tag = rest[i..].to_lowercase();
+        let tag = rest[i..].to_ascii_lowercase();
         // A script or style element's content isn't text on the page.
         let skip_to = ["<script", "<style"].iter().find(|t| tag.starts_with(**t)).and_then(|t| tag.find(&format!("</{}", &t[1..])));
         let after = skip_to.unwrap_or(0) + i;
@@ -181,6 +179,8 @@ mod tests {
     fn sums_up_pages() {
         assert_eq!(page_gist("<html><head><TITLE> Access\n denied </TITLE></head><body>x</body></html>"), "Access denied");
         let challenge = "<html><head><title></title><script>var a = '<b>';</script><style>p{}</style></head><body><div>Max challenge attempts exceeded.</div> <p>Please refresh the page to try again!</p></body></html>";
+        assert_eq!(page_gist("<title>K İstanbul</title>"), "K İstanbul");
+        assert_eq!(page_gist("<p>İİİ<SCRIPT>x</SCRIPT>ok</p>"), "İİİ ok");
         assert_eq!(page_gist(challenge), "Max challenge attempts exceeded. Please refresh the page to try again!");
     }
 
