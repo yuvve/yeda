@@ -377,9 +377,13 @@ export function showBrowser(openReader: () => void): () => boolean {
 				});
 				resolve(!!saved);
 			};
-			const what = account.startsWith('git:') ? 'fine-grained access token' : 'password';
+			const git = account.startsWith('git:');
+			const what = git ? 'fine-grained access token' : 'password';
 			show(h('h2', {}, what[0].toUpperCase() + what.slice(1)),
 				h('p', {}, rejected ? `The server rejected the ${what} for ${label}.` : `The ${what} for ${label}:`), input,
+				git && h('p', { className: 'meta' },
+					'On GitHub: Settings → Developer settings → Fine-grained tokens. Repository access: only select repositories, ' +
+					'with the library\'s repository chosen. Permissions: Contents, read and write.'),
 				h('p', { className: 'meta' }, 'It is kept in the Android Keystore, never in the library.'),
 				h('div', { className: 'actions' }, button('OK', () => done(true)), button('Cancel', () => done(false))));
 			input.focus();
