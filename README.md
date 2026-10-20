@@ -28,10 +28,9 @@ PDFs are kept outside the library folder, in *locations*: local folders or WebDA
 
 ## Settings
 
-`yeda.toml` holds the settings every device shares:
+`yeda.toml`, in the library, holds the settings every device shares:
 
 ```toml
-reader = "zathura"               # PDF reader command; default: yeda's own
 default_llm = "claude"
 
 [locations]
@@ -54,7 +53,20 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
-`~/.config/yeda/config.toml` takes the same keys for one machine and overrides `yeda.toml`. It also sets `library`, the folder yeda opens by default. On Android, the app's settings take its place.
+The device config, `~/.config/yeda/config.toml`, holds what differs between devices. yeda creates it with these settings commented out:
+
+```toml
+library = "~/yeda"               # the library yeda opens by default
+reader = "zathura"               # PDF reader command; default: yeda's own
+
+[locations]                      # this device's folder for a location
+pdfs = "/mnt/papers"
+
+[keys.normal]                    # key bindings; see yeda-tui
+"F" = "cite ieee"
+```
+
+A setting in the wrong file is an error that names the right one. On Android, the app's settings are the device config.
 
 Passwords and API keys are never written to a file: they go in the system secret store, and yeda asks for them when they're missing.
 

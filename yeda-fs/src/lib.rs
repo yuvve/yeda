@@ -16,7 +16,7 @@ pub fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Loads the library at `dir`, with `machine` as the per-device config overriding `yeda.toml`.
+/// Loads the library at `dir`, with `machine` as the device config.
 pub fn load_library(dir: &Path, machine: Option<&Path>, home: Option<&Path>) -> Result<Library> {
     let shared = read_optional(&dir.join(library::CONFIG))?;
     let machine = machine.map(read_optional).transpose()?.flatten();

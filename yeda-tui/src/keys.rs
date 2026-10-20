@@ -20,7 +20,7 @@ pub enum Lookup {
 }
 
 impl Keymap {
-    /// The defaults with `[keys]` from the machine config (`user`) applied on top.
+    /// The defaults with `[keys]` from the device config (`user`) applied on top.
     pub fn load(user: Option<&str>) -> Result<Keymap> {
         let mut map = Keymap { contexts: CONTEXTS.iter().map(|c| (c.to_string(), Vec::new())).collect() };
         map.apply(DEFAULTS).context("built-in key bindings")?;

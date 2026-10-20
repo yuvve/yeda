@@ -113,6 +113,9 @@ pub struct CiteSettings {
     pub format: Option<String>,
 }
 
+/// The keys of the device config; `locations` may also be in `yeda.toml`.
+const DEVICE_KEYS: [&str; 4] = ["library", "reader", "keys", "locations"];
+
 pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not Reading"];
 
 #[derive(Debug, Default)]
@@ -177,8 +180,9 @@ pub fn ref_key(file_name: &str) -> Option<&str> {
 }
 
 impl Library {
-    /// `shared` is `yeda.toml`, `machine` the per-device config that overrides it, `refs` each
-    /// `(key, contents)` of `refs/`; `~/` in locations expands to `home`.
+    /// `shared` is `yeda.toml`, `machine` the device config, `refs` each `(key, contents)` of
+    /// `refs/`; `~/` in locations expands to `home`. Each key belongs to one of the two files, except
+    /// `[locations]`, where the device config gives this device's folders.
     pub fn parse(
         shared: Option<&str>,
         machine: Option<&str>,
@@ -186,11 +190,18 @@ impl Library {
         home: Option<&Path>,
     ) -> Result<Self> {
         let shared_table: toml::Table = shared.map(toml::from_str).transpose().context(CONFIG)?.unwrap_or_default();
+        if let Some(key) = shared_table.keys().find(|k| DEVICE_KEYS.contains(&k.as_str()) && *k != "locations") {
+            bail!("{CONFIG}: `{key}` belongs in the device config (~/.config/yeda/config.toml)");
+        }
+        let machine_table: toml::Table = machine.map(toml::from_str).transpose().context("device config")?.unwrap_or_default();
+        if let Some(key) = machine_table.keys().find(|k| !DEVICE_KEYS.contains(&k.as_str())) {
+            bail!("device config: `{key}` belongs in the library's {CONFIG}");
+        }
         let mut lib = Library { shared: shared_table, ..Default::default() };
-        for (name, text) in [(CONFIG, shared), ("machine config", machine)] {
+        for (name, text) in [(CONFIG, shared), ("device config", machine)] {
             let Some(text) = text else { continue };
             let cfg: Config = toml::from_str(text).context(name)?;
-            // A machine config may turn a shared WebDAV location into a local folder, or back.
+            // A device config may turn a shared WebDAV location into a local folder, or back.
             for (name, location) in cfg.locations {
                 match location {
                     Location::Folder(p) => {
@@ -458,7 +469,15 @@ mod tests {
     }
 
     #[test]
-    fn machine_config_wins_and_edits_keep_unknown_keys() {
+    fn keys_belong_to_one_file() {
+        assert!(Library::parse(Some("reader = \"zathura\"\n"), None, [], None).is_err());
+        assert!(Library::parse(None, Some("default_llm = \"claude\"\n"), [], None).is_err());
+        let lib = Library::parse(Some("default_llm = \"claude\"\n"), Some("library = \"~/l\"\nreader = \"zathura\"\n[keys.normal]\nx = \"\"\n"), [], None).unwrap();
+        assert_eq!(lib.reader.as_deref(), Some("zathura"));
+    }
+
+    #[test]
+    fn device_folders_win_and_edits_keep_unknown_keys() {
         let mut lib = Library::parse(
             Some("future_key = 1\n[locations]\npapers = \"/shared\"\n"),
             Some("[locations]\npapers = \"/mine\"\n"),

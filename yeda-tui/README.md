@@ -26,7 +26,7 @@ Without a library dir, yeda opens the current folder if it is a library, else `l
 
 ## Reading
 
-`o` opens a PDF in yeda's reader (`yeda read`, the same as [yeda-reader](../yeda-reader)), or in the command `reader` names in `yeda.toml`. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+`o` opens a PDF in yeda's reader (`yeda read`, the same as [yeda-reader](../yeda-reader)), or in the command `reader` names in the device config. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
 
 ## Secrets
 
@@ -34,7 +34,7 @@ When a password or API key is missing, yeda asks for it and offers to save it in
 
 ## Keys
 
-The defaults are in [`src/keys.toml`](src/keys.toml); `?` shows the bindings in effect. Each key runs a command, so keys are rebound in `~/.config/yeda/config.toml` under `[keys.<context>]`: `normal`, or `library`, `graph`, `table` or `annotations` for that column only. `""` unbinds a key.
+The defaults are in [`src/keys.toml`](src/keys.toml); `?` shows the bindings in effect. Each key runs a command, so keys are rebound in the device config, `~/.config/yeda/config.toml`, under `[keys.<context>]`: `normal`, or `library`, `graph`, `table` or `annotations` for that column only. `""` unbinds a key.
 
 ```toml
 [keys.normal]

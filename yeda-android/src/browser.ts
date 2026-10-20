@@ -509,7 +509,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 					cloneUrl, button('Clone into a folder', () => cloneUrl.value.trim() && run(() => cloneLibrary(cloneUrl.value.trim())))),
 			h('h2', {}, 'WebDAV location'), webdavForm(),
 			h('h2', {}, 'Settings file'),
-			h('p', { className: 'meta' }, 'settings.toml: the library folder plus anything the desktop ~/.config/yeda/config.toml takes, such as [locations].'),
+			h('p', { className: 'meta' }, 'settings.toml: the library folder, and [locations] for folders elsewhere on this device.'),
 			button('Edit settings.toml', () => run(showSettingsFile)),
 			h('h2', {}, 'Display'), einkToggle(),
 			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp));

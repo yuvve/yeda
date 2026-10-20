@@ -121,12 +121,15 @@ fn set_default_library(config: Option<&Path>, dir: &Path) -> Result<()> {
 }
 
 /// Written to `~/.config/yeda/config.toml` when there is none.
-const CONFIG_TEMPLATE: &str = r#"# Settings for this machine. Any yeda.toml setting can also go here, overriding the library's.
+const CONFIG_TEMPLATE: &str = r#"# Settings for this device. Everything else goes in the library's yeda.toml.
 
 # The library yeda opens when given no folder and not started inside one.
 # library = "~/papers"
 
-# This machine's folders for the library's PDF locations.
+# The PDF reader command, run as <reader> <pdf> --annotations <dir>; default: yeda's own.
+# reader = "zathura"
+
+# This device's folders for the library's PDF locations.
 # [locations]
 # zotero = "~/Zotero/storage"
 
