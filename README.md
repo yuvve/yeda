@@ -2,7 +2,7 @@
 
 ## AI usage disclaimer
 
-**💩🤖 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. 🤖💩 I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs.**
+**💩🤖 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs. 🤖💩**
 
 ## About
 
