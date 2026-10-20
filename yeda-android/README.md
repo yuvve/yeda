@@ -27,4 +27,4 @@ npx tauri android build --apk --target aarch64     # needs ANDROID_HOME and NDK_
 npm run build && cargo run -p yeda-android         # the same app on the desktop
 ```
 
-`src-tauri/gen/android` is committed because `MainActivity.kt` (the folder picker, file access and "Open with" bridge) and `AndroidManifest.xml` are customized. CI builds a signed APK on every push to `main`.
+`src-tauri/gen/android` is committed because `MainActivity.kt` (the folder picker, file access and "Open with" bridge) and `AndroidManifest.xml` are customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a release.

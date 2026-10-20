@@ -1,52 +1,50 @@
 # yeda
 
-A reference manager whose library is plain TOML and Markdown files, kept in git.
+A reference manager whose library is a folder of plain TOML and Markdown files.
 
 | Component | What it is |
 |---|---|
-| [yeda-core](yeda-core) | Library format and business logic; does no I/O |
-| [yeda-net](yeda-net) | Metadata lookup (DOI, arXiv, ISBN), LLM requests and WebDAV transfers |
-| [yeda-fs](yeda-fs) | Loads a library from a local folder and applies changes to it |
-| [yeda-secrets](yeda-secrets) | Passwords and API keys in the system secret store (Secret Service, Android Keystore) |
-| [yeda-tui](yeda-tui) | Terminal interface with vim keybindings |
+| [yeda-tui](yeda-tui) | Terminal interface with vim keybindings; start here |
 | [yeda-reader](yeda-reader) | Desktop PDF reader and annotator |
 | [yeda-android](yeda-android) | Android app: library browser with the reader built in |
+| [yeda-core](yeda-core) | Library format and logic; does no I/O |
+| [yeda-net](yeda-net) | Metadata lookup, LLM requests and WebDAV transfers |
+| [yeda-fs](yeda-fs) | Reads a library folder and writes changes to it |
+| [yeda-secrets](yeda-secrets) | Passwords and API keys in the system secret store |
 
-## Library
+## The library
 
 ```
 <library>/
-  yeda.toml                               # shared settings
+  yeda.toml                               # settings shared by every device
   refs/<citekey>.toml                     # one reference each
-  notes/<citekey>.md                      # notes
-  notes/<citekey>.ai.toml                 # what an LLM wrote: its row in each table
-  annotations/<citekey>/annotations.toml  # annotations, merged by id
+  notes/<citekey>.md                      # your notes
+  notes/<citekey>.ai.toml                 # what an LLM wrote for the tables
+  annotations/<citekey>/annotations.toml  # annotations
   annotations/<citekey>/img/<id>.png      # image and ink annotations
 ```
 
-`yeda.toml`:
+PDFs are kept outside the library folder, in *locations*: local folders or WebDAV folders, each holding `<citekey>/<file>`. WebDAV PDFs are cached locally.
+
+## Settings
+
+`yeda.toml` holds the settings every device shares:
 
 ```toml
-reader = "zathura"               # opens PDFs as <reader> <pdf> --annotations <dir>; default: yeda read
+reader = "zathura"               # PDF reader command; default: yeda's own
 default_llm = "claude"
 
-[locations]                      # pdf.location in a reference names one; PDFs go in <citekey>/<file>
-zotero = "~/Zotero/storage"
-
-[locations.dav]                  # a WebDAV server; PDFs are plain files at <citekey>/<file>
-url = "https://dav.example.com/zotero/"
-user = "yuvve"
-
-[tag_colors]
-"priority 1" = "#ff6666"
+[locations]
+pdfs = "~/yeda-pdfs"             # a local folder
+dav = { url = "https://dav.example.com/yeda/", user = "me" }
 
 [searches]
 "To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
 
-[tables.lit]                     # literature table, filled by an LLM
+[tables.lit]                     # a literature table, filled in by an LLM
 columns = ["contribution", "group", "subproblem"]
 
-[tables.lit.describe]            # optional guidance per column
+[tables.lit.describe]            # optional: what each column should hold
 contribution = "What the paper adds, in plain words; no jargon."
 group = "The topic it works on: a short label many papers share."
 subproblem = "The problem it tackles and why earlier work falls short."
@@ -56,23 +54,19 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
-Data is everything in the library folder except PDFs; it syncs through git or Syncthing. PDFs sync through WebDAV or Syncthing. A library folder shared with Syncthing (it has `.stfolder`) gets a `.stignore` that leaves out `.git` and yeda's temporary `*.tmp` files; a Syncthing-shared PDF location gets one that leaves out `*.tmp`. An existing `.stignore` is kept.
+`~/.config/yeda/config.toml` takes the same keys for one machine and overrides `yeda.toml`. It also sets `library`, the folder yeda opens by default. On Android, the app's settings take its place.
 
-Settings for one machine go in `~/.config/yeda/config.toml`, which uses the same keys as `yeda.toml` and overrides it. It also takes `library`, the folder yeda opens by default. yeda creates it on first start, with these settings commented out. On Android, the app's settings play this role.
+Passwords and API keys are never written to a file: they go in the system secret store, and yeda asks for them when they're missing.
 
-Secrets are never stored in a file. WebDAV passwords and LLM API keys are kept in the system secret store (see [yeda-secrets](yeda-secrets)), and clients ask for them when missing. On the desktop, an LLM key can also come from the environment variable named by `api_key_env`, which defaults to `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+## Syncing
 
-PDFs live at `<location>/<citekey>/<file>`, locally or on WebDAV. A WebDAV PDF is cached (`~/.cache/yeda/<location>/…` on the desktop) and downloaded again when the server's copy changes.
+Sync the library folder with git (`:sync`) or Syncthing, and the PDFs with WebDAV or Syncthing. `yeda init` and `yeda import` set the library up for either.
 
 ## Building
 
 ```sh
 git clone --recursive <this repo>
-cargo build --workspace
-cargo test --workspace
 cargo install --path yeda-tui      # the `yeda` binary, with the reader built in
 ```
 
-Building yeda-reader (and so yeda-tui and yeda-android, which link it) runs npm to build its web frontend. The first time, this installs packages and builds zotero/reader, so it needs Node.js and network access.
-
-The repository is AGPL-3.0, as required by the zotero/reader fork it embeds.
+The first build needs Node.js and network access, to build the reader's web frontend. The repository is AGPL-3.0, as required by the zotero/reader fork it embeds.

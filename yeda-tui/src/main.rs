@@ -52,6 +52,8 @@ fn wizard(import: bool) -> Result<()> {
     if !dir.join(library::CONFIG).exists() {
         yeda_fs::write_atomic(&dir.join(library::CONFIG), b"")?;
     }
+    sync::write_new(&dir.join(".gitignore"), sync::GITIGNORE)?;
+    sync::write_new(&dir.join(".stignore"), sync::STIGNORE)?;
     if import {
         println!("{}", import_zotero(&a.zotero, dir)?);
     }
@@ -61,6 +63,7 @@ fn wizard(import: bool) -> Result<()> {
             Some((dav, _)) => toml::Table::from_iter([("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
             None => {
                 fs::create_dir_all(&a.folder)?;
+                sync::write_new(&a.folder.join(".stignore"), "*.tmp\n")?;
                 a.folder.to_string_lossy().into_owned().into()
             }
         };

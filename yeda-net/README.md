@@ -8,4 +8,4 @@ The networking every yeda client shares. It never touches the disk: PDFs and API
   - OpenAI-compatible servers receive the PDF's text, from the caller-supplied `Paper::text` callback.
 - `webdav::download`, `webdav::upload` and `webdav::current_version` move a PDF to and from a WebDAV server as a plain file, creating its folder, and report its ETag so a cached copy is downloaded only when it changed. A rejected password is reported as `webdav::Unauthorized`, so the client can ask again.
 - `openalex::Client` looks up works, citing works and open-access PDF URLs.
-- `fulltext::download(url, cookie)` downloads a URL and accepts it only if it is a PDF.
+- `fulltext::download(url)` downloads an open-access copy and accepts it only if it is a PDF.

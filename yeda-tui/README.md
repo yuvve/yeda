@@ -3,32 +3,38 @@
 The terminal interface. The binary is `yeda`.
 
 ```sh
-yeda [library dir]
+yeda [library dir]                     # open a library
+yeda init                              # create a library
+yeda import                            # create a library from Zotero
 yeda read <file.pdf> [--annotations <dir>] [--page N]
-yeda import
-yeda init
+yeda import-table <table> <file.csv> [library dir]
 yeda import-zotero <zotero data dir> [library dir] [--pdfs-to <location>]
-yeda import-table <table name> <file.csv> [library dir]
 yeda copy-pdfs <from location> <to location> [library dir]
 ```
 
-`yeda import` moves a Zotero library to a new yeda library in one go. A form asks for Zotero's data folder, the library folder, where the PDFs go (copied to a folder, uploaded to a WebDAV folder that is tested and created if missing, or left in Zotero's storage) and whether to make it the default library. It then imports, and copies every PDF there: from Zotero's storage, from linked files (including ones relative to Zotero's base folder for linked attachments), and from Zotero's WebDAV for files missing locally. `import-zotero` and `copy-pdfs` do the same steps one at a time. `yeda init` is the same form without the Zotero part: it creates an empty library with its PDF location (a folder, a WebDAV folder, or none yet).
+Without a library dir, yeda opens the current folder if it is a library, else `library` from `~/.config/yeda/config.toml`.
 
-`import-table` fills a table from a CSV file, matching rows to references by `key` or else `title`. Only the columns both the CSV and the table have are imported; the others are named in the report.
+## Getting started
 
-Without a library dir, yeda uses the current folder if it is a library (it has `yeda.toml` or `refs/`), else `library` from `~/.config/yeda/config.toml` (`library = "~/papers"`), else the current folder.
+`yeda init` asks in a form for the library folder, where its PDFs go (a local folder, a WebDAV folder, or none yet) and whether to make it the default library.
 
-When a WebDAV password or LLM API key is needed and not in the Secret Service, yeda asks for it in a masked prompt and offers to save it there. If the server rejects a saved password, it asks again.
+`yeda import` does the same for a Zotero library, read from Zotero's data folder: items, annotations, notes, tag colours and saved searches. It copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
 
-`import-zotero` imports the items, annotations, child notes (as `notes/<key>.md`), tag colours and saved searches that aren't in the library yet. It reads a copy of the database, so Zotero can stay open.
+`import-zotero` and `copy-pdfs` are the two steps of `yeda import`, one at a time.
 
-`copy-pdfs` copies every PDF at one location to another (a local folder or WebDAV) as `<citekey>/<file>`, and points the references at the copies; the originals stay. From the `zotero` location, a PDF missing on disk is downloaded from Zotero's WebDAV (`<key>.zip`, found through Zotero's preferences), which is only read. `import-zotero --pdfs-to <location>` runs `copy-pdfs zotero <location>` after importing.
+`import-table` fills a table from a CSV file, matching rows by `key` or else `title`. CSV columns the table doesn't have are left out.
 
-yeda-reader is linked into the binary: `yeda read` runs it, and `o` opens PDFs with it unless `reader` in `yeda.toml` names another command. Building yeda-tui builds the reader too. Annotation extraction and image rendering use poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+## Reading
+
+`o` opens a PDF in yeda's reader (`yeda read`, the same as [yeda-reader](../yeda-reader)), or in the command `reader` names in `yeda.toml`. Extracting annotations from a PDF uses poppler (`pdftotext`, `pdftoppm`, `pdfinfo`).
+
+## Secrets
+
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key can also come from an environment variable: `api_key_env` in the profile, by default `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
 ## Keys
 
-These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a command line, and every action is also a command (`:annotations`, `:down`). Rebind keys under `[keys.<context>]` in `~/.config/yeda/config.toml`. The contexts are `normal`, plus `library`, `graph`, `table` and `annotations`, which take precedence in their column. `""` unbinds a key. `?` shows the bindings in effect.
+The defaults are in [`src/keys.toml`](src/keys.toml); `?` shows the bindings in effect. Each key runs a command, so keys are rebound in `~/.config/yeda/config.toml` under `[keys.<context>]`: `normal`, or `library`, `graph`, `table` or `annotations` for that column only. `""` unbinds a key.
 
 ```toml
 [keys.normal]
@@ -40,48 +46,49 @@ These are the defaults from [`src/keys.toml`](src/keys.toml). Each key runs a co
 |---|---|
 | `j` `k` `Ctrl-d` `Ctrl-u` `gg` `G` | Move |
 | `h` `l` `Tab` | Switch column: library, references, right column |
-| `c` | Show only the current column; again to show all. Below 120 terminal columns the right column is hidden, below 80 the library column too |
-| Mouse | A click selects and focuses; the wheel moves the selection in the column under the pointer |
-| `/` | Search; in the library column, filter it. Spaces mean AND, `\|` means OR, `!` means NOT, `field:value` searches one field |
-| `v` / `V` | Mark or unmark the reference / mark a range as you move; `Enter` keeps it and `Esc` cancels it. `Esc` outside a range unmarks all. `r`, `t`, `m`, `dd`, `x` and `:summarize` act on every marked reference; with more than one, `r`, `R`, `t`, `m`, `x`, `:summarize` and `:fetch` ask y/n first, and `dd` always does; `V` then `G` marks the whole list |
-| `f` | Filter by field in a popup (edits the same query as `/`); Ctrl-D/Ctrl-U move between boxes; values the library has are suggested, Ctrl-N/Ctrl-P pick one and Tab completes it; Ctrl-L clears the box, Ctrl-X every box |
+| `c` | Show only the current column; again to show all. Narrow terminals hide the right column, then the library column |
+| Mouse | Click selects; the wheel scrolls the column under the pointer |
+| `/` | Search (in the library column: filter it). Spaces mean AND, `\|` OR, `!` NOT, `field:value` one field; `:help` has the rest |
+| `v` / `V` | Mark the reference / mark a range as you move (`Enter` keeps it, `Esc` cancels). `V G` marks the whole list. Changing or deleting several asks first. `Esc` unmarks all |
+| `f` | Filter by field in a popup, with the library's values suggested: Ctrl-N/Ctrl-P pick, Tab completes, Ctrl-D/Ctrl-U move between boxes, Ctrl-L clears one, Ctrl-X all |
 | `s` | Sort in a popup; choosing the current field again reverses it |
 | `Esc` | Clear the search |
-| `a` | Add by DOI, arXiv ID or ISBN; a pasted list adds each, and the ones that fail are listed and copied to the clipboard (`:failed` shows them again) |
+| `a` | Add by DOI, arXiv ID or ISBN; a pasted list adds each, and `:failed` lists the ones that failed |
 | `o` | Open the PDF in the reader |
 | `e` / `n` | Edit the reference file / its Markdown note in `$EDITOR` |
 | `t` / `m` | Edit tags / move to a collection |
 | `r` / `R` | Next / previous reading status |
-| `A` | Show annotations in the right column; there, `o` opens an image in the image viewer and any other annotation in `$EDITOR` |
+| `A` | Annotations in the right column; `o` opens one |
 | `T` | `:table` |
 | `x` | Extract the annotations embedded in the PDF |
 | `C` | Colour the selected tag (library column) |
 | `dd` | Delete the reference or saved search |
-| `?` | List every key and command; `/` searches it, `n`/`N` move between matches, as in `:help` |
-| `:` | Command; Up/Down recall earlier ones, Tab completes the command or its argument (shift-Tab and Tab cycle through several) |
+| `?` | Every key and command; `/` searches, `n`/`N` move between matches |
+| `:` | Command line; Up/Down recall, Tab completes |
 | `q` | Close the graph if it's open, else quit |
 
 ## Commands
 
+A command acts on the selected reference, or on the marked ones.
+
 | Command | Action |
 |---|---|
-| `:log` | Open the log of status messages and failures (`~/.local/state/yeda/yeda.log`) in `$EDITOR` |
+| `:log` | Open the log of messages and failures in `$EDITOR` |
 | `:save <name>` | Save the current search |
-| `:table [name]` | A table of the selected or marked references in the right column; without a name, the only table or one picked from a list: `h`/`l` pick a column, `Enter` shows a cell in full, `e` edits it in `$EDITOR`, `s` sorts, `/` searches and `f` filters the column; `Esc`, `q` or `:table close` closes it |
-| `:table rename <old> <new>` | Rename a table in `yeda.toml` and in every `notes/<key>.ai.toml` |
-| `:summarize[!] [table] [profile]` | Fill the selected reference's table row with an LLM, kept in `notes/<key>.ai.toml`, following the table's `describe`; without a table name, pick one from a list; `!` overwrites filled cells |
+| `:table [name]` | The table for the selected or marked references, in the right column: `h`/`l` pick a column, `Enter` shows a cell, `e` edits it, `s` sorts, `/` searches, `f` filters; `q` closes |
+| `:table rename <old> <new>` | Rename a table |
+| `:summarize[!] [table] [profile]` | Fill the table row with an LLM, following the table's `describe`; `!` overwrites filled cells |
 | `:cancel` | Stop summarizing after the current paper |
 | `:export <table> <file.csv>` | Export a table |
-| `:attach <file.pdf> [location]` | Attach a PDF to the selected reference: copy it to a local location or upload it to a WebDAV one, as `<key>/<file>` |
-| `:git-init [url]` | Make the library folder a git repository (with a `.gitignore` for PDFs and yeda's `*.tmp` files) and commit everything; with a URL, add it as `origin` and push, so `:sync` works from then on |
-| `:sync` | Commit all changes, pull with `git pull --no-rebase` and push; conflicting `annotations.toml` files are merged by annotation `id`, any other conflict aborts the merge |
-| `:discover [what]` | Ask the default LLM profile for papers like the selected or marked references, or as described. An Anthropic profile searches the web; an OpenAI-compatible server only if it does so itself. Each paper is looked up in OpenAlex (✓ found, ? not found, ◎ in the library); `a` adds one, `o` opens it. `:found` shows the list again |
-| `:setup llm\|webdav [name]` | A form for an LLM profile or WebDAV location (a name that exists is filled in). For an LLM, ←/→ on Provider picks anthropic, openai, gemini, mistral or openrouter and fills in its base URL. Enter tests the connection (creating a WebDAV folder that doesn't exist yet), then saves the API key or password to the secret store and the rest to `yeda.toml` |
-| `:setup openalex` | Set the optional OpenAlex API key, which gives `:graph` a larger daily budget: tested with one request, then kept in the secret store |
-| `:secrets` | Every password and API key the configuration uses (WebDAV locations, LLM profiles, OpenAlex), with where each is set; Enter sets or replaces one, `d` removes it. A secret a feature asks for is saved to the secret store |
-| `:graph tags`, `:graph col <column>` | The selected or marked references with their tags, or a table column's values (`:graph col group`), clustered: papers sharing a value sit around it. `Enter` selects the picked node, `Backspace` goes back, `Tab` lists every node |
-| `:graph[!] [citations]` | Citation graph of the selected (or marked) references, from OpenAlex; see `:help`. `!` fetches citing papers again and retries what OpenAlex didn't have. An optional OpenAlex API key is set with `:secrets`. `:graph close` (or `q`, or Esc in the graph) closes it |
-| `:cite [format]` | Copy the selected or marked references to the clipboard as `bibtex` (the default, or `[cite] format`), `ident` (one DOI, arXiv ID, ISBN or URL per line), a citation style shipped with hayagriva (`ieee`, `apa`, `chicago-author-date`, …), or a `.csl` file |
-| `:fetch [location]` | Find PDFs for the selected or marked references and attach them to `location` (default `[fulltext] location`): open-access copies first, then the publisher through the library proxy in a browser window; see `:help` |
-| `:keys` | List every key and command |
-| `:help` | Guide to search syntax (AND, OR, NOT, fields), filtering, sorting and saved searches |
+| `:attach <file.pdf> [location]` | Attach a PDF, copying or uploading it to a location |
+| `:git-init [url]` | Make the library a git repository; with a URL, push it there so `:sync` works |
+| `:sync` | Commit, pull and push with git. Conflicting annotations are merged; any other conflict stops the sync |
+| `:discover [what]` | Ask the LLM for papers like the selected ones, or as described, and look each up in OpenAlex; `a` adds one, `o` opens it, `:found` shows the list again. Searching the web needs an Anthropic profile |
+| `:setup llm\|webdav [name]` | A form for an LLM profile (←/→ picks a provider and fills in its URL) or a WebDAV location. Enter tests it, then saves |
+| `:setup openalex` | Set the optional OpenAlex API key, which raises `:graph`'s daily budget |
+| `:secrets` | Every password and API key in use: Enter sets one, `d` removes it |
+| `:graph tags`, `:graph col <column>` | The selected references clustered by tag, or by a table column's value |
+| `:graph[!]` | Citation graph of the selected references, from OpenAlex; see `:help`. `!` fetches again. `q` closes it |
+| `:cite [format]` | Copy the references as `bibtex` (default), `ident` (DOI, arXiv ID, ISBN or URL), a style such as `ieee` or `apa`, or a `.csl` file |
+| `:fetch [location]` | Find PDFs and attach them: open-access copies first, then the publisher through the library proxy in a browser window; see `:help` |
+| `:help` | Guide to searching, filtering, sorting, graphs and fetching |

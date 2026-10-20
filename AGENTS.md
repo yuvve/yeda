@@ -6,7 +6,7 @@
 - **yeda-fs** does client-side disk I/O and applies `Effect`s atomically.
 - **The clients** (yeda-tui, yeda-reader, yeda-android) do all other I/O.
 - **The library** stays plain TOML and Markdown that works in git; see the README.
-- **Storage:** data is everything in the library except PDFs (references, annotations and their images, notes, clips, config). Data syncs through git or Syncthing; PDFs through WebDAV or Syncthing. Git never carries PDFs, and WebDAV carries nothing but PDFs.
+- **Storage:** the library files are everything in the library folder (references, annotations and their images, notes, clips, config); PDFs live in locations outside it. Library files sync through git or Syncthing, PDFs through WebDAV or Syncthing. Git never carries PDFs, and WebDAV carries nothing but PDFs.
 - **Secrets** (passwords, API keys, tokens) live only in the system secret store, through yeda-secrets, never in a file.
 - **No backward compatibility:** yeda is a personal project. Replace old formats and behaviour outright, with no compatibility modes or migrations, and say what the user has to redo.
 
