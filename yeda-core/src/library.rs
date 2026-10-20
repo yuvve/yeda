@@ -379,6 +379,11 @@ impl Library {
 
 pub fn parse_ref(key: String, text: &str) -> Result<Ref> {
     let mut r: Ref = toml::from_str(text).with_context(|| ref_path(&key))?;
+    if let Some(pdf) = &r.pdf {
+        // Reference files come from other devices; their PDF must stay inside its location.
+        let inside = Path::new(&pdf.path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+        anyhow::ensure!(inside, "{}: pdf path {:?} leaves its location", ref_path(&key), pdf.path);
+    }
     r.key = key;
     Ok(r)
 }
@@ -451,6 +456,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn rejects_pdf_paths_outside_their_location() {
+        let pdf = |path: &str| parse_ref("a".into(), &format!("title = \"A\"\npdf = {{ location = \"dav\", path = \"{path}\" }}\n"));
+        assert!(pdf("a/a.pdf").is_ok());
+        assert!(pdf("../../.bashrc").is_err());
+        assert!(pdf("/etc/passwd").is_err());
+    }
 
     #[test]
     fn save_parse_roundtrip() {
