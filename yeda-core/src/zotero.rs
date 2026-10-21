@@ -212,6 +212,11 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
     if !sum.searches_skipped.is_empty() {
         report += &format!("\nsaved searches with conditions yeda cannot express (not imported): {}", sum.searches_skipped.join(", "));
     }
+    for (what, entries) in left_out(db, &imported)? {
+        if !entries.is_empty() {
+            report += &format!("\n{what} (not imported): {}", entries.join("; "));
+        }
+    }
     Ok((report, effects))
 }
 
@@ -383,6 +388,52 @@ fn image_rect(position: &str) -> Option<(u32, [f32; 4])> {
     Some((v["pageIndex"].as_u64()? as u32 + 1, [n(0)?, n(1)?, n(2)?, n(3)?]))
 }
 
+/// What the import leaves out, by kind: attachments that aren't PDFs, attachments and notes
+/// without a parent item. Each entry names the parent's title (else the attachment's own) and the
+/// file. Attachments of `already` imported items were reported when those were imported.
+fn left_out(db: &Connection, already: &HashSet<String>) -> Result<Vec<(&'static str, Vec<String>)>> {
+    let title = |item: &str| {
+        format!(
+            "COALESCE((SELECT CAST(v.value AS TEXT) FROM itemData d JOIN fieldsCombined f USING(fieldID) JOIN itemDataValues v USING(valueID)
+             WHERE d.itemID = {item} AND f.fieldName = 'title'), '')"
+        )
+    };
+    let file = |path: String, own_title: String| {
+        let name = path.trim_start_matches("storage:").trim_start_matches("attachments:").rsplit(['/', '\\']).next().unwrap_or_default().to_string();
+        if name.is_empty() { own_title } else { name }
+    };
+    let mut stmt = db.prepare(&format!(
+        "SELECT p.key, {}, COALESCE(a.path, ''), {} FROM itemAttachments a JOIN items p ON p.itemID = a.parentItemID
+         WHERE COALESCE(a.contentType, '') != 'application/pdf' AND a.itemID {NOT_DELETED} AND a.parentItemID {NOT_DELETED} ORDER BY a.itemID",
+        title("p.itemID"),
+        title("a.itemID")
+    ))?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+    let mut attached = Vec::new();
+    for row in rows {
+        let (parent, parent_title, path, own_title) = row?;
+        if !already.contains(&parent) {
+            attached.push(format!("{parent_title}: {}", file(path, own_title)));
+        }
+    }
+    let mut stmt = db.prepare(&format!(
+        "SELECT COALESCE(a.path, ''), {} FROM itemAttachments a WHERE a.parentItemID IS NULL AND a.itemID {NOT_DELETED} ORDER BY a.itemID",
+        title("a.itemID")
+    ))?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut standalone = Vec::new();
+    for row in rows {
+        let (path, own_title) = row?;
+        let name = file(path, own_title.clone());
+        standalone.push(if own_title.is_empty() || own_title == name { name } else { format!("{own_title}: {name}") });
+    }
+    let notes = query_all_strings(
+        db,
+        &format!("SELECT COALESCE(NULLIF(title, ''), '(untitled)') FROM itemNotes WHERE parentItemID IS NULL AND itemID {NOT_DELETED} ORDER BY itemID"),
+    )?;
+    Ok(vec![("attachments that aren't PDFs", attached), ("attachments without a parent item", standalone), ("notes without a parent item", notes)])
+}
+
 /// PDF attachments of `item` as (attachment id, resolved file); `None` when the file cannot be located.
 fn attachments(db: &Connection, item: i64, zotero: &Path, linked: Option<&Path>) -> Result<Vec<(i64, Option<PathBuf>)>> {
     let mut stmt = db.prepare_cached(&format!(
@@ -551,6 +602,36 @@ mod tests {
         let p = |s: &str| Some(PathBuf::from(s));
         assert_eq!(files(Some(Path::new("/base"))), [p("/z/storage/STORED/a.pdf"), p("/data/papers/b.pdf"), p("/base/sub/c.pdf")]);
         assert_eq!(files(None)[2], None);
+    }
+
+    #[test]
+    fn names_what_it_leaves_out() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE items (itemID INTEGER, key TEXT);
+             CREATE TABLE itemAttachments (itemID INTEGER, parentItemID INTEGER, linkMode INTEGER, path TEXT, contentType TEXT);
+             CREATE TABLE itemNotes (itemID INTEGER, parentItemID INTEGER, note TEXT, title TEXT);
+             CREATE TABLE deletedItems (itemID INTEGER);
+             CREATE TABLE fieldsCombined (fieldID INTEGER, fieldName TEXT);
+             CREATE TABLE itemDataValues (valueID INTEGER, value TEXT);
+             CREATE TABLE itemData (itemID INTEGER, fieldID INTEGER, valueID INTEGER);
+             INSERT INTO items VALUES (1, 'PAPER'), (2, 'PDF'), (3, 'SNAP'), (4, 'LOOSE'), (5, 'NOTE'), (6, 'OLD'), (7, 'GONE'), (8, 'OLDSNAP');
+             INSERT INTO fieldsCombined VALUES (1, 'title');
+             INSERT INTO itemDataValues VALUES (1, 'A Paper'), (2, 'Snapshot'), (3, 'Old Paper');
+             INSERT INTO itemData VALUES (1, 1, 1), (3, 1, 2), (6, 1, 3);
+             INSERT INTO itemAttachments VALUES
+               (2, 1, 1, 'storage:a.pdf', 'application/pdf'),
+               (3, 1, 1, 'storage:page.html', 'text/html'),
+               (4, NULL, 2, '/home/me/book.epub', 'application/epub+zip'),
+               (7, 1, 1, 'storage:deleted.html', 'text/html'),
+               (8, 6, 1, 'storage:old.html', 'text/html');
+             INSERT INTO itemNotes VALUES (5, NULL, '<p>Ideas</p>', 'Ideas');
+             INSERT INTO deletedItems VALUES (7);",
+        )
+        .unwrap();
+        let left = left_out(&db, &HashSet::from(["OLD".to_string()])).unwrap();
+        let entries: Vec<Vec<String>> = left.into_iter().map(|(_, e)| e).collect();
+        assert_eq!(entries, [vec!["A Paper: page.html".to_string()], vec!["book.epub".into()], vec!["Ideas".into()]]);
     }
 
     #[test]
