@@ -228,6 +228,11 @@ pub enum Prompt {
     TableFilter,
 }
 
+/// `s` without one pair of surrounding quotes, as a path copied from a shell has.
+fn unquote(s: &str) -> &str {
+    ['"', '\''].iter().find_map(|q| s.strip_prefix(*q)?.strip_suffix(*q)).unwrap_or(s)
+}
+
 /// What to run again once a missing secret has been entered.
 #[derive(Clone)]
 pub enum Retry {
@@ -2172,6 +2177,7 @@ impl App {
             Some((f, l)) if self.lib.locations.contains_key(l) || self.lib.remotes.contains_key(l) => (f.trim(), Some(l)),
             _ => (args, None),
         };
+        let file = unquote(file);
         if file.is_empty() || self.selected().is_none() {
             self.status = "usage: :attach <file.pdf> [location], with a reference selected".into();
             return;
@@ -3133,4 +3139,15 @@ fn unreadable(lib: &Library) -> String {
 /// Waits for `child` in the background, so it doesn't stay a zombie until yeda exits.
 fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || child.wait());
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unquotes_paths() {
+        assert_eq!(super::unquote("\"~/a b.pdf\""), "~/a b.pdf");
+        assert_eq!(super::unquote("'a.pdf'"), "a.pdf");
+        assert_eq!(super::unquote("~/a b.pdf"), "~/a b.pdf");
+        assert_eq!(super::unquote("\"a.pdf'"), "\"a.pdf'");
+    }
 }
