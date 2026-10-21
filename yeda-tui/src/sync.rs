@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use yeda_core::annotations;
 
 fn git(dir: &Path) -> Command {
@@ -21,10 +22,33 @@ fn stdout(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Runs in the terminal so git can ask for credentials itself.
-fn interactive(dir: &Path, args: &[&str]) -> Result<bool> {
-    Ok(git(dir).args(args).status().context("git")?.success())
+/// Where git's output goes as it runs, line by line.
+pub type Log<'a> = &'a (dyn Fn(String) + Sync);
+
+/// Runs git with its output going to `log`. The TUI stays on screen, so git must not ask for
+/// anything: credentials come from a credential helper or ssh-agent, else the command fails.
+fn streamed(dir: &Path, args: &[&str], log: Log) -> Result<bool> {
+    log(format!("$ git {}", args.join(" ")));
+    let mut command = git(dir);
+    command.args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    let mut child = command.spawn().context("git")?;
+    let lines = |out: Box<dyn Read + Send>| {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            log(line);
+        }
+    };
+    let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    std::thread::scope(|s| {
+        s.spawn(|| lines(Box::new(stderr)));
+        lines(Box::new(stdout));
+    });
+    Ok(child.wait().context("git")?.success())
 }
+
+const NO_CREDENTIALS: &str = "if it needs a password, set up a credential helper (gh auth setup-git for GitHub) or ssh-agent";
 
 /// Whether the library folder is the top of a repository; one inside another repository
 /// (dotfiles in the home folder, say) is not.
@@ -54,7 +78,7 @@ pub fn write_new(path: &Path, contents: &str) -> Result<()> {
 
 /// Makes the library folder a repository with everything committed; with `url`, adds it as
 /// `origin` and pushes there, so `run` works afterwards.
-pub fn init(dir: &Path, url: Option<&str>) -> Result<String> {
+pub fn init(dir: &Path, url: Option<&str>, log: Log) -> Result<String> {
     if own_repository(dir)? {
         bail!("the library folder is a git repository already");
     }
@@ -64,26 +88,26 @@ pub fn init(dir: &Path, url: Option<&str>) -> Result<String> {
     stdout(dir, &["commit", "-q", "-m", "yeda library"])?;
     let Some(url) = url else { return Ok("git repository created; git remote add origin <url> connects it for :sync".into()) };
     stdout(dir, &["remote", "add", "origin", url])?;
-    if !interactive(dir, &["push", "-q", "-u", "origin", "HEAD"])? {
-        bail!("created the repository and added {url} as origin, but git push failed");
+    if !streamed(dir, &["push", "-u", "origin", "HEAD"], log)? {
+        bail!("created the repository and added {url} as origin, but git push failed; {NO_CREDENTIALS}");
     }
     Ok(format!("git repository created and pushed to {url}"))
 }
 
 /// Commits everything, merges the upstream branch and pushes; returns what happened.
-pub fn run(dir: &Path) -> Result<String> {
+pub fn run(dir: &Path, log: Log) -> Result<String> {
     if !own_repository(dir)? {
         bail!("the library folder is not a git repository of its own; :git-init [url] makes it one");
     }
     add_all(dir)?;
     let committed = !output(dir, &["diff", "--cached", "--quiet"])?.status.success();
     if committed {
-        stdout(dir, &["commit", "-q", "-m", "yeda sync"])?;
+        log(stdout(dir, &["commit", "-m", "yeda sync"])?.trim_end().to_string());
     }
-    if !interactive(dir, &["pull", "--no-rebase", "--no-edit"])? {
+    if !streamed(dir, &["pull", "--no-rebase", "--no-edit"], log)? {
         let conflicts = stdout(dir, &["diff", "--name-only", "--diff-filter=U"])?;
         if conflicts.is_empty() {
-            bail!("git pull failed");
+            bail!("git pull failed; {NO_CREDENTIALS}");
         }
         // Left mid-merge, the next :sync would commit the conflict markers.
         if let Err(e) = resolve(dir, conflicts.lines()) {
@@ -91,8 +115,8 @@ pub fn run(dir: &Path) -> Result<String> {
             return Err(e);
         }
     }
-    if !interactive(dir, &["push", "-q"])? {
-        bail!("git push failed");
+    if !streamed(dir, &["push"], log)? {
+        bail!("git push failed; {NO_CREDENTIALS}");
     }
     Ok(if committed { "synced: committed local changes, pulled and pushed" } else { "synced: pulled and pushed" }.into())
 }
@@ -144,8 +168,8 @@ mod tests {
         let b = clone("b");
         write(&a, "[[annotation]]\nid = \"x\"\n");
         write(&b, "not toml [[\n");
-        run(&a).unwrap();
-        assert!(run(&b).is_err());
+        run(&a, &|_| {}).unwrap();
+        assert!(run(&b, &|_| {}).is_err());
         assert!(!b.join(".git/MERGE_HEAD").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
