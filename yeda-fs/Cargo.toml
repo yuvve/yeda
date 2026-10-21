@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["yuvve"]
 license = "AGPL-3.0-only"
-description = "Reads and writes a yeda library on the local filesystem"
+description = "yeda's reading and writing of a library on the local filesystem"
 repository = "https://github.com/yuvve/yeda"
 
 [dependencies]
