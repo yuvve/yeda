@@ -2,7 +2,7 @@
 
 <!-- The yeda-tui and yeda-android parts are copied from their READMEs by scripts/readme.py; edit those instead. -->
 <!-- yeda-tui -->
-**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with citation graphs, a download assistant that makes fetching PDFs easy, and LLM features such as paper discovery and summary tables.
+**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with a PDF reader built on Zotero's (so Zotero annotations carry over), citation graphs, a download assistant that makes fetching PDFs easy, LLM features such as paper discovery and summary tables, and an e-ink friendly companion Android app.
 
 **🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded 💩🤖**
 
@@ -13,7 +13,7 @@ yeda is a reference manager for the terminal, and an alternative to Zotero. Your
 From one terminal window, with vim keys, you can:
 - add references by DOI, arXiv ID or ISBN, or import your whole Zotero library;
 - organize them with collections, tags, reading status, search and saved searches;
-- read and annotate PDFs in the built-in reader, and keep Markdown notes;
+- read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes;
 - find PDFs, open access or through your library's proxy;
 - explore citation graphs of what a paper cites and what cites it;
 - compare papers in literature tables an LLM fills in, and find related papers;
@@ -163,11 +163,11 @@ On first start, pick the library folder with the system folder picker and allow 
 - **Filter**: a form for searching by field. **▲ key** sorts.
 - **⟳**: git sync. **⚙**: settings.
 
-Tap a paper to open it. There you open or replace its PDF, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
+Tap a paper to open it. There you open its PDFs or add one, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
 
 ### Reading and annotating
 
-The reader is the same as on the desktop. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
+The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
 
 PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
 

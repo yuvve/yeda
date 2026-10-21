@@ -1,7 +1,7 @@
 # yeda-tui
 
 <!-- embed -->
-**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with citation graphs, a download assistant that makes fetching PDFs easy, and LLM features such as paper discovery and summary tables.
+**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with a PDF reader built on Zotero's (so Zotero annotations carry over), citation graphs, a download assistant that makes fetching PDFs easy, LLM features such as paper discovery and summary tables, and an e-ink friendly companion Android app.
 
 **🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded 💩🤖**
 
@@ -12,7 +12,7 @@ yeda is a reference manager for the terminal, and an alternative to Zotero. Your
 From one terminal window, with vim keys, you can:
 - add references by DOI, arXiv ID or ISBN, or import your whole Zotero library;
 - organize them with collections, tags, reading status, search and saved searches;
-- read and annotate PDFs in the built-in reader, and keep Markdown notes;
+- read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes;
 - find PDFs, open access or through your library's proxy;
 - explore citation graphs of what a paper cites and what cites it;
 - compare papers in literature tables an LLM fills in, and find related papers;
