@@ -120,6 +120,8 @@ function filterLabel(f: Filter): string {
 	}
 }
 
+const VIEW_KEY = 'yeda-browser-view';
+
 /** Shows the library browser; `openReader` switches to the reader once a PDF is open. */
 /** Returns the Back handler: true if it went back to the list, false if already there. */
 export function showBrowser(openReader: () => void): () => boolean {
@@ -137,8 +139,11 @@ export function showBrowser(openReader: () => void): () => boolean {
 	document.body.append(style, root);
 
 	let overview: Overview = { sidebar: [], statuses: [], filter_fields: [], sort_fields: [], locations: [], git: null };
-	let filter: Filter = { kind: 'all' };
-	let sort: Sort = { field: 'key', descending: false };
+	// Opening the reader reloads the page, so the list's view has to outlive it.
+	const saved = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}');
+	let filter: Filter = saved.filter ?? { kind: 'all' };
+	let sort: Sort = saved.sort ?? { field: 'key', descending: false };
+	search.value = saved.query ?? '';
 
 	const say = (text: string) => {
 		status.textContent = text;
@@ -213,6 +218,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 
 	async function showList() {
 		const rows = await invoke<Row[]>('list', { filter, query: search.value, sort });
+		localStorage.setItem(VIEW_KEY, JSON.stringify({ filter, sort, query: search.value }));
 		const list = h('ul', {}, ...rows.map(r => h('li', { onclick: () => run(() => showDetails(r.key)) },
 			h('div', {}, `${GLYPHS[r.status ?? ''] ?? '·'} `, r.title || r.key),
 			h('div', { className: 'meta' }, [r.authors[0]?.split(',')[0], r.year].filter(Boolean).join(' · '),
