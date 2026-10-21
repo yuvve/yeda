@@ -171,6 +171,19 @@ FETCHING PDFS  ( :fetch [location] )
     proxies = ["https://proxy.example.edu/login?url={url}"]  # in order
     # downloads = "~/yeda-downloads"   the window's own download folder
 
+THE COMMAND LINE  ( : )
+
+    Left Right Home End    move the cursor (Ctrl-A Ctrl-E: start / end)
+    Backspace Delete       delete before / at the cursor
+    Ctrl-W Ctrl-U          delete the word / everything before the cursor
+    Tab Shift-Tab          complete the last word
+    Up Down                earlier / later commands
+    Ctrl-R                 past commands containing what is typed (:history)
+    Ctrl-G, Ctrl-X Ctrl-E  edit the command in $EDITOR; it comes back here
+
+  The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
+  searches, the filter form, :setup and the tag and collection pickers.
+
 KEY BINDINGS
 
   Every key runs a command line, and every action is a command, so :down

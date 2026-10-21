@@ -326,7 +326,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     match &app.completion {
         Some(c) if app.mode == Mode::Prompt(Prompt::Command) => {
-            let mut spans = vec![Span::raw(status), Span::raw("   ")];
+            let mut spans = vec![Span::raw(status.clone()), Span::raw("   ")];
             // A few earlier candidates stay in view for context.
             for (i, candidate) in c.candidates.iter().enumerate().skip(c.at.saturating_sub(3)) {
                 let span = Span::raw(candidate.clone());
@@ -335,7 +335,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
             f.render_widget(Paragraph::new(Line::from(spans)), bar);
         }
-        _ => f.render_widget(Paragraph::new(status), bar),
+        _ => f.render_widget(Paragraph::new(status.clone()), bar),
+    }
+    let typed = match app.mode {
+        Mode::Search => Some(&app.query),
+        Mode::SideSearch => Some(&app.side_query),
+        Mode::Prompt(Prompt::Secret | Prompt::Add) => None,
+        Mode::Prompt(_) | Mode::Pick => Some(&app.input),
+        _ => None,
+    };
+    if let Some(typed) = typed {
+        let back = app.cursor_back.min(typed.chars().count());
+        let after: String = typed.chars().skip(typed.chars().count() - back).collect();
+        let x = Line::from(status).width().saturating_sub(Line::from(after).width()) as u16;
+        f.set_cursor_position(Position { x: bar.x + x.min(bar.width.saturating_sub(1)), y: bar.y });
     }
     let anchor = if list.is_empty() { main } else { list };
     if let Some(c) = &app.chooser {
@@ -362,6 +375,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
         Mode::PdfPick => draw_pdf_pick(f, app, main),
+        Mode::History => draw_history(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
         Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
@@ -381,8 +395,8 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
         .zip(&form.values)
         .enumerate()
         .map(|(i, (label, value))| {
-            let cursor = if i == form.sel { "▏" } else { "" };
-            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            let value = if i == form.sel { with_cursor(value, app.cursor_back) } else { value.clone() };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(value)]);
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
@@ -409,8 +423,8 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         .enumerate()
         .map(|(i, ((label, _), value))| {
             let value = if form.masked(i) { "•".repeat(value.chars().count()) } else { value.clone() };
-            let cursor = if i == form.sel { "▏" } else { "" };
-            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            let value = if i == form.sel { with_cursor(&value, app.cursor_back) } else { value.clone() };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(value)]);
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
@@ -500,6 +514,26 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
 
 fn pdf_name(pdf: &Pdf) -> &str {
     pdf.path.rsplit('/').next().unwrap_or(&pdf.path)
+}
+
+/// `value` with a bar where the cursor is, `back` characters from the end.
+fn with_cursor(value: &str, back: usize) -> String {
+    let at = value.chars().count().saturating_sub(back);
+    value.chars().take(at).chain(std::iter::once('▏')).chain(value.chars().skip(at)).collect()
+}
+
+fn draw_history(f: &mut Frame, app: &App, main: Rect) {
+    let width = main.width.saturating_sub(4).min(100);
+    let items: Vec<ListItem> = app.history_matches().into_iter().map(|c| ListItem::new(format!(":{c}"))).collect();
+    let height = (items.len().max(1) as u16 + 2).min(main.height.saturating_sub(2));
+    let area = popup(main, width, height);
+    f.render_widget(Clear, area);
+    let title = if app.history_filter.is_empty() { " History · Enter edits ".into() } else { format!(" History: {} · Enter edits ", app.history_filter) };
+    f.render_stateful_widget(
+        List::new(items).block(block(title, true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.history_sel)),
+    );
 }
 
 fn draw_pdf_pick(f: &mut Frame, app: &App, main: Rect) {
