@@ -1,4 +1,4 @@
-use crate::{citations, fetch, poppler};
+use crate::{citations, fetch, poppler, undo};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use crate::keys::{self, Keymap, Lookup};
@@ -94,6 +94,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("move", "move to a collection"),
     ("status-next", "next reading status"),
     ("status-prev", "previous reading status"),
+    ("undo", "undo the last command's changes to the library"),
+    ("redo", "redo what undo took back"),
     ("annotations", "show annotations"),
     ("extract", "extract the annotations embedded in the PDF"),
     ("tag-color", "colour the selected tag (library column)"),
@@ -408,6 +410,7 @@ impl GraphView {
 
 struct FetchJob {
     rx: Receiver<fetch::Msg>,
+    step: undo::Step,
     location: String,
     password: Option<String>,
     added: Vec<String>,
@@ -425,6 +428,7 @@ struct GraphJob {
 }
 
 pub struct Batch {
+    step: undo::Step,
     todo: std::collections::VecDeque<String>,
     total: usize,
     added: Vec<String>,
@@ -478,6 +482,7 @@ enum WorkerMsg {
 
 struct Summarizer {
     rx: Receiver<WorkerMsg>,
+    step: undo::Step,
     cancel: Arc<AtomicBool>,
     table: String,
     overwrite: bool,
@@ -489,6 +494,10 @@ struct Summarizer {
 
 pub struct App {
     pub dir: PathBuf,
+    /// What commands wrote, to undo; a `RefCell` so writes from `&self` are recorded too.
+    undo: std::cell::RefCell<undo::History>,
+    /// The command running now, which writes are recorded under.
+    step: undo::Step,
     /// Secrets entered or read this session, by secret-store account.
     secrets: std::collections::HashMap<String, String>,
     /// Accounts whose stored secret the server rejected, so the store is skipped until a new one is entered.
@@ -621,6 +630,8 @@ impl App {
             pdf_chosen: HashMap::new(),
             table_sel: 0,
             log: crate::log::Log::open(),
+            undo: Default::default(),
+            step: undo::Step::default(),
             dir,
             sidebar: browse::sidebar(&lib),
             side_query: String::new(),
@@ -772,13 +783,33 @@ impl App {
 
     /// Applies `effects` to the library on disk; on failure, says so in the status line.
     fn apply(&mut self, effects: anyhow::Result<Vec<Effect>>) -> bool {
-        match effects.and_then(|e| yeda_fs::apply(&self.dir, e)) {
+        match effects.and_then(|e| self.write(&self.step, e)) {
             Ok(()) => true,
             Err(e) => {
                 self.status = format!("{e:#}");
                 false
             }
         }
+    }
+
+    /// Applies `effects`, recording them under `step` for undo.
+    fn write(&self, step: &undo::Step, effects: impl IntoIterator<Item = Effect>) -> anyhow::Result<()> {
+        self.undo.borrow_mut().apply(&self.dir, step, effects)
+    }
+
+    fn undo_or_redo(&mut self, redo: bool) {
+        let result = {
+            let mut history = self.undo.borrow_mut();
+            if redo { history.redo(&self.dir) } else { history.undo(&self.dir) }
+        };
+        self.status = match result {
+            Ok((label, n)) => {
+                self.reload();
+                let what = if label.is_empty() { String::new() } else { format!(" :{label}") };
+                format!("{}{what} ({n} file{})", if redo { "redid" } else { "undid" }, if n == 1 { "" } else { "s" })
+            }
+            Err(e) => format!("{e:#}"),
+        };
     }
 
     fn path(&self, rel: &str) -> PathBuf {
@@ -804,6 +835,10 @@ impl App {
             return;
         }
         self.status.clear();
+        // Each key press is a new command for undo, unless it continues one (a confirmation, a pick).
+        if matches!(self.mode, Mode::Normal | Mode::Prompt(Prompt::Command)) {
+            self.step = undo::Step { id: self.step.id + 1, label: String::new() };
+        }
         // A key here starts a new command, so earlier picks no longer apply.
         if matches!(self.mode, Mode::Normal | Mode::Prompt(Prompt::Command)) {
             self.pdf_chosen.clear();
@@ -1086,6 +1121,8 @@ impl App {
             }
             "status-next" => self.cycle_status(true),
             "status-prev" => self.cycle_status(false),
+            "undo" => self.undo_or_redo(false),
+            "redo" => self.undo_or_redo(true),
             "column" => self.focus = !self.focus,
             "filter" => self.open_filter(),
             "sort" => {
@@ -1823,6 +1860,9 @@ impl App {
     }
 
     fn submit(&mut self, p: Prompt, text: &str) {
+        if p == Prompt::Command && self.step.label.is_empty() {
+            self.step.label = text.to_string();
+        }
         match p {
             Prompt::Command => match text.split_once(' ').unwrap_or((text, "")) {
                 ("q" | "q!" | "quit", _) => self.quit = true,
@@ -1931,7 +1971,7 @@ impl App {
             Prompt::Add if !ids::split_ids(text).is_empty() => {
                 let todo: std::collections::VecDeque<String> = ids::split_ids(text).into_iter().map(Into::into).collect();
                 self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
-                self.job = Some(Job::Fetch(Batch { total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
+                self.job = Some(Job::Fetch(Batch { step: self.step.clone(), total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
             }
             _ => {}
         }
@@ -2137,6 +2177,7 @@ impl App {
         });
         self.summarizer = Some(Summarizer {
             rx,
+            step: self.step.clone(),
             cancel,
             table: table_name,
             overwrite,
@@ -2160,7 +2201,7 @@ impl App {
                 Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
                     if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
                         tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
-                        let saved = self.lib.save_ai(&self.lib.refs[i]).and_then(|e| yeda_fs::apply(&self.dir, [e]));
+                        let saved = self.lib.save_ai(&self.lib.refs[i]).and_then(|e| self.undo.borrow_mut().apply(&self.dir, &s.step, [e]));
                         if let Err(e) = saved {
                             s.failed.push(format!("{key}: {e:#}"));
                         }
@@ -2457,7 +2498,7 @@ impl App {
                 let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&r.key, p)))?;
                 let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
                 let (n, effects) = annotations::sync_from_pdf(&dir, existing.as_deref(), &bytes, Some(&words), &mut render)?;
-                yeda_fs::apply(&self.dir, effects)?;
+                self.write(&self.step, effects)?;
                 Ok(n)
             })?;
         }
@@ -2511,13 +2552,13 @@ impl App {
     }
 
     /// Fetches and saves one identifier; returns its key and whether it was already in the library.
-    fn add_one(&mut self, input: &str) -> anyhow::Result<(String, bool)> {
+    fn add_one(&mut self, input: &str, step: &undo::Step) -> anyhow::Result<(String, bool)> {
         let mut r = wand::fetch(input)?;
         if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) {
             return Ok((x.key.clone(), true));
         }
         r.key = self.lib.unique_key(&r);
-        yeda_fs::apply(&self.dir, vec![self.lib.save(&r)?])?;
+        self.write(step, vec![self.lib.save(&r)?])?;
         self.reload();
         Ok((r.key, false))
     }
@@ -2525,7 +2566,7 @@ impl App {
     /// Adds the batch's next identifier, then queues the rest so the status line shows progress.
     fn add_next(&mut self, mut batch: Batch) {
         let Some(input) = batch.todo.pop_front() else { return self.finish_batch(batch) };
-        match self.add_one(&input) {
+        match self.add_one(&input, &batch.step) {
             Ok((key, true)) => batch.existed.push(key),
             Ok((key, false)) => batch.added.push(key),
             Err(e) => batch.failed.push((input, format!("{e:#}"))),
@@ -3188,7 +3229,7 @@ impl App {
         let openalex_key = self.openalex_key();
         let request = fetch::Request { items, settings: self.lib.fulltext.clone(), downloads, openalex_key };
         self.status = "fetch: starting…".into();
-        self.fetch_job = Some(FetchJob { rx: fetch::spawn(request), location, password, added: vec![], failed: vec![] });
+        self.fetch_job = Some(FetchJob { rx: fetch::spawn(request), step: self.step.clone(), location, password, added: vec![], failed: vec![] });
     }
 
     /// Attaches fetched PDFs as they arrive; called from the event loop.
@@ -3230,7 +3271,7 @@ impl App {
             }
         }
         let r = self.attach_file(i, file, &job.location, job.password.as_deref())?;
-        yeda_fs::apply(&self.dir, [self.lib.save(&r)?])?;
+        self.write(&job.step, [self.lib.save(&r)?])?;
         self.lib.refs[i] = r;
         // Only once it is stored, so a failed upload leaves the download to retry with.
         let _ = fs::remove_file(file);

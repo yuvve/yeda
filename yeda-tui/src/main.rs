@@ -11,6 +11,7 @@ mod setup;
 mod sync;
 mod table;
 mod ui;
+mod undo;
 mod wizard;
 
 use anyhow::{Context, Result};
