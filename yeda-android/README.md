@@ -23,11 +23,11 @@ On first start, pick the library folder with the system folder picker and allow 
 - **Filter**: a form for searching by field. **▲ key** sorts.
 - **⟳**: git sync. **⚙**: settings.
 
-Tap a paper to open it. There you open or replace its PDF, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
+Tap a paper to open it. There you open its PDFs or add one, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
 
 ## Reading and annotating
 
-The reader is the same as on the desktop. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
+The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink.
 
 PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
 
