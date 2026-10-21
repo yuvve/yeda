@@ -1,6 +1,6 @@
 use crate::table;
 use yeda_core::clusters::Kind;
-use crate::app::{ACTIONS, App, GraphTab, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView};
+use crate::app::{ACTIONS, App, GraphTab, COMMANDS, FilterForm, GUIDE, HelpPage, Mode, NOTES, Pane, PickKind, Prompt, RightView, TEXT_KEYS};
 use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
@@ -647,6 +647,9 @@ fn key_help(keymap: &Keymap) -> Vec<Line<'static>> {
         rows.push((format!("[{context}]"), if context == "normal" { "everywhere".into() } else { format!("in the {context} column") }));
         rows.extend(grouped.into_iter().map(|(command, keys)| (keys.join(" "), describe(&command))));
     }
+    rows.push((String::new(), String::new()));
+    rows.push(("[text boxes]".into(), "the command line, searches, forms and pickers".into()));
+    rows.extend(TEXT_KEYS.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     rows.push((String::new(), String::new()));
     rows.extend(COMMANDS.iter().chain(NOTES).map(|(k, v)| (k.to_string(), v.to_string())));
     let width = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);

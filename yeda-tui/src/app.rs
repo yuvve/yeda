@@ -172,6 +172,17 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":<action>", "any action above, such as :annotations"),
 ];
 
+/// Editing keys of the command line and every other text box; fixed, not in the keymap.
+pub const TEXT_KEYS: &[(&str, &str)] = &[
+    ("Left Right Home End", "move the cursor (Ctrl-A Ctrl-E: start / end)"),
+    ("Backspace Delete", "delete before / at the cursor"),
+    ("Ctrl-W Ctrl-U", "delete the word / everything before the cursor"),
+    ("Ctrl-G", "edit the text in $EDITOR (on the command line also Ctrl-X Ctrl-E)"),
+    ("Tab Shift-Tab", "on the command line: complete the last word"),
+    ("Up Down", "on the command line: earlier / later commands"),
+    ("Ctrl-R", "on the command line: past commands containing what is typed (:history)"),
+];
+
 pub const NOTES: &[(&str, &str)] = &[
     ("mouse", "a click selects and focuses; the wheel moves the selection, or scrolls the graph"),
     ("narrow", "below 120 columns the right column is hidden, below 80 the library column too"),
