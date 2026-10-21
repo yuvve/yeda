@@ -159,6 +159,23 @@ fn draw_annotations(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Shares `spare` columns of width between the columns narrower than they `want`, evenly, none
+/// past what it wants.
+fn widen(widths: &mut [u16], want: &[u16], mut spare: u16) {
+    loop {
+        let short: Vec<usize> = (0..widths.len()).filter(|&i| widths[i] < want[i]).collect();
+        if short.is_empty() || spare == 0 {
+            return;
+        }
+        let share = (spare / short.len() as u16).max(1);
+        for i in short {
+            let more = share.min(want[i] - widths[i]).min(spare);
+            widths[i] += more;
+            spare -= more;
+        }
+    }
+}
+
 fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = app.table_rows();
     let focused = app.pane == Pane::Right;
@@ -166,15 +183,15 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let columns: Vec<String> = table::columns(&app.lib, &t.name).into_iter().map(|c| c.name).collect();
     t.row = t.row.min(rows.len().saturating_sub(1));
     t.col = t.col.min(columns.len().saturating_sub(1));
-    let widths: Vec<u16> = columns
+    let wants: Vec<u16> = columns
         .iter()
         .enumerate()
         .map(|(c, name)| {
             let widest = rows.iter().map(|r| r[c].lines().next().unwrap_or_default().chars().count()).max().unwrap_or(0);
-            let cap = if name == "key" { 20 } else { 40 };
-            widest.max(name.chars().count()).clamp(4, cap) as u16
+            widest.max(name.chars().count()).max(4).min(u16::MAX as usize) as u16
         })
         .collect();
+    let mut widths: Vec<u16> = columns.iter().zip(&wants).map(|(name, &w)| w.min(if name == "key" { 20 } else { 40 })).collect();
     let vis = t.visible(columns.len());
     if !vis.contains(&t.col) {
         t.col = vis.iter().copied().find(|&c| c > t.col).or(vis.last().copied()).unwrap_or(0);
@@ -192,6 +209,14 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let mut right = at + 1;
     while right < vis.len() && fits(t.left, right) {
         right += 1;
+    }
+    if t.left == 0 && right == vis.len() {
+        let spare = inner.width.saturating_sub(vis.iter().map(|&c| widths[c] + 1).sum());
+        let mut shown: Vec<u16> = vis.iter().map(|&c| widths[c]).collect();
+        widen(&mut shown, &vis.iter().map(|&c| wants[c]).collect::<Vec<_>>(), spare);
+        for (&c, w) in vis.iter().zip(shown) {
+            widths[c] = w;
+        }
     }
     let mut title = format!("Table {} ({})", t.name, rows.len());
     if let Some((c, descending)) = t.sort {
@@ -1029,4 +1054,17 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items).block(Block::bordered().title(Line::from(title)).border_style(border)).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, bottom, &mut state);
     clickable(app, Pane::Right, bottom, Some(state.offset()));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn widens_cut_off_columns_into_spare_room() {
+        let mut widths = [20, 40, 40, 10];
+        super::widen(&mut widths, &[20, 120, 45, 10], 30);
+        assert_eq!(widths, [20, 65, 45, 10]);
+        let mut widths = [40, 40];
+        super::widen(&mut widths, &[100, 100], 11);
+        assert_eq!(widths, [46, 45]);
+    }
 }
