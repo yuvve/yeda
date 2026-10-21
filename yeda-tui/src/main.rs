@@ -79,7 +79,7 @@ fn wizard(import: bool) -> Result<()> {
             }
         }
         let lib = load_library(dir)?;
-        let sources: std::collections::BTreeSet<String> = lib.refs.iter().filter_map(|r| Some(r.pdf.as_ref()?.location.clone())).filter(|l| *l != a.name).collect();
+        let sources: std::collections::BTreeSet<String> = lib.refs.iter().flat_map(|r| &r.pdfs).map(|p| p.location.clone()).filter(|l| *l != a.name).collect();
         for from in sources {
             copy_pdfs(&from, &a.name, dir)?;
         }
@@ -367,17 +367,19 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
     let mut zotero_password: Option<String> = None;
     let password = |name: &str| lib.remotes.get(name).map(dav_password).transpose();
     let (from_password, to_password) = (password(from)?, password(to)?);
-    let todo: Vec<usize> = (0..lib.refs.len()).filter(|&i| lib.refs[i].pdf.as_ref().is_some_and(|p| p.location == from)).collect();
+    let todo: Vec<(usize, usize)> =
+        lib.refs.iter().enumerate().flat_map(|(i, r)| r.pdfs.iter().enumerate().filter(|(_, p)| p.location == from).map(move |(j, _)| (i, j))).collect();
     let mut failed = Vec::new();
-    for (n, &i) in todo.iter().enumerate() {
+    for (n, &(i, j)) in todo.iter().enumerate() {
         let key = lib.refs[i].key.clone();
         eprint!("\r{}/{} {key:<40}", n + 1, todo.len());
         let result = (|| -> Result<library::Ref> {
             let r = &lib.refs[i];
-            let bytes = match (lib.remote_pdf(r), &from_password) {
+            let pdf = &r.pdfs[j];
+            let bytes = match (lib.remote_pdf(pdf), &from_password) {
                 (Some(remote), Some(p)) => yeda_net::webdav::download(remote.dav, p, &remote.path)?.0,
                 _ => {
-                    let path = lib.pdf_path(r)?;
+                    let path = lib.pdf_path(pdf)?;
                     match (fs::read(&path), &zotero_dav) {
                         (Ok(bytes), _) => bytes,
                         (Err(e), Some(z)) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -385,18 +387,19 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
                                 Some(p) => p.clone(),
                                 None => zotero_password.insert(dav_password(z)?).clone(),
                             };
-                            from_zotero_webdav(z, &password, &r.pdf.as_ref().unwrap().path)?
+                            from_zotero_webdav(z, &password, &pdf.path)?
                         }
                         (Err(e), _) => return Err(anyhow::Error::from(e).context(path.display().to_string())),
                     }
                 }
             };
-            let old = r.pdf.as_ref().unwrap().path.clone();
+            // The copy keeps its id, and so its annotations.
+            let copy = library::Pdf { id: pdf.id.clone(), ..lib.attach(r, to, &pdf.path)? };
             let mut r = r.clone();
-            r.pdf = Some(lib.attach(&r, to, &old)?);
-            let dest = lib.pdf_path(&r)?;
+            r.pdfs[j] = copy.clone();
+            let dest = lib.pdf_path(&copy)?;
             yeda_fs::write_atomic(&dest, &bytes)?;
-            if let (Some(remote), Some(p)) = (lib.remote_pdf(&r), &to_password) {
+            if let (Some(remote), Some(p)) = (lib.remote_pdf(&copy), &to_password) {
                 yeda_net::webdav::upload(remote.dav, p, &remote.path, &bytes)?;
                 yeda_fs::set_cached_version(&dest, yeda_net::webdav::current_version(remote.dav, p, &remote.path)?.as_deref())?;
             }

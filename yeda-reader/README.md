@@ -6,7 +6,7 @@ A desktop PDF reader and annotator with vim keys, built on Tauri v2 and a fork o
 yeda-reader <file.pdf> [--annotations <dir>] [--page N]
 ```
 
-Annotations are stored in `<dir>/annotations.toml`, merged by `id`. Image and ink annotations also get a PNG in `<dir>/img/`. Without `--annotations`, the folder is `<file.pdf>.annotations/`. yeda-tui passes `annotations/<citekey>` of the library.
+Annotations are stored in `<dir>/annotations.toml`, merged by `id`. Image and ink annotations also get a PNG in `<dir>/img/`. Without `--annotations`, the folder is `<file.pdf>.annotations/`. yeda-tui passes the PDF's `annotations/<citekey>/<pdf id>` of the library.
 
 ## Building
 

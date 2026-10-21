@@ -188,11 +188,11 @@ Settings → WebDAV location adds a WebDAV folder for PDFs after a test login. S
   refs/<citekey>.toml                     # one reference each
   notes/<citekey>.md                      # your notes
   notes/<citekey>.ai.toml                 # what an LLM wrote for the tables
-  annotations/<citekey>/annotations.toml  # annotations
-  annotations/<citekey>/img/<id>.png      # image and ink annotations
+  annotations/<citekey>/<pdf>/annotations.toml  # annotations on one PDF
+  annotations/<citekey>/<pdf>/img/<id>.png      # image and ink annotations
 ```
 
-PDFs are kept outside the library folder, in *locations*: local folders or WebDAV folders, each holding `<citekey>/<file>`. WebDAV PDFs are cached locally.
+PDFs are kept outside the library folder, in *locations*: local folders or WebDAV folders, each holding `<citekey>/<file>`. WebDAV PDFs are cached locally. A reference can have several PDFs, each a `[[pdf]]` entry whose `id` names its annotations folder.
 
 ### Shared settings
 

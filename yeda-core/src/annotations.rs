@@ -39,9 +39,9 @@ struct Sidecar {
     annotations: Vec<Annotation>,
 }
 
-/// `annotations/<key>/annotations.toml`.
-pub fn file_path(key: &str) -> String {
-    format!("{}/{FILE}", crate::library::annotations_dir(key))
+/// `annotations/<key>/<pdf id>/annotations.toml`.
+pub fn file_path(key: &str, pdf: &crate::library::Pdf) -> String {
+    format!("{}/{FILE}", crate::library::pdf_annotations_dir(key, pdf))
 }
 
 pub fn parse(text: &str) -> Result<Vec<Annotation>> {

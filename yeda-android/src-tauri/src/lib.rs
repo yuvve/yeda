@@ -10,7 +10,7 @@ use tauri::ipc::Response;
 use tauri::{AppHandle, Manager, State};
 use yeda_core::annotations::{self, Annotation};
 use yeda_core::browse::{self, Filter, Sort, SortField};
-use yeda_core::library::{self, Library, Ref, config_section};
+use yeda_core::library::{self, Library, Pdf, Ref, config_section};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use yeda_core::Effect;
 use yeda_reader_lib::{Current, Doc};
@@ -88,19 +88,25 @@ impl Browser {
         self.apply(vec![self.lib.save(&self.lib.refs[i])?])
     }
 
-    fn pdf(&self, key: &str) -> anyhow::Result<Vec<u8>> {
-        let pdf = self.lib.pdf_path(self.get(key)?)?;
-        std::fs::read(&pdf).with_context(|| pdf.display().to_string())
+    /// Reference `key`'s PDF with id `pdf`.
+    fn get_pdf(&self, key: &str, pdf: &str) -> anyhow::Result<&Pdf> {
+        self.get(key)?.pdfs.iter().find(|p| p.id == pdf).with_context(|| format!("{key} has no PDF {pdf}"))
     }
 
-    /// Runs `sync_from_pdf` for `key` with `words` (`pdftotext -bbox` format) and `render_png`.
-    fn sync_from_pdf(&self, key: &str, words: Option<&str>, render_png: &mut annotations::RenderPng) -> anyhow::Result<(usize, Vec<Effect>)> {
-        let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(key))?)?;
-        annotations::sync_from_pdf(&library::annotations_dir(key), existing.as_deref(), &self.pdf(key)?, words, render_png)
+    fn pdf(&self, key: &str, pdf: &str) -> anyhow::Result<Vec<u8>> {
+        let path = self.lib.pdf_path(self.get_pdf(key, pdf)?)?;
+        std::fs::read(&path).with_context(|| path.display().to_string())
     }
 
-    fn annotations(&self, key: &str) -> anyhow::Result<Vec<Annotation>> {
-        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key))?)?;
+    /// Runs `sync_from_pdf` for one of `key`'s PDFs with `words` (`pdftotext -bbox` format) and `render_png`.
+    fn sync_from_pdf(&self, key: &str, pdf: &str, words: Option<&str>, render_png: &mut annotations::RenderPng) -> anyhow::Result<(usize, Vec<Effect>)> {
+        let p = self.get_pdf(key, pdf)?;
+        let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(key, p))?)?;
+        annotations::sync_from_pdf(&library::pdf_annotations_dir(key, p), existing.as_deref(), &self.pdf(key, pdf)?, words, render_png)
+    }
+
+    fn annotations(&self, key: &str, pdf: &Pdf) -> anyhow::Result<Vec<Annotation>> {
+        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key, pdf))?)?;
         Ok(text.as_deref().map(annotations::parse).transpose()?.unwrap_or_default())
     }
 }
@@ -244,7 +250,7 @@ fn list(app: AppHandle, state: State<Shared>, filter: Filter, query: String, sor
                     year: r.year,
                     status: r.status.clone(),
                     tags: r.tags.clone(),
-                    has_pdf: r.pdf.is_some(),
+                    has_pdf: !r.pdfs.is_empty(),
                 }
             })
             .collect())
@@ -282,7 +288,15 @@ struct Details {
     reference: Ref,
     raw: String,
     note: String,
-    annotations: Vec<Annotation>,
+    annotations: Vec<PdfAnnotation>,
+}
+
+#[derive(Serialize)]
+struct PdfAnnotation {
+    /// The id of the PDF it is on.
+    pdf: String,
+    #[serde(flatten)]
+    annotation: Annotation,
 }
 
 #[tauri::command]
@@ -291,14 +305,18 @@ fn details(app: AppHandle, state: State<Shared>, key: String) -> Res<Details> {
         let reference = b.get(&key)?.clone();
         let raw = yeda_fs::read_optional(&b.path(&library::ref_path(&key))?)?.unwrap_or_default();
         let note = yeda_fs::read_optional(&b.path(&library::note_path(&key))?)?.unwrap_or_default();
-        Ok(Details { annotations: b.annotations(&key)?, key, reference, raw, note })
+        let mut annotations = Vec::new();
+        for pdf in &reference.pdfs {
+            annotations.extend(b.annotations(&key, pdf)?.into_iter().map(|annotation| PdfAnnotation { pdf: pdf.id.clone(), annotation }));
+        }
+        Ok(Details { annotations, key, reference, raw, note })
     })
 }
 
 #[tauri::command]
-fn annotation_image(app: AppHandle, state: State<Shared>, key: String, image: String) -> Res<Response> {
+fn annotation_image(app: AppHandle, state: State<Shared>, key: String, pdf: String, image: String) -> Res<Response> {
     state.with(&app, |b| {
-        let dir = b.path(&library::annotations_dir(&key))?;
+        let dir = b.path(&library::pdf_annotations_dir(&key, b.get_pdf(&key, &pdf)?))?;
         let path = dir.join(&image);
         anyhow::ensure!(path.starts_with(&dir) && !image.contains(".."), "invalid image path {image}");
         Ok(Response::new(std::fs::read(&path).with_context(|| path.display().to_string())?))
@@ -378,10 +396,10 @@ fn save_note(app: AppHandle, state: State<Shared>, key: String, text: String) ->
     })
 }
 
-/// The PDF of reference `key`, for pdf.js in the WebView, which stands in for poppler on Android.
+/// A PDF of reference `key`, for pdf.js in the WebView, which stands in for poppler on Android.
 #[tauri::command]
-fn ref_pdf(app: AppHandle, state: State<Shared>, key: String) -> Res<Response> {
-    state.with(&app, |b| Ok(Response::new(b.pdf(&key)?)))
+fn ref_pdf(app: AppHandle, state: State<Shared>, key: String, pdf: String) -> Res<Response> {
+    state.with(&app, |b| Ok(Response::new(b.pdf(&key, &pdf)?)))
 }
 
 #[derive(Serialize)]
@@ -395,10 +413,10 @@ struct Region {
 
 /// The regions `extract_annotations` needs rendered, in the order it asks for them.
 #[tauri::command]
-fn pdf_image_regions(app: AppHandle, state: State<Shared>, key: String) -> Res<Vec<Region>> {
+fn pdf_image_regions(app: AppHandle, state: State<Shared>, key: String, pdf: String) -> Res<Vec<Region>> {
     state.with(&app, |b| {
         let mut regions = Vec::new();
-        b.sync_from_pdf(&key, None, &mut |page, height, rect| {
+        b.sync_from_pdf(&key, &pdf, None, &mut |page, height, rect| {
             regions.push(Region { page, height, rect });
             None
         })?;
@@ -409,10 +427,10 @@ fn pdf_image_regions(app: AppHandle, state: State<Shared>, key: String) -> Res<V
 /// `words` and `images` come from pdf.js: the page words in `pdftotext -bbox` format, and a PNG
 /// (or null) for each of `pdf_image_regions` in order.
 #[tauri::command]
-fn extract_annotations(app: AppHandle, state: State<Shared>, key: String, words: Option<String>, images: Vec<Option<Vec<u8>>>) -> Res<usize> {
+fn extract_annotations(app: AppHandle, state: State<Shared>, key: String, pdf: String, words: Option<String>, images: Vec<Option<Vec<u8>>>) -> Res<usize> {
     state.with(&app, |b| {
         let mut images = images.into_iter();
-        let (n, effects) = b.sync_from_pdf(&key, words.as_deref(), &mut |_, _, _| images.next().flatten())?;
+        let (n, effects) = b.sync_from_pdf(&key, &pdf, words.as_deref(), &mut |_, _, _| images.next().flatten())?;
         b.apply(effects)?;
         Ok(n)
     })
@@ -539,16 +557,16 @@ async fn transfer(
     }
 }
 
-/// Opens the PDF of reference `key`, with its annotations in `<library>/annotations/<key>`;
-/// a PDF on WebDAV is downloaded into the cache first.
+/// Opens reference `key`'s PDF with id `pdf`, with its annotations in
+/// `<library>/annotations/<key>/<pdf>`; a PDF on WebDAV is downloaded into the cache first.
 #[tauri::command]
-async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, Current>, key: String) -> Res<OpenRef> {
-    let (pdf, remote) = state.with(&app, |b| {
-        let r = b.get(&key)?;
-        let remote = b.lib.remote_pdf(r).map(|rp| (rp.dav.clone(), rp.path));
-        Ok((b.lib.pdf_path(r).ok(), remote))
+async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, Current>, key: String, pdf: String) -> Res<OpenRef> {
+    let (path, remote, location, annotations) = state.with(&app, |b| {
+        let p = b.get_pdf(&key, &pdf)?;
+        let remote = b.lib.remote_pdf(p).map(|rp| (rp.dav.clone(), rp.path));
+        Ok((b.lib.pdf_path(p).ok(), remote, p.location.clone(), b.path(&library::pdf_annotations_dir(&key, p))?))
     })?;
-    if let (Some(path), Some((dav, remote_path))) = (&pdf, remote) {
+    if let (Some(path), Some((dav, remote_path))) = (&path, remote) {
         let cached = path.clone();
         let sync = move |dav: &library::Dav, password: &str| {
             let is_current = |v: Option<&str>| Ok(yeda_net::webdav::current_version(dav, password, &remote_path)?.is_some_and(|c| Some(c.as_str()) == v));
@@ -562,28 +580,36 @@ async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, C
             Err(e) => return Err(e),
         }
     }
-    state.with(&app, |b| {
-        let r = b.get(&key)?;
-        let location = r.pdf.as_ref().map(|p| p.location.clone()).with_context(|| format!("{key} has no PDF"))?;
-        match pdf {
-            Some(pdf) if pdf.is_file() => {
-                current.open(Doc { pdf, annotations: b.path(&library::annotations_dir(&key))?, page: None });
-                Ok(OpenRef::Opened)
-            }
-            _ => Ok(OpenRef::MissingLocation { location }),
+    match path {
+        Some(pdf) if pdf.is_file() => {
+            current.open(Doc { pdf, annotations, page: None });
+            Ok(OpenRef::Opened)
         }
+        _ => Ok(OpenRef::MissingLocation { location }),
+    }
+}
+
+/// Removes reference `key`'s PDF with id `pdf` and its annotations; the file stays where it is.
+#[tauri::command]
+fn detach_pdf(app: AppHandle, state: State<Shared>, key: String, pdf: String) -> Res<()> {
+    state.change(&app, |b| {
+        let p = b.get_pdf(&key, &pdf)?.clone();
+        let mut r = b.get(&key)?.clone();
+        r.pdfs.retain(|x| x.id != pdf);
+        b.apply(vec![b.lib.save(&r)?, Effect::remove(library::pdf_annotations_dir(&key, &p))])
     })
 }
 
-/// Attaches the PDF at `path` to reference `key`, copying it to `location` or uploading it there.
+/// Adds the PDF at `path` to reference `key`, copying it to `location` or uploading it there.
 #[tauri::command]
 async fn attach_pdf(app: AppHandle, state: State<'_, Shared>, key: String, path: PathBuf, location: String) -> Res<OpenRef> {
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (r, dest, remote) = state.with(&app, |b| {
         let mut r = b.get(&key)?.clone();
-        r.pdf = Some(b.lib.attach(&r, &location, &path.to_string_lossy())?);
-        let remote = b.lib.remote_pdf(&r).map(|rp| (rp.dav.clone(), rp.path));
-        let dest = b.lib.pdf_path(&r)?;
+        let pdf = b.lib.attach(&r, &location, &path.to_string_lossy())?;
+        let remote = b.lib.remote_pdf(&pdf).map(|rp| (rp.dav.clone(), rp.path));
+        let dest = b.lib.pdf_path(&pdf)?;
+        r.pdfs.push(pdf);
         Ok((r, dest, remote))
     })?;
     if let Some((dav, remote_path)) = remote {
@@ -635,6 +661,7 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         extract_annotations,
         open_ref,
         attach_pdf,
+        detach_pdf,
         set_secret,
         git_sync,
         git_clone,
