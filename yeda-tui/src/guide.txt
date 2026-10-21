@@ -184,6 +184,14 @@ THE COMMAND LINE  ( : )
   The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
   searches, the filter form, :setup and the tag and collection pickers.
 
+UNDO  ( u, Ctrl-R )
+
+  u takes back what the last command changed in the library (references,
+  notes, annotations, tables, yeda.toml), and Ctrl-R puts it back; both go
+  as far back as this session. A batch, such as summarizing marked papers,
+  is one step. Undo stops when a file changed since, as after a sync. PDFs
+  that :attach or :fetch stored stay where they are.
+
 KEY BINDINGS
 
   Every key runs a command line, and every action is a command, so :down

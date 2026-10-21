@@ -32,6 +32,8 @@
 "m" = "move"
 "r" = "status-next"
 "R" = "status-prev"
+"u" = "undo"
+"ctrl-r" = "redo"
 "A" = "annotations"
 "T" = "table"
 "x" = "extract"
