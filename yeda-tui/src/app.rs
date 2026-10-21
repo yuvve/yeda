@@ -44,6 +44,8 @@ pub enum Mode {
     Setup,
     /// The papers `:discover` found.
     Found,
+    /// git's output from `:sync` or `:git-init`.
+    Git,
     Sort,
     /// Picking the table a command runs on.
     TablePick,
@@ -284,6 +286,19 @@ pub enum TextTarget {
     SideQuery,
     Filter(usize),
     Setup(usize),
+}
+
+pub struct GitView {
+    pub title: String,
+    pub lines: Vec<String>,
+    /// What came of it, once it is done.
+    pub done: Option<String>,
+    rx: Receiver<GitMsg>,
+}
+
+enum GitMsg {
+    Line(String),
+    Done(anyhow::Result<String>),
 }
 
 /// What to run again once a missing secret has been entered.
@@ -537,9 +552,8 @@ pub struct App {
     pub quit: bool,
     /// A file for $EDITOR, and the line to start at.
     pub edit: Option<(PathBuf, Option<usize>)>,
-    pub sync: bool,
-    /// `:git-init`, run outside the TUI like `sync`, with its remote if given.
-    pub git_init: Option<Option<String>>,
+    /// `:sync` or `:git-init`, running or done, with git's output.
+    pub git: Option<GitView>,
     pub job: Option<Job>,
     picker: Picker,
     summarizer: Option<Summarizer>,
@@ -660,8 +674,7 @@ impl App {
             status,
             quit: false,
             edit: None,
-            sync: false,
-            git_init: None,
+            git: None,
             job: None,
             picker,
             summarizer: None,
@@ -889,6 +902,7 @@ impl App {
             Mode::Filter => self.filter_key(k),
             Mode::Setup => self.setup_key(k),
             Mode::Found => self.found_key(k),
+            Mode::Git => self.git_key(k),
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
             Mode::PdfPick => self.pdf_pick_key(k),
@@ -1968,8 +1982,11 @@ impl App {
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
                 ("detach", _) => self.detach(text),
-                ("sync", _) => self.sync = true,
-                ("git-init", url) => self.git_init = Some(Some(url.trim().to_string()).filter(|u| !u.is_empty())),
+                ("sync", _) => self.start_git("sync", crate::sync::run),
+                ("git-init", url) => {
+                    let url = Some(url.trim().to_string()).filter(|u| !u.is_empty());
+                    self.start_git("git-init", move |dir, log| crate::sync::init(dir, url.as_deref(), log));
+                }
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
                 ("table", args) => self.table_command(args.trim()),
                 ("fetch", args) => self.fetch_command(args.trim(), text),
@@ -2107,6 +2124,47 @@ impl App {
         self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
         self.status = format!("asking {name} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
         Ok(())
+    }
+
+    /// Runs `task` in the background, showing git's output in a modal as it comes.
+    fn start_git(&mut self, title: &str, task: impl FnOnce(&std::path::Path, crate::sync::Log) -> anyhow::Result<String> + Send + 'static) {
+        if self.git.as_ref().is_some_and(|g| g.done.is_none()) {
+            self.mode = Mode::Git;
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let dir = self.dir.clone();
+        std::thread::spawn(move || {
+            let lines = tx.clone();
+            let result = task(&dir, &move |line| drop(lines.send(GitMsg::Line(line))));
+            let _ = tx.send(GitMsg::Done(result));
+        });
+        self.git = Some(GitView { title: title.into(), lines: vec![], done: None, rx });
+        self.mode = Mode::Git;
+    }
+
+    pub fn poll_git(&mut self) {
+        let Some(g) = &mut self.git else { return };
+        let mut finished = false;
+        while let Ok(msg) = g.rx.try_recv() {
+            match msg {
+                GitMsg::Line(line) => g.lines.push(line),
+                GitMsg::Done(result) => {
+                    g.done = Some(result.unwrap_or_else(|e| format!("{}: {e:#}", g.title)));
+                    finished = true;
+                }
+            }
+        }
+        if finished {
+            self.status = g.done.clone().unwrap_or_default();
+            self.reload();
+        }
+    }
+
+    fn git_key(&mut self, k: KeyEvent) {
+        if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+            self.mode = Mode::Normal;
+        }
     }
 
     pub fn poll_discover(&mut self) {

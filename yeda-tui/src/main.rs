@@ -450,31 +450,11 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_fetch();
         app.poll_setup();
         app.poll_discover();
+        app.poll_git();
         app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
             app.run_job(job);
-        }
-        if std::mem::take(&mut app.sync) {
-            suspend(term, || {
-                let result = sync::run(&app.dir);
-                if let Err(e) = &result {
-                    println!("{e:#}\npress Enter to return");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-                app.status = result.unwrap_or_else(|e| format!("sync: {e:#}"));
-            })?;
-            app.reload();
-        }
-        if let Some(url) = app.git_init.take() {
-            suspend(term, || {
-                let result = sync::init(&app.dir, url.as_deref());
-                if let Err(e) = &result {
-                    println!("{e:#}\npress Enter to return");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-                app.status = result.unwrap_or_else(|e| format!("git-init: {e:#}"));
-            })?;
         }
         if let Some((path, target)) = app.edit_text.take() {
             let mut result = None;

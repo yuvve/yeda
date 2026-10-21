@@ -375,6 +375,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Setup => draw_setup(f, app, main),
         Mode::Found => draw_found(f, app, main),
+        Mode::Git => draw_git(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
         Mode::PdfPick => draw_pdf_pick(f, app, main),
@@ -560,6 +561,23 @@ fn draw_pdf_pick(f: &mut Frame, app: &App, main: Rect) {
         area,
         &mut ListState::default().with_selected(Some(app.pdf_sel)),
     );
+}
+
+fn draw_git(f: &mut Frame, app: &App, main: Rect) {
+    let Some(g) = &app.git else { return };
+    let mut lines: Vec<Line> = g.lines.iter().map(|l| Line::raw(l.clone())).collect();
+    match &g.done {
+        Some(done) => lines.push(Line::raw(done.clone()).bold()),
+        None => lines.push(Line::raw("…").dim()),
+    }
+    let width = main.width.saturating_sub(4).min(110);
+    let height = (lines.len() as u16 + 2).min(main.height.saturating_sub(2));
+    // The newest lines stay in view.
+    let skip = lines.len().saturating_sub(height.saturating_sub(2) as usize);
+    let area = popup(main, width, height);
+    f.render_widget(Clear, area);
+    let title = format!(" :{} · {} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
+    f.render_widget(Paragraph::new(lines.split_off(skip)).wrap(Wrap { trim: false }).block(block(title, true)), area);
 }
 
 fn draw_table_pick(f: &mut Frame, app: &App, main: Rect) {
