@@ -1,3 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["yeda-core", "yeda-net", "yeda-fs", "yeda-secrets", "yeda-tui", "yeda-reader/src-tauri", "yeda-android/src-tauri"]
+
+# The version every crate is published under; a release changes only this line.
+[workspace.package]
+version = "0.1.1"
