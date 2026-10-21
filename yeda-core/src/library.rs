@@ -18,7 +18,7 @@ pub struct Pdf {
     pub path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Ref {
     #[serde(skip)]
@@ -33,8 +33,8 @@ pub struct Ref {
     pub doi: Option<String>,
     pub tags: Vec<String>,
     pub collections: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    /// One of `STATUSES`; a file without one reads as "New".
+    pub status: String,
     #[serde(rename = "pdf", skip_serializing_if = "Vec::is_empty")]
     pub pdfs: Vec<Pdf>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -42,6 +42,25 @@ pub struct Ref {
     /// This reference's row in each table, by table name then column; kept in `ai_path`.
     #[serde(skip)]
     pub tables: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Default for Ref {
+    fn default() -> Self {
+        Ref {
+            key: String::new(),
+            kind: String::new(),
+            title: String::new(),
+            authors: Vec::new(),
+            year: None,
+            doi: None,
+            tags: Vec::new(),
+            collections: Vec::new(),
+            status: STATUSES[0].into(),
+            pdfs: Vec::new(),
+            extra: BTreeMap::new(),
+            tables: BTreeMap::new(),
+        }
+    }
 }
 
 /// A WebDAV server holding PDFs as plain files, `<citekey>/<file>` like a local location. The
@@ -424,17 +443,17 @@ pub fn next_pdf_id(r: &Ref) -> String {
 }
 
 /// The import date belongs to the old status, so it goes.
-pub fn set_status(r: &mut Ref, status: Option<String>) {
+pub fn set_status(r: &mut Ref, status: String) {
     r.status = status;
     r.extra.remove("status_date");
 }
 
-/// Steps through `STATUSES` and "no status".
+/// Steps through `STATUSES`; an unknown status steps from "New".
 pub fn cycle_status(r: &mut Ref, forward: bool) {
-    let n = STATUSES.len() + 1;
-    let cur = r.status.as_deref().and_then(|s| STATUSES.iter().position(|x| *x == s)).map_or(0, |p| p + 1);
+    let n = STATUSES.len();
+    let cur = STATUSES.iter().position(|x| *x == r.status).unwrap_or(0);
     let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
-    set_status(r, next.checked_sub(1).map(|p| STATUSES[p].to_string()));
+    set_status(r, STATUSES[next].to_string());
 }
 
 pub fn config_section<'a>(table: &'a mut toml::Table, name: &str) -> Result<&'a mut toml::Table> {
@@ -521,7 +540,7 @@ mod tests {
             year: Some(2020),
             tags: vec!["ml".into()],
             collections: vec!["thesis/ch2".into()],
-            status: Some("To Read".into()),
+            status: "To Read".into(),
             tables: BTreeMap::from([("lit".into(), BTreeMap::from([("hardware/sim".into(), "ROS".into())]))]),
             pdfs: vec![Pdf { id: "1".into(), location: "papers".into(), path: "smith.pdf".into() }],
             ..Default::default()
@@ -572,12 +591,13 @@ mod tests {
     }
 
     #[test]
-    fn cycles_status_through_none() {
+    fn cycles_status_from_new() {
         let mut r = Ref::default();
+        assert_eq!(parse_ref("a".into(), "title = \"A\"\n").unwrap().status, "New");
         cycle_status(&mut r, false);
-        assert_eq!(r.status.as_deref(), Some("Not Reading"));
+        assert_eq!(r.status, "Not Reading");
         cycle_status(&mut r, true);
-        assert_eq!(r.status, None);
+        assert_eq!(r.status, "New");
     }
 
     #[test]

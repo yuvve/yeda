@@ -45,15 +45,14 @@ fn label(f: &Filter, lib: &Library) -> Line<'static> {
     }
 }
 
-pub fn status_glyph(status: Option<&str>) -> &'static str {
+pub fn status_glyph(status: &str) -> &'static str {
     match status {
-        None => " ",
-        Some("New") => "✦",
-        Some("To Read") => "○",
-        Some("In Progress") => "◐",
-        Some("Read") => "●",
-        Some("Not Reading") => "✕",
-        Some(_) => "?",
+        "New" => "✦",
+        "To Read" => "○",
+        "In Progress" => "◐",
+        "Read" => "●",
+        "Not Reading" => "✕",
+        _ => "?",
     }
 }
 
@@ -61,7 +60,7 @@ fn row(r: &Ref, lib: &Library, marked: bool) -> Line<'static> {
     let year = r.year.map(|y| y.to_string()).unwrap_or_default();
     let author = r.authors.first().and_then(|a| a.split(',').next()).unwrap_or("");
     let mark = if marked { Span::styled("▌", Style::new().fg(Color::Yellow)) } else { Span::raw(" ") };
-    let mut spans = vec![mark, Span::raw(format!("{} {year:4}  {author:<16.16} ", status_glyph(r.status.as_deref())))];
+    let mut spans = vec![mark, Span::raw(format!("{} {year:4}  {author:<16.16} ", status_glyph(&r.status)))];
     for t in r.tags.iter().filter(|t| lib.tag_colors.contains_key(*t)) {
         spans.push(Span::styled("●", tag_style(lib, t)));
     }
@@ -83,7 +82,7 @@ fn details(r: &Ref, lib: &Library) -> Text<'static> {
     field(&mut lines, "authors", text(r.authors.join("; ")));
     field(&mut lines, "year", text(r.year.map(|y| y.to_string()).unwrap_or_default()));
     field(&mut lines, "doi", text(r.doi.clone().unwrap_or_default()));
-    field(&mut lines, "status", text(r.status.clone().unwrap_or_default()));
+    field(&mut lines, "status", text(r.status.clone()));
     let tags = r.tags.iter().enumerate().flat_map(|(i, t)| {
         [Span::raw(if i > 0 { ", " } else { "" }), Span::styled(t.clone(), tag_style(lib, t))]
     });

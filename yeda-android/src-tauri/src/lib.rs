@@ -229,7 +229,7 @@ struct Row {
     title: String,
     authors: Vec<String>,
     year: Option<i32>,
-    status: Option<String>,
+    status: String,
     tags: Vec<String>,
     has_pdf: bool,
 }
@@ -324,7 +324,7 @@ fn annotation_image(app: AppHandle, state: State<Shared>, key: String, pdf: Stri
 }
 
 #[tauri::command]
-fn set_status(app: AppHandle, state: State<Shared>, key: String, status: Option<String>) -> Res<()> {
+fn set_status(app: AppHandle, state: State<Shared>, key: String, status: String) -> Res<()> {
     state.with(&app, |b| b.edit(&key, |r| library::set_status(r, status)))
 }
 
