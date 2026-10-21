@@ -51,9 +51,19 @@ jobs:
           echo "AR_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "RANLIB_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
+      # android-v2026.10.21.3 builds version 2026.10.21-3 with version code 2026102103: Android only
+      # installs over an older code, and the tag's day and build number keep the codes increasing.
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        run: |
+          IFS=. read -r y m d n <<< "${GITHUB_REF_NAME#android-v}"
+          y=$((10#$y)) m=$((10#$m)) d=$((10#$d)) n=$((10#${n:-1}))
+          code=$(printf '%04d%02d%02d%02d' "$y" "$m" "$d" "$n")
+          echo "VERSION_CONFIG={\"version\":\"$y.$m.$d-$n\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
+
       - name: Build APK
         working-directory: yeda-android
-        run: npx tauri android build --apk --target aarch64 --ci
+        run: npx tauri android build --apk --target aarch64 --ci ${VERSION_CONFIG:+--config "$VERSION_CONFIG"}
 
       # Without a keystore secret, a throwaway key signs the APK; installing a later build then needs an uninstall first.
       - name: Sign APK
