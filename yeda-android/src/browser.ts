@@ -34,6 +34,8 @@ interface Row {
 }
 
 interface Annotation {
+	/** The id of the PDF it is on. */
+	pdf: string;
 	id: string;
 	kind: string;
 	page: string;
@@ -52,8 +54,14 @@ interface Ref {
 	tags: string[];
 	collections: string[];
 	status?: string;
-	pdf?: { location: string; path: string };
+	pdf?: Pdf[];
 	extra?: Record<string, unknown>;
+}
+
+interface Pdf {
+	id: string;
+	location: string;
+	path: string;
 }
 
 interface Details {
@@ -341,29 +349,42 @@ export function showBrowser(openReader: () => void): () => boolean {
 
 		const fields: [string, unknown][] = [
 			['key', key], ['type', r.type], ['authors', r.authors.join('; ')], ['year', r.year], ['doi', r.doi],
-			['pdf', r.pdf && `${r.pdf.location}:${r.pdf.path}`], ...Object.entries(r.extra ?? {}),
+			...Object.entries(r.extra ?? {}),
 		];
+		const count = (p: Pdf) => d.annotations.filter(a => a.pdf === p.id).length;
+		const pdfs = [...(r.pdf ?? [])].sort((a, b) => count(b) - count(a));
+		const pdfList = h('ul', {}, ...pdfs.map(p => h('li', { className: 'annotation' },
+			h('div', {}, p.path.split('/').pop() ?? p.path),
+			h('div', { className: 'meta' }, `${p.location}:${p.path} · ${count(p)} annotations`),
+			h('div', { className: 'actions' },
+				button('Open', () => run(() => openPdf(key, p.id))),
+				button('Extract annotations', () => run(async () => {
+					say('reading the PDF…');
+					const pdf = new Uint8Array(await invoke<ArrayBuffer>('ref_pdf', { key, pdf: p.id }));
+					const regions = await invoke<Region[]>('pdf_image_regions', { key, pdf: p.id });
+					const { words, images } = await inspect(pdf, regions);
+					const n = await invoke<number>('extract_annotations', { key, pdf: p.id, words, images });
+					say(`${n} annotations extracted from the PDF`);
+					await showDetails(key);
+				})),
+				button('Detach', () => run(async () => {
+					if (!window.confirm(`Detach ${p.path} and delete its annotations? The file stays where it is.`)) return;
+					await invoke('detach_pdf', { key, pdf: p.id });
+					await refresh();
+					await showDetails(key);
+				}))))));
 		const table = h('table', {}, ...fields.filter(([, v]) => v !== undefined && v !== '').map(([k, v]) =>
 			h('tr', {}, h('td', {}, k), h('td', {}, typeof v === 'string' ? v : JSON.stringify(v)))));
 
 		show(back, h('h2', {}, r.title || key),
 			h('div', { className: 'actions' },
-				r.pdf && button('Open PDF', () => run(() => openPdf(key))),
-				button(r.pdf ? 'Replace PDF' : 'Attach PDF', () => run(() => attachPdf(key))),
+				button('Add PDF', () => run(() => attachPdf(key))),
 				button(`Annotations (${d.annotations.length})`, () => showAnnotations(d)),
 				button(d.note ? 'Note' : 'Add note', () => showText(d, 'note')),
 				button('Edit file', () => showText(d, 'raw'))),
+			pdfs.length > 0 && pdfList,
 			h('p', {}, statusSelect), tags, h('p', {}, collection), table,
 			h('div', { className: 'actions' },
-				r.pdf && button('Extract annotations from PDF', () => run(async () => {
-					say('reading the PDF…');
-					const pdf = new Uint8Array(await invoke<ArrayBuffer>('ref_pdf', { key }));
-					const regions = await invoke<Region[]>('pdf_image_regions', { key });
-					const { words, images } = await inspect(pdf, regions);
-					const n = await invoke<number>('extract_annotations', { key, words, images });
-					say(`${n} annotations extracted from the PDF`);
-					await showDetails(key);
-				})),
 				button('Delete reference', () => run(async () => {
 					if (!window.confirm(`Delete ${key}, its annotations and notes?`)) return;
 					await invoke('delete_ref', { key });
@@ -430,7 +451,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 			return;
 		}
 		const select = h('select', {}, ...overview.locations.map(l => h('option', { value: l }, l)));
-		show(h('h2', {}, 'Attach PDF'), h('p', {}, 'Location: ', select),
+		show(h('h2', {}, 'Add PDF'), h('p', {}, 'Location: ', select),
 			h('div', { className: 'actions' },
 				button('Choose PDF', () => run(async () => {
 					const path = await pickPdf();
@@ -444,9 +465,9 @@ export function showBrowser(openReader: () => void): () => boolean {
 				button('Cancel', () => run(() => showDetails(key)))));
 	}
 
-	async function openPdf(key: string) {
+	async function openPdf(key: string, pdf: string) {
 		say('opening…');
-		const result = await withPassword(() => invoke<OpenRef>('open_ref', { key }));
+		const result = await withPassword(() => invoke<OpenRef>('open_ref', { key, pdf }));
 		if (!result || result.status === 'needsPassword') {
 			await showDetails(key);
 			return;
@@ -462,7 +483,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 		const path = await pickFolder();
 		if (path) {
 			await invoke('set_location', { name: result.location, path });
-			await openPdf(key);
+			await openPdf(key, pdf);
 		}
 	}
 
@@ -470,11 +491,12 @@ export function showBrowser(openReader: () => void): () => boolean {
 		const items = d.annotations.map((a) => {
 			const img = a.image ? h('img', { alt: a.kind }) : null;
 			if (img && a.image) {
-				invoke<ArrayBuffer>('annotation_image', { key: d.key, image: a.image })
+				invoke<ArrayBuffer>('annotation_image', { key: d.key, pdf: a.pdf, image: a.image })
 					.then(buf => img.src = URL.createObjectURL(new Blob([buf], { type: 'image/png' })))
 					.catch(e => img.replaceWith(h('div', { className: 'dim' }, String(e))));
 			}
-			const li = h('li', { className: 'annotation' }, h('div', { className: 'meta' }, `${a.kind} · p.${a.page}`),
+			const pdf = (d.ref.pdf?.length ?? 0) > 1 ? d.ref.pdf?.find(p => p.id === a.pdf)?.path.split('/').pop() : undefined;
+			const li = h('li', { className: 'annotation' }, h('div', { className: 'meta' }, `${pdf ? `${pdf} · ` : ''}${a.kind} · p.${a.page}`),
 				a.text && h('blockquote', {}, a.text), img, a.comment && h('p', {}, a.comment));
 			if (a.color) li.style.borderLeftColor = a.color;
 			return li;

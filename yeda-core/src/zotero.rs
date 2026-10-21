@@ -127,16 +127,21 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
         r.collections.sort();
 
         let attachments = attachments(db, id, zotero, linked)?;
-        let pdf_file = attachments.iter().find_map(|(_, path)| path.clone());
-        if let Some(file) = &pdf_file {
+        let mut located = Vec::new();
+        for (att, file) in &attachments {
+            let Some(file) = file else { continue };
             // Linked files can be anywhere: under the home folder, else under the root.
             match home.filter(|h| file.starts_with(h)) {
                 Some(home) => ensure_location(&mut lib, &mut new_locations, "home", home),
                 None => ensure_location(&mut lib, &mut new_locations, "files", file.ancestors().last().unwrap_or(file)),
             }
-            r.pdf = locate(&lib, file);
+            if let Some(mut pdf) = locate(&lib, file) {
+                pdf.id = library::next_pdf_id(&r);
+                r.pdfs.push(pdf.clone());
+                located.push((*att, file.clone(), pdf));
+            }
         }
-        if r.pdf.is_none() && attachments.iter().any(|(_, p)| p.is_none()) {
+        if located.len() < attachments.len() {
             sum.pdfs_unresolved += 1;
         }
 
@@ -146,10 +151,12 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
             .unwrap_or_else(|| lib.unique_key(&r));
         effects.push(lib.save(&r)?);
 
-        let dir = library::annotations_dir(&r.key);
-        let mut annots = Vec::new();
-        for (att_id, file) in &attachments {
-            import_annotations(db, *att_id, file.as_deref(), zotero, &dir, &mut annots, &mut effects, &mut sum, image)?;
+        for (att, file, pdf) in &located {
+            let mut annots = Vec::new();
+            import_annotations(db, *att, Some(file), zotero, &library::pdf_annotations_dir(&r.key, pdf), &mut annots, &mut effects, &mut sum, image)?;
+            if !annots.is_empty() {
+                effects.push(Effect::write(annotations::file_path(&r.key, pdf), annotations::render(annots)?));
+            }
         }
         let notes = format!(
             "SELECT i.key, n.note FROM itemNotes n JOIN items i USING(itemID) WHERE n.parentItemID = ?1 AND n.itemID {NOT_DELETED}"
@@ -158,9 +165,6 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
         if !notes.is_empty() {
             sum.notes += notes.len();
             effects.push(Effect::write(library::note_path(&r.key), notes.join("\n\n---\n\n") + "\n"));
-        }
-        if !annots.is_empty() {
-            effects.push(Effect::write(annotations::file_path(&r.key), annotations::render(annots)?));
         }
         lib.refs.push(r);
         sum.refs += 1;
@@ -202,7 +206,7 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
     })?);
 
     let mut report = format!(
-        "imported {} refs ({} already imported, skipped), {} annotations, {} notes, {} images ({} could not be rendered), {} items whose pdf could not be located, {} tag colors, {} saved searches",
+        "imported {} refs ({} already imported, skipped), {} annotations, {} notes, {} images ({} could not be rendered), {} items with a pdf that could not be located, {} tag colors, {} saved searches",
         sum.refs, sum.skipped, sum.annotations, sum.notes, sum.images, sum.images_missing, sum.pdfs_unresolved, sum.tag_colors, sum.searches
     );
     if !sum.searches_skipped.is_empty() {
@@ -452,7 +456,7 @@ fn locate(lib: &Library, file: &Path) -> Option<Pdf> {
         .iter()
         .filter(|(_, base)| file.starts_with(base))
         .max_by_key(|(_, base)| base.components().count())
-        .map(|(name, base)| Pdf { location: name.clone(), path: file.strip_prefix(base).unwrap().to_string_lossy().into() })
+        .map(|(name, base)| Pdf { id: String::new(), location: name.clone(), path: file.strip_prefix(base).unwrap().to_string_lossy().into() })
 }
 
 fn ensure_location(lib: &mut Library, new: &mut Vec<(String, PathBuf)>, name: &str, base: &Path) {

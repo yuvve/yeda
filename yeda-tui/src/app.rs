@@ -4,7 +4,7 @@ use ratatui::layout::{Position, Rect};
 use crate::keys::{self, Keymap, Lookup};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use yeda_core::Effect;
 use yeda_core::annotations::{self, Annotation};
 use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
-use yeda_core::library::{self, Library, Ref, config_section};
+use yeda_core::library::{self, Library, Pdf, Ref, config_section};
 use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
@@ -47,6 +47,8 @@ pub enum Mode {
     Sort,
     /// Picking the table a command runs on.
     TablePick,
+    /// Picking which of a reference's PDFs a command uses.
+    PdfPick,
     Help(HelpPage),
 }
 
@@ -136,7 +138,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":summarize[!] [table] [profile]", "fill the reference's table row with an LLM; ! overwrites"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
-    (":attach <file.pdf> [location]", "attach a PDF, copying or uploading it to a location"),
+    (":attach <file.pdf> [location]", "add a PDF, copying or uploading it to a location"),
+    (":detach", "remove one of the selected reference's PDFs with its annotations; the file stays where it is"),
     (":sync", "commit, pull and push the library with git"),
     (":git-init [url]", "make the library folder a git repository and commit it; with a URL, push it there as origin"),
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
@@ -377,8 +380,8 @@ pub struct Batch {
 pub enum Job {
     Fetch(Batch),
     ExtractAnnotations,
-    /// Download the selected reference's PDF from WebDAV with this password, then open it.
-    Download(String),
+    /// Download one of the selected reference's PDFs from WebDAV with this password, then open it.
+    Download(Pdf, String),
     Attach { file: PathBuf, location: String, password: Option<String> },
 }
 
@@ -474,9 +477,10 @@ pub struct App {
     pub right: RightView,
     pub table: Option<TableView>,
     pub cluster: Option<ClusterView>,
-    pub annots: Vec<Annotation>,
+    /// The selected reference's annotations, on each of its PDFs.
+    pub annots: Vec<(Pdf, Annotation)>,
     annots_key: Option<String>,
-    annots_modified: Option<std::time::SystemTime>,
+    annots_modified: Vec<Option<std::time::SystemTime>>,
     pub annot_sel: usize,
     pub image: Option<StatefulProtocol>,
     image_for: Option<PathBuf>,
@@ -518,6 +522,18 @@ pub struct App {
     /// The command waiting for a table from the picker, and the arguments after the table's name.
     table_pick: Option<(String, String)>,
     pub table_sel: usize,
+    pub pdf_pick: Option<PdfPick>,
+    pub pdf_sel: usize,
+    /// The PDF picked for each reference, by key, while a command and its retries run.
+    pdf_chosen: HashMap<String, String>,
+}
+
+/// A reference's PDFs to pick from, most annotated first, and what runs again with the one picked.
+pub struct PdfPick {
+    pub key: String,
+    /// Each PDF with how many annotations it has.
+    pub pdfs: Vec<(Pdf, usize)>,
+    retry: Retry,
 }
 
 const HISTORY_LEN: usize = 200;
@@ -531,6 +547,9 @@ impl App {
             history_at: None,
             completion: None,
             table_pick: None,
+            pdf_pick: None,
+            pdf_sel: 0,
+            pdf_chosen: HashMap::new(),
             table_sel: 0,
             log: crate::log::Log::open(),
             dir,
@@ -564,7 +583,7 @@ impl App {
             cluster: None,
             annots: Vec::new(),
             annots_key: None,
-            annots_modified: None,
+            annots_modified: Vec::new(),
             annot_sel: 0,
             image: None,
             image_for: None,
@@ -713,6 +732,10 @@ impl App {
             return;
         }
         self.status.clear();
+        // A key here starts a new command, so earlier picks no longer apply.
+        if matches!(self.mode, Mode::Normal | Mode::Prompt(Prompt::Command)) {
+            self.pdf_chosen.clear();
+        }
         match self.mode {
             Mode::Normal => self.normal_key(k),
             Mode::Secrets => self.secrets_key(k),
@@ -743,6 +766,7 @@ impl App {
             Mode::Found => self.found_key(k),
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
+            Mode::PdfPick => self.pdf_pick_key(k),
             Mode::Help(_) => self.help_key(k),
             Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
         }
@@ -1368,6 +1392,47 @@ impl App {
         }
     }
 
+    /// The PDF of reference `i` a command uses: its only one, the one picked for this run, else a
+    /// picker after which `retry` runs again. `None` while picking; `Some(None)` when it has none.
+    fn pdf_for(&mut self, i: usize, retry: Retry) -> Option<Option<Pdf>> {
+        let r = &self.lib.refs[i];
+        if let Some(pdf) = self.pdf_chosen.get(&r.key).and_then(|id| r.pdfs.iter().find(|p| p.id == *id)) {
+            return Some(Some(pdf.clone()));
+        }
+        if r.pdfs.len() < 2 {
+            return Some(r.pdfs.first().cloned());
+        }
+        let mut pdfs: Vec<(Pdf, usize)> = r.pdfs.iter().map(|p| (p.clone(), self.load_annotations(&r.key, p).len())).collect();
+        pdfs.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        self.pdf_pick = Some(PdfPick { key: r.key.clone(), pdfs, retry });
+        self.pdf_sel = 0;
+        self.mode = Mode::PdfPick;
+        None
+    }
+
+    fn pdf_pick_key(&mut self, k: KeyEvent) {
+        let n = self.pdf_pick.as_ref().map_or(1, |p| p.pdfs.len().max(1));
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.pdf_pick = None;
+                self.pdf_chosen.clear();
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.pdf_sel = (self.pdf_sel + 1) % n,
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.pdf_sel = (self.pdf_sel + n - 1) % n,
+            KeyCode::Enter => {
+                self.mode = Mode::Normal;
+                if let Some(pick) = self.pdf_pick.take()
+                    && let Some((pdf, _)) = pick.pdfs.get(self.pdf_sel)
+                {
+                    self.pdf_chosen.insert(pick.key, pdf.id.clone());
+                    self.retry(pick.retry);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn open_help(&mut self, page: HelpPage) {
         self.help_scroll = 0;
         self.help_query.clear();
@@ -1651,6 +1716,7 @@ impl App {
                 },
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
+                ("detach", _) => self.detach(text),
                 ("sync", _) => self.sync = true,
                 ("git-init", url) => self.git_init = Some(Some(url.trim().to_string()).filter(|u| !u.is_empty())),
                 (cmd @ ("graph" | "graph!"), args) => self.graph_command(args, cmd.ends_with('!'), text),
@@ -1870,13 +1936,13 @@ impl App {
         if targets.is_empty() {
             anyhow::bail!("no reference selected");
         }
-        let jobs: Vec<tables::Job> = targets
-            .iter()
-            .filter_map(|&i| {
-                let r = &self.lib.refs[i];
-                tables::plan(&self.lib, &table_name, &table, r, &self.load_annotations(&r.key), overwrite)
-            })
-            .collect();
+        let mut jobs: Vec<tables::Job> = Vec::new();
+        for &i in &targets {
+            let Some(pdf) = self.pdf_for(i, Retry::Command(command.into())) else { return Ok(()) };
+            let r = &self.lib.refs[i];
+            let annots = pdf.as_ref().map(|p| self.load_annotations(&r.key, p)).unwrap_or_default();
+            jobs.extend(tables::plan(&self.lib, &table_name, &table, r, pdf.as_ref(), &annots, overwrite));
+        }
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
@@ -1978,7 +2044,7 @@ impl App {
         match job {
             Job::Fetch(batch) => self.add_next(batch),
             Job::ExtractAnnotations => self.extract_annotations(),
-            Job::Download(password) => self.download(&password),
+            Job::Download(pdf, password) => self.download(&pdf, &password),
             Job::Attach { file, location, password } => self.finish_attach(&file, &location, password.as_deref()),
         }
     }
@@ -2080,21 +2146,20 @@ impl App {
     }
 
     /// Brings the cached copy of the selected reference's WebDAV PDF up to date, then opens it.
-    fn download(&mut self, password: &str) {
-        let Some(r) = self.selected() else { return };
-        let (Some(remote), Ok(path)) = (self.lib.remote_pdf(r), self.lib.pdf_path(r)) else { return };
+    fn download(&mut self, pdf: &Pdf, password: &str) {
+        let (Some(remote), Ok(path)) = (self.lib.remote_pdf(pdf), self.lib.pdf_path(pdf)) else { return };
         let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
         match yeda_fs::sync_cached(&path, |cached| {
             yeda_net::webdav::current_version(remote.dav, password, &remote.path).map(|v| v.is_some() && v.as_deref() == cached)
         }, || yeda_net::webdav::download(remote.dav, password, &remote.path)) {
-            Ok(()) => self.launch_reader(&path),
+            Ok(()) => self.launch_reader(&path, pdf),
             Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
                 self.reject(&account);
                 self.open_pdf();
             }
             Err(e) if path.exists() => {
                 self.status = format!("{e:#}; opened the cached copy");
-                self.launch_reader(&path);
+                self.launch_reader(&path, pdf);
             }
             Err(e) => self.status = format!("{e:#}"),
         }
@@ -2140,19 +2205,33 @@ impl App {
         self.job = Some(Job::Attach { file, location, password });
     }
 
+    fn detach(&mut self, command: &str) {
+        let Some(&i) = self.visible.get(self.sel) else { return };
+        let Some(pdf) = self.pdf_for(i, Retry::Command(command.into())) else { return };
+        let Some(pdf) = pdf else { return self.status = "no pdf".into() };
+        let mut r = self.lib.refs[i].clone();
+        r.pdfs.retain(|p| p.id != pdf.id);
+        let effects = self.lib.save(&r).map(|e| vec![e, Effect::remove(library::pdf_annotations_dir(&r.key, &pdf))]);
+        if self.apply(effects) {
+            self.status = format!("detached {}:{}", pdf.location, pdf.path);
+            self.reload();
+        }
+    }
+
     /// Copies `file` to a local location, or uploads it to a WebDAV one keeping a cached copy;
     /// returns reference `i` pointing at it, not yet saved.
     fn attach_file(&self, i: usize, file: &std::path::Path, location: &str, password: Option<&str>) -> anyhow::Result<Ref> {
         let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
         let mut r = self.lib.refs[i].clone();
-        r.pdf = Some(self.lib.attach(&r, location, &file.to_string_lossy())?);
-        let path = self.lib.pdf_path(&r)?;
+        let pdf = self.lib.attach(&r, location, &file.to_string_lossy())?;
+        let path = self.lib.pdf_path(&pdf)?;
         yeda_fs::write_atomic(&path, &bytes)?;
-        if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&r), password) {
+        if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&pdf), password) {
             yeda_net::webdav::upload(remote.dav, password, &remote.path, &bytes)?;
             let version = yeda_net::webdav::current_version(remote.dav, password, &remote.path)?;
             yeda_fs::set_cached_version(&path, version.as_deref())?;
         }
+        r.pdfs.push(pdf);
         Ok(r)
     }
 
@@ -2160,7 +2239,7 @@ impl App {
         let Some(&i) = self.visible.get(self.sel) else { return };
         match self.attach_file(i, file, location, password) {
             Ok(r) => {
-                let path = r.pdf.as_ref().map(|p| format!("{}:{}", p.location, p.path)).unwrap_or_default();
+                let path = r.pdfs.last().map(|p| format!("{}:{}", p.location, p.path)).unwrap_or_default();
                 if self.apply(self.lib.save(&r).map(|e| vec![e])) {
                     self.status = format!("attached {path}");
                     self.reload();
@@ -2199,43 +2278,48 @@ impl App {
         self.pane = Pane::Right;
     }
 
+    /// Extracts the annotations of every PDF of reference `i`.
     fn extract_from(&mut self, i: usize) -> anyhow::Result<usize> {
         let r = &self.lib.refs[i];
-        let key = r.key.clone();
-        let pdf = self.lib.pdf_path(r)?;
-        let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
-        let words = poppler::word_boxes(&pdf)?;
-        yeda_fs::locked(&self.path(&library::annotations_dir(&key)), || {
-            let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&key)))?;
-            let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
-            let (n, effects) = annotations::sync_from_pdf(&library::annotations_dir(&key), existing.as_deref(), &bytes, Some(&words), &mut render)?;
-            yeda_fs::apply(&self.dir, effects)?;
-            Ok(n)
-        })
+        anyhow::ensure!(!r.pdfs.is_empty(), "no pdf");
+        let mut total = 0;
+        for p in &r.pdfs {
+            let pdf = self.lib.pdf_path(p)?;
+            let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
+            let words = poppler::word_boxes(&pdf)?;
+            let dir = library::pdf_annotations_dir(&r.key, p);
+            total += yeda_fs::locked(&self.path(&dir), || {
+                let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&r.key, p)))?;
+                let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
+                let (n, effects) = annotations::sync_from_pdf(&dir, existing.as_deref(), &bytes, Some(&words), &mut render)?;
+                yeda_fs::apply(&self.dir, effects)?;
+                Ok(n)
+            })?;
+        }
+        Ok(total)
     }
 
-    fn load_annotations(&self, key: &str) -> Vec<Annotation> {
-        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key))).ok().flatten();
+    fn load_annotations(&self, key: &str, pdf: &Pdf) -> Vec<Annotation> {
+        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key, pdf))).ok().flatten();
         text.and_then(|t| annotations::parse(&t).ok()).unwrap_or_default()
     }
 
     /// Loads the selected ref's annotations and the selected annotation's image, if they changed.
     pub fn sync_annots(&mut self) {
         let key = self.selected().map(|r| r.key.clone());
-        let modified = key.as_ref().and_then(|k| fs::metadata(self.path(&annotations::file_path(k))).ok()?.modified().ok());
+        let pdfs = self.selected().map(|r| r.pdfs.clone()).unwrap_or_default();
+        let files: Vec<PathBuf> = key.iter().flat_map(|k| pdfs.iter().map(|p| self.path(&annotations::file_path(k, p)))).collect();
+        let modified: Vec<_> = files.iter().map(|f| fs::metadata(f).ok()?.modified().ok()).collect();
         if key != self.annots_key || modified != self.annots_modified {
             self.annots_modified = modified;
             let same_paper = key == self.annots_key;
-            self.annots = match &key {
-                Some(k) => {
-                    let text = yeda_fs::read_optional(&self.path(&annotations::file_path(k)));
-                    text.and_then(|t| t.as_deref().map(annotations::parse).transpose()).map(Option::unwrap_or_default).unwrap_or_else(|e| {
-                        self.status = format!("{e:#}");
-                        vec![]
-                    })
+            self.annots = Vec::new();
+            for (pdf, file) in pdfs.iter().zip(&files) {
+                match yeda_fs::read_optional(file).and_then(|t| t.as_deref().map(annotations::parse).transpose()) {
+                    Ok(annots) => self.annots.extend(annots.unwrap_or_default().into_iter().map(|a| (pdf.clone(), a))),
+                    Err(e) => self.status = format!("{e:#}"),
                 }
-                None => vec![],
-            };
+            }
             self.annots_key = key;
             if same_paper {
                 // The file changed on disk (e.g. yeda-reader saved): keep the selection, re-read the image.
@@ -2246,7 +2330,7 @@ impl App {
             }
         }
         let want = match (&self.annots_key, self.annots.get(self.annot_sel)) {
-            (Some(k), Some(Annotation { image: Some(img), .. })) => Some(self.path(&library::annotations_dir(k)).join(img)),
+            (Some(k), Some((pdf, Annotation { image: Some(img), .. }))) => Some(self.path(&library::pdf_annotations_dir(k, pdf)).join(img)),
             _ => None,
         };
         if want != self.image_for {
@@ -2511,29 +2595,31 @@ impl App {
     }
 
     fn open_pdf(&mut self) {
-        let Some(r) = self.selected() else { return };
-        let path = match self.lib.pdf_path(r) {
+        let Some(&i) = self.visible.get(self.sel) else { return };
+        let Some(pdf) = self.pdf_for(i, Retry::OpenPdf) else { return };
+        let Some(pdf) = pdf else { return self.status = "no pdf".into() };
+        let path = match self.lib.pdf_path(&pdf) {
             Ok(p) => p,
             Err(e) => return self.status = e.to_string(),
         };
-        if let Some(remote) = self.lib.remote_pdf(r) {
+        if let Some(remote) = self.lib.remote_pdf(&pdf) {
             let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
             let label = format!("{}@{}", remote.dav.user, remote.dav.url);
             let file = remote.path.clone();
             if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
                 self.status = format!("checking {file}…");
-                self.job = Some(Job::Download(password));
+                self.job = Some(Job::Download(pdf.clone(), password));
             }
             return;
         }
         if !path.exists() {
             return self.status = format!("missing: {}", path.display());
         }
-        self.launch_reader(&path);
+        self.launch_reader(&path, &pdf);
     }
 
-    /// Opens `pdf` for the selected reference, with its annotations folder.
-    fn launch_reader(&mut self, pdf: &std::path::Path) {
+    /// Opens the file `path` of the selected reference's `pdf`, with its annotations folder.
+    fn launch_reader(&mut self, path: &std::path::Path, pdf: &Pdf) {
         let Some(key) = self.selected().map(|r| r.key.clone()) else { return };
         let mut words = self.lib.reader.as_deref().filter(|r| *r != "default").unwrap_or_default().split_whitespace();
         let mut command = match words.next() {
@@ -2546,9 +2632,9 @@ impl App {
         };
         let result = command
             .args(words)
-            .arg(pdf)
+            .arg(path)
             .arg("--annotations")
-            .arg(self.path(&library::annotations_dir(&key)))
+            .arg(self.path(&library::pdf_annotations_dir(&key, pdf)))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -2871,12 +2957,12 @@ impl App {
 
     /// Opens an image annotation in the image viewer, any other in $EDITOR at its entry.
     fn open_annotation(&mut self) {
-        let (Some(key), Some(a)) = (self.annots_key.clone(), self.annots.get(self.annot_sel)) else { return };
+        let (Some(key), Some((pdf, a))) = (self.annots_key.clone(), self.annots.get(self.annot_sel)) else { return };
         if let Some(img) = &a.image {
-            let path = self.path(&library::annotations_dir(&key)).join(img);
+            let path = self.path(&library::pdf_annotations_dir(&key, pdf)).join(img);
             return self.xdg_open(path);
         }
-        let path = self.path(&annotations::file_path(&key));
+        let path = self.path(&annotations::file_path(&key, pdf));
         let entry = format!("id = \"{}\"", a.id);
         let line = fs::read_to_string(&path).ok().and_then(|t| t.lines().position(|l| l.trim() == entry)).map(|i| i + 1);
         self.edit = Some((path, line));
@@ -2916,13 +3002,13 @@ impl App {
             None => None,
         };
         let targets = self.targets();
-        if !self.confirm_many("fetch PDFs for", targets.iter().filter(|&&i| self.lib.refs[i].pdf.is_none()).count(), command) {
+        if !self.confirm_many("fetch PDFs for", targets.iter().filter(|&&i| self.lib.refs[i].pdfs.is_empty()).count(), command) {
             return;
         }
         let items: Vec<fetch::Item> = targets
             .iter()
             .map(|&i| &self.lib.refs[i])
-            .filter(|r| r.pdf.is_none())
+            .filter(|r| r.pdfs.is_empty())
             .map(|r| fetch::Item { key: r.key.clone(), doi: graph::lookup_doi(r), openalex: graph::work_id(r).map(String::from), file: fulltext::file_name(r) })
             .collect();
         if items.is_empty() {

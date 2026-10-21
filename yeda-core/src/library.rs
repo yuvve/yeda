@@ -12,6 +12,8 @@ pub const REFS: &str = "refs";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pdf {
+    /// Names the PDF's annotations folder, `annotations/<key>/<id>/`; never reused within a reference.
+    pub id: String,
     pub location: String,
     pub path: String,
 }
@@ -33,8 +35,8 @@ pub struct Ref {
     pub collections: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pdf: Option<Pdf>,
+    #[serde(rename = "pdf", skip_serializing_if = "Vec::is_empty")]
+    pub pdfs: Vec<Pdf>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, toml::Value>,
     /// This reference's row in each table, by table name then column; kept in `ai_path`.
@@ -159,6 +161,11 @@ pub fn ref_path(key: &str) -> String {
 
 pub fn annotations_dir(key: &str) -> String {
     format!("annotations/{key}")
+}
+
+/// The annotations folder of one of `key`'s PDFs.
+pub fn pdf_annotations_dir(key: &str, pdf: &Pdf) -> String {
+    format!("annotations/{key}/{}", pdf.id)
 }
 
 pub fn note_path(key: &str) -> String {
@@ -362,8 +369,7 @@ impl Library {
 
     /// Where the PDF is on this machine; for a WebDAV location, its place in `cache`, which may not
     /// have been downloaded yet.
-    pub fn pdf_path(&self, r: &Ref) -> Result<PathBuf> {
-        let pdf = r.pdf.as_ref().context("no pdf")?;
+    pub fn pdf_path(&self, pdf: &Pdf) -> Result<PathBuf> {
         if let Some(base) = self.locations.get(&pdf.location) {
             return Ok(base.join(&pdf.path));
         }
@@ -372,14 +378,14 @@ impl Library {
         Ok(cache.join(&pdf.location).join(&pdf.path))
     }
 
-    /// The WebDAV server holding `r`'s PDF, with the PDF's path on it.
-    pub fn remote_pdf(&self, r: &Ref) -> Option<RemotePdf<'_>> {
-        let pdf = r.pdf.as_ref()?;
+    /// The WebDAV server holding `pdf`, with its path on it.
+    pub fn remote_pdf(&self, pdf: &Pdf) -> Option<RemotePdf<'_>> {
         let (name, dav) = self.remotes.get_key_value(&pdf.location)?;
         Some(RemotePdf { location: name, dav, path: pdf.path.clone() })
     }
 
-    /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<citekey>/<file name>`.
+    /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<citekey>/<file name>`,
+    /// with a new id. Fails if another of `r`'s PDFs is already there.
     pub fn attach(&self, r: &Ref, location: &str, file_name: &str) -> Result<Pdf> {
         anyhow::ensure!(
             self.locations.contains_key(location) || self.remotes.contains_key(location),
@@ -387,19 +393,34 @@ impl Library {
             self.locations.keys().chain(self.remotes.keys()).cloned().collect::<Vec<_>>().join(", ")
         );
         let file = Path::new(file_name).file_name().and_then(|f| f.to_str()).context("not a file name")?;
-        Ok(Pdf { location: location.into(), path: format!("{}/{file}", r.key) })
+        let path = format!("{}/{file}", r.key);
+        anyhow::ensure!(!r.pdfs.iter().any(|p| p.location == location && p.path == path), "{} already has {location}:{path}", r.key);
+        Ok(Pdf { id: next_pdf_id(r), location: location.into(), path })
     }
 }
 
 pub fn parse_ref(key: String, text: &str) -> Result<Ref> {
     let mut r: Ref = toml::from_str(text).with_context(|| ref_path(&key))?;
-    if let Some(pdf) = &r.pdf {
-        // Reference files come from other devices; their PDF must stay inside its location.
+    for pdf in &r.pdfs {
+        // Reference files come from other devices; their PDF must stay inside its location, and
+        // its annotations inside the reference's folder.
         let inside = Path::new(&pdf.path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
         anyhow::ensure!(inside, "{}: pdf path {:?} leaves its location", ref_path(&key), pdf.path);
+        anyhow::ensure!(valid_pdf_id(&pdf.id), "{}: invalid pdf id {:?}", ref_path(&key), pdf.id);
     }
+    let mut ids: Vec<&str> = r.pdfs.iter().map(|p| p.id.as_str()).collect();
+    ids.sort();
+    anyhow::ensure!(ids.windows(2).all(|w| w[0] != w[1]), "{}: two PDFs share an id", ref_path(&key));
     r.key = key;
     Ok(r)
+}
+
+fn valid_pdf_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+pub fn next_pdf_id(r: &Ref) -> String {
+    (r.pdfs.iter().filter_map(|p| p.id.parse::<u32>().ok()).max().unwrap_or(0) + 1).to_string()
 }
 
 /// The import date belongs to the old status, so it goes.
@@ -473,7 +494,7 @@ mod tests {
 
     #[test]
     fn rejects_pdf_paths_outside_their_location() {
-        let pdf = |path: &str| parse_ref("a".into(), &format!("title = \"A\"\npdf = {{ location = \"dav\", path = \"{path}\" }}\n"));
+        let pdf = |path: &str| parse_ref("a".into(), &format!("title = \"A\"\n[[pdf]]\nid = \"1\"\nlocation = \"dav\"\npath = \"{path}\"\n"));
         assert!(pdf("a/a.pdf").is_ok());
         assert!(pdf("../../.bashrc").is_err());
         assert!(pdf("/etc/passwd").is_err());
@@ -502,7 +523,7 @@ mod tests {
             collections: vec!["thesis/ch2".into()],
             status: Some("To Read".into()),
             tables: BTreeMap::from([("lit".into(), BTreeMap::from([("hardware/sim".into(), "ROS".into())]))]),
-            pdf: Some(Pdf { location: "papers".into(), path: "smith.pdf".into() }),
+            pdfs: vec![Pdf { id: "1".into(), location: "papers".into(), path: "smith.pdf".into() }],
             ..Default::default()
         };
         r.extra.insert("journal".into(), toml::Value::String("J".into()));
@@ -516,7 +537,7 @@ mod tests {
         let mut lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
         lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap());
         assert_eq!(lib.refs, vec![r]);
-        assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/h/papers/smith.pdf"));
+        assert_eq!(lib.pdf_path(&lib.refs[0].pdfs[0]).unwrap(), Path::new("/h/papers/smith.pdf"));
     }
 
     #[test]
@@ -562,17 +583,20 @@ mod tests {
     #[test]
     fn webdav_locations_and_attachments() {
         let shared = "[locations]\npapers = \"/p\"\n\n[locations.dav]\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
-        let refs = [("a2020".to_string(), "[pdf]\nlocation = \"dav\"\npath = \"ABCD2345/a.pdf\"\n".to_string())];
+        let refs = [("a2020".to_string(), "[[pdf]]\nid = \"1\"\nlocation = \"dav\"\npath = \"ABCD2345/a.pdf\"\n".to_string())];
         let mut lib = Library::parse(Some(shared), None, refs, None).unwrap();
-        assert!(lib.pdf_path(&lib.refs[0]).is_err());
+        assert!(lib.pdf_path(&lib.refs[0].pdfs[0]).is_err());
         lib.cache = Some("/c".into());
-        assert_eq!(lib.pdf_path(&lib.refs[0]).unwrap(), Path::new("/c/dav/ABCD2345/a.pdf"));
-        let remote = lib.remote_pdf(&lib.refs[0]).unwrap();
+        assert_eq!(lib.pdf_path(&lib.refs[0].pdfs[0]).unwrap(), Path::new("/c/dav/ABCD2345/a.pdf"));
+        let remote = lib.remote_pdf(&lib.refs[0].pdfs[0]).unwrap();
         assert_eq!(remote.path, "ABCD2345/a.pdf");
         assert_eq!(remote.dav.file_url("a2020/Smith - 2020 - A & B.pdf"), "https://dav.example/zotero/a2020/Smith%20-%202020%20-%20A%20%26%20B.pdf");
 
         let pdf = lib.attach(&lib.refs[0], "papers", "/tmp/x/Paper.pdf").unwrap();
-        assert_eq!((pdf.location.as_str(), pdf.path.as_str()), ("papers", "a2020/Paper.pdf"));
+        assert_eq!((pdf.id.as_str(), pdf.location.as_str(), pdf.path.as_str()), ("2", "papers", "a2020/Paper.pdf"));
+        let mut r = lib.refs[0].clone();
+        r.pdfs.push(pdf);
+        assert!(lib.attach(&r, "papers", "Paper.pdf").is_err());
         assert!(lib.attach(&lib.refs[0], "nowhere", "x.pdf").is_err());
 
         let local = Library::parse(Some(shared), Some("[locations]\ndav = \"/mirror\"\n"), [], None).unwrap();

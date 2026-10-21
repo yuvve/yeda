@@ -6,7 +6,7 @@ use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
 use yeda_core::annotations::Annotation;
 use yeda_core::browse::Filter;
-use yeda_core::library::{Library, Ref};
+use yeda_core::library::{Library, Pdf, Ref};
 use ratatui::prelude::*;
 use ratatui::symbols::Marker;
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
@@ -89,7 +89,9 @@ fn details(r: &Ref, lib: &Library) -> Text<'static> {
     });
     field(&mut lines, "tags", tags.collect());
     field(&mut lines, "collections", text(r.collections.join(", ")));
-    field(&mut lines, "pdf", text(r.pdf.as_ref().map(|p| format!("{}:{}", p.location, p.path)).unwrap_or_default()));
+    for p in &r.pdfs {
+        field(&mut lines, "pdf", text(format!("{}:{}", p.location, p.path)));
+    }
     for (k, v) in &r.extra {
         field(&mut lines, k, text(v.as_str().map(String::from).unwrap_or_else(|| v.to_string())));
     }
@@ -113,14 +115,17 @@ fn draw_annotations(f: &mut Frame, app: &mut App, area: Rect) {
     app.sync_annots();
     let focused = app.pane == Pane::Right;
     let [top, bottom] = Layout::vertical([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(area);
+    let several = app.annots.iter().any(|(p, _)| app.annots.first().is_some_and(|(first, _)| first.id != p.id));
     let items: Vec<ListItem> = app
         .annots
         .iter()
-        .map(|a| {
+        .map(|(pdf, a)| {
             let color = a.color.as_deref().and_then(color).unwrap_or(Color::Gray);
             let summary = a.text.as_deref().or(a.comment.as_deref()).unwrap_or(&a.kind);
+            let file = if several { format!("{} ", pdf_name(pdf)) } else { String::new() };
             ListItem::new(Line::from(vec![
                 Span::styled("▌", Style::new().fg(color)),
+                Span::styled(file, Style::new().dim()),
                 Span::raw(format!("p.{:<4} {}", a.page, summary.replace('\n', " "))),
             ]))
         })
@@ -143,7 +148,7 @@ fn draw_annotations(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Paragraph::new("No annotations. Press x to extract them from the PDF.").dim(), inner);
         return;
     };
-    let text = annotation_text(a);
+    let text = annotation_text(&a.1);
     if app.image.is_none() {
         f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
         return;
@@ -357,6 +362,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Found => draw_found(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
+        Mode::PdfPick => draw_pdf_pick(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
         Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
@@ -490,6 +496,33 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.sort_sel)),
+    );
+}
+
+fn pdf_name(pdf: &Pdf) -> &str {
+    pdf.path.rsplit('/').next().unwrap_or(&pdf.path)
+}
+
+fn draw_pdf_pick(f: &mut Frame, app: &App, main: Rect) {
+    let Some(pick) = &app.pdf_pick else { return };
+    let width = main.width.saturating_sub(4).min(100);
+    let items: Vec<ListItem> = pick
+        .pdfs
+        .iter()
+        .map(|(pdf, n)| {
+            let annotations = format!("  {n} annotation{}", if *n == 1 { "" } else { "s" });
+            ListItem::new(vec![
+                Line::from(vec![Span::raw(pdf_name(pdf).to_string()).bold(), Span::raw(annotations).dim()]),
+                Line::from(format!("  {}:{}", pdf.location, pdf.path)).dim(),
+            ])
+        })
+        .collect();
+    let area = popup(main, width, items.len() as u16 * 2 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items).block(block(" PDF · Enter picks ".into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.pdf_sel)),
     );
 }
 

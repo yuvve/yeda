@@ -1,6 +1,6 @@
 use crate::Effect;
 use crate::annotations::Annotation;
-use crate::library::{Library, Ref};
+use crate::library::{Library, Pdf, Ref};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -44,8 +44,9 @@ Where the paper does not say something, write \"Not stated.\" \
 Follow each column's guidance when given; it takes precedence over the rules above and over the example rows. \
 Otherwise match the style, depth and length of the example rows when there are any. Write plain text, not Markdown.";
 
-/// `annotations` are the paper's own; `None` when the row has nothing left to fill (and `overwrite` is off).
-pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, annotations: &[Annotation], overwrite: bool) -> Option<Job> {
+/// `annotations` are those on `pdf`, the one of `r`'s PDFs sent along; `None` when the row has
+/// nothing left to fill (and `overwrite` is off).
+pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, pdf: Option<&Pdf>, annotations: &[Annotation], overwrite: bool) -> Option<Job> {
     let existing = r.tables.get(name);
     let columns: Vec<String> = table
         .columns
@@ -61,7 +62,7 @@ pub fn plan(lib: &Library, name: &str, table: &Table, r: &Ref, annotations: &[An
         system: SYSTEM.into(),
         text: prompt_text(lib, name, table, r, annotations, &columns),
         schema: schema(&columns),
-        pdf: lib.pdf_path(r).ok(),
+        pdf: pdf.and_then(|p| lib.pdf_path(p).ok()),
         columns,
     })
 }
@@ -275,7 +276,7 @@ mod tests {
     fn prompt_carries_column_guidance() {
         let cfg = "[tables.lit]\ncolumns = [\"contribution\", \"method\"]\n\n[tables.lit.describe]\ncontribution = \"Most important. No jargon.\"\n";
         let lib = Library::parse(Some(cfg), None, [("a2020".into(), "title = \"A\"\n".into())], None).unwrap();
-        let job = plan(&lib, "lit", &lib.tables["lit"], &lib.refs[0], &[], false).unwrap();
+        let job = plan(&lib, "lit", &lib.tables["lit"], &lib.refs[0], None, &[], false).unwrap();
         assert!(job.text.contains("- contribution: Most important. No jargon.\n- method\n"));
         assert!(job.system.contains("objectively"));
         assert!(job.system.contains("never compare"));
