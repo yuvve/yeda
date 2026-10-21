@@ -22,7 +22,11 @@ An Android app reads and annotates the same library.
 
 ## Usage
 
-The binary is `yeda`.
+```sh
+cargo install yeda
+```
+
+Building it needs the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) (WebKitGTK on Linux), which the PDF reader uses. The binary is `yeda`.
 
 ```sh
 yeda init       # once: create a library
