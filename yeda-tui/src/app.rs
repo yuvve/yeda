@@ -84,7 +84,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("filter", "filter by field, with suggestions from the library"),
     ("sort", "sort"),
     ("clear", "cancel a range, else unmark all, else clear the search"),
-    ("add", "add by DOI, arXiv ID or ISBN; a pasted list adds each"),
+    ("add", "add by DOI, arXiv ID or ISBN, into a collection you pick; a pasted list adds each"),
     ("open", "open the PDF in the reader (yeda read)"),
     ("edit", "edit the reference file in $EDITOR; on a saved search in the library column, its name, query and sort"),
     ("note", "edit the reference's note in $EDITOR"),
@@ -429,6 +429,8 @@ struct GraphJob {
 
 pub struct Batch {
     step: undo::Step,
+    /// The collection new references go into.
+    collection: Option<String>,
     todo: std::collections::VecDeque<String>,
     total: usize,
     added: Vec<String>,
@@ -448,6 +450,8 @@ pub enum Job {
 pub enum PickKind {
     Tags,
     Move,
+    /// The collection the identifiers in `App::pending_add` go into.
+    AddTo,
 }
 
 #[derive(Clone, PartialEq)]
@@ -470,8 +474,9 @@ pub struct Chooser {
 }
 
 impl Chooser {
+    /// Whether Enter acts on the highlighted option; for tags, Enter on an empty input is done.
     pub fn active(&self, input: &str) -> bool {
-        self.moved || !input.trim().is_empty()
+        self.kind != PickKind::Tags || self.moved || !input.trim().is_empty()
     }
 }
 
@@ -538,6 +543,8 @@ pub struct App {
     picker: Picker,
     summarizer: Option<Summarizer>,
     pub chooser: Option<Chooser>,
+    /// Identifiers to add once their collection is picked, and the mode to go back to.
+    pending_add: Option<(String, Mode)>,
     pub right: RightView,
     pub table: Option<TableView>,
     pub cluster: Option<ClusterView>,
@@ -658,6 +665,7 @@ impl App {
             picker,
             summarizer: None,
             chooser: None,
+            pending_add: None,
             right: RightView::Details,
             table: None,
             cluster: None,
@@ -1709,12 +1717,14 @@ impl App {
 
     fn open_chooser(&mut self, kind: PickKind) {
         let targets = self.targets();
-        let Some(&first) = targets.first() else {
-            self.status = "no reference selected".into();
-            return;
+        let tags: Vec<String> = match targets.first() {
+            Some(&first) => {
+                let refs = &self.lib.refs;
+                refs[first].tags.iter().filter(|t| targets.iter().all(|&i| refs[i].tags.contains(t))).cloned().collect()
+            }
+            None if kind == PickKind::AddTo => vec![],
+            None => return self.status = "no reference selected".into(),
         };
-        let refs = &self.lib.refs;
-        let tags: Vec<String> = refs[first].tags.iter().filter(|t| targets.iter().all(|&i| refs[i].tags.contains(t))).cloned().collect();
         self.chooser = Some(Chooser { kind, initial: tags.clone(), tags, options: vec![], sel: 0, moved: false });
         self.input.clear();
         self.mode = Mode::Pick;
@@ -1723,17 +1733,24 @@ impl App {
 
     /// Rebuilds the dropdown from the input: fuzzy matches ranked by score, then create/remove entries.
     fn refresh_options(&mut self) {
-        let current_coll = self.selected().and_then(|r| r.collections.first().cloned());
+        let current_coll = match self.chooser.as_ref().map(|c| c.kind) {
+            // New references go where the library is being looked at, unless changed.
+            Some(PickKind::AddTo) => match self.current_filter() {
+                Filter::Collection(p) => Some(p.clone()),
+                _ => None,
+            },
+            _ => self.selected().and_then(|r| r.collections.first().cloned()),
+        };
         let Some(c) = &mut self.chooser else { return };
         let query = self.input.trim().to_string();
         let mut candidates: Vec<String> = match c.kind {
             PickKind::Tags => c.tags.clone(),
-            PickKind::Move => vec![],
+            PickKind::Move | PickKind::AddTo => vec![],
         };
         for f in &self.sidebar {
             match (c.kind, f) {
                 (PickKind::Tags, Filter::Tag(t)) if !candidates.contains(t) => candidates.push(t.clone()),
-                (PickKind::Move, Filter::Collection(p)) => candidates.push(p.clone()),
+                (PickKind::Move | PickKind::AddTo, Filter::Collection(p)) => candidates.push(p.clone()),
                 _ => {}
             }
         }
@@ -1747,7 +1764,7 @@ impl App {
             .map(|(_, t)| {
                 let mark = match c.kind {
                     PickKind::Tags if c.tags.contains(t) => "✓ ",
-                    PickKind::Move if current_coll.as_ref() == Some(t) => "• ",
+                    PickKind::Move | PickKind::AddTo if current_coll.as_ref() == Some(t) => "• ",
                     _ => "  ",
                 };
                 (format!("{mark}{t}"), Pick::Existing(t.clone()))
@@ -1755,12 +1772,18 @@ impl App {
             .collect();
         if !query.is_empty() && !candidates.contains(&query) {
             let what = if c.kind == PickKind::Tags { "tag" } else { "collection" };
-            c.options.push((format!("+ new {what} \"{query}\""), Pick::Create(query)));
+            c.options.push((format!("+ new {what} \"{query}\""), Pick::Create(query.clone())));
         }
         if c.kind == PickKind::Move && current_coll.is_some() {
             c.options.push(("— remove from its collection".into(), Pick::Unfile));
         }
-        c.sel = 0;
+        if c.kind == PickKind::AddTo {
+            c.options.push(("— no collection".into(), Pick::Unfile));
+        }
+        c.sel = match (c.kind, &current_coll) {
+            (PickKind::Move | PickKind::AddTo, Some(p)) if query.is_empty() => c.options.iter().position(|(_, o)| *o == Pick::Existing(p.clone())).unwrap_or(0),
+            _ => 0,
+        };
         c.moved = false;
     }
 
@@ -1807,6 +1830,18 @@ impl App {
                         self.update_targets(|r| r.collections = collections.clone());
                         self.close_chooser();
                     }
+                    (PickKind::AddTo, choice) => {
+                        let collection = match choice {
+                            Pick::Existing(p) | Pick::Create(p) => Some(p),
+                            Pick::Unfile => None,
+                        };
+                        let (text, back) = self.pending_add.take().unwrap_or((String::new(), Mode::Normal));
+                        self.close_chooser();
+                        self.mode = back;
+                        let todo: std::collections::VecDeque<String> = ids::split_ids(&text).into_iter().map(Into::into).collect();
+                        self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
+                        self.job = Some(Job::Fetch(Batch { step: self.step.clone(), collection, total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
+                    }
                     (PickKind::Tags, Pick::Unfile) => {}
                 }
             }
@@ -1822,6 +1857,10 @@ impl App {
     fn close_chooser(&mut self) {
         self.mode = Mode::Normal;
         self.input.clear();
+        if let Some((_, back)) = self.pending_add.take() {
+            self.mode = back;
+            self.status = "nothing added".into();
+        }
         if let Some(c) = self.chooser.take()
             && c.kind == PickKind::Tags
             && c.tags != c.initial
@@ -1969,9 +2008,10 @@ impl App {
                 }
             }
             Prompt::Add if !ids::split_ids(text).is_empty() => {
-                let todo: std::collections::VecDeque<String> = ids::split_ids(text).into_iter().map(Into::into).collect();
-                self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
-                self.job = Some(Job::Fetch(Batch { step: self.step.clone(), total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
+                // The add prompt itself has already closed; a :discover list stays open.
+                let back = if self.mode == Mode::Found { Mode::Found } else { Mode::Normal };
+                self.pending_add = Some((text.to_string(), back));
+                self.open_chooser(PickKind::AddTo);
             }
             _ => {}
         }
@@ -2552,12 +2592,13 @@ impl App {
     }
 
     /// Fetches and saves one identifier; returns its key and whether it was already in the library.
-    fn add_one(&mut self, input: &str, step: &undo::Step) -> anyhow::Result<(String, bool)> {
+    fn add_one(&mut self, input: &str, collection: Option<&String>, step: &undo::Step) -> anyhow::Result<(String, bool)> {
         let mut r = wand::fetch(input)?;
         if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) {
             return Ok((x.key.clone(), true));
         }
         r.key = self.lib.unique_key(&r);
+        r.collections = collection.into_iter().cloned().collect();
         self.write(step, vec![self.lib.save(&r)?])?;
         self.reload();
         Ok((r.key, false))
@@ -2566,7 +2607,7 @@ impl App {
     /// Adds the batch's next identifier, then queues the rest so the status line shows progress.
     fn add_next(&mut self, mut batch: Batch) {
         let Some(input) = batch.todo.pop_front() else { return self.finish_batch(batch) };
-        match self.add_one(&input, &batch.step) {
+        match self.add_one(&input, batch.collection.as_ref(), &batch.step) {
             Ok((key, true)) => batch.existed.push(key),
             Ok((key, false)) => batch.added.push(key),
             Err(e) => batch.failed.push((input, format!("{e:#}"))),
