@@ -1810,7 +1810,7 @@ impl App {
         let mut probe = self.lib.refs[cur].clone();
         library::cycle_status(&mut probe, forward);
         self.update_targets(|r| r.status = probe.status.clone());
-        self.status = format!("status: {}{}", probe.status.as_deref().unwrap_or("none"), plural_suffix(targets.len()));
+        self.status = format!("status: {}{}", probe.status, plural_suffix(targets.len()));
         self.refilter();
     }
 

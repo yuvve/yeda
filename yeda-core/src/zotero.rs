@@ -72,7 +72,7 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
                     let mut note = Vec::new();
                     for line in value.lines() {
                         if let Some(status) = line.strip_prefix("Read_Status:") {
-                            r.status = Some(status.trim().into());
+                            r.status = status.trim().into();
                         } else if let Some(date) = line.strip_prefix("Read_Status_Date:") {
                             r.extra.insert("status_date".into(), date.trim().into());
                         } else {
@@ -273,7 +273,8 @@ fn convert_search(conditions: &[Condition], collections: &HashMap<String, String
             "extra" if value.starts_with("Read_Status") => {
                 let status = value.strip_prefix("Read_Status").unwrap().trim_start_matches(':').trim();
                 match (op.as_str(), status.is_empty()) {
-                    ("doesNotContain", true) => "status:\"\"".into(),
+                    // Zotero has no status where yeda has New.
+                    ("doesNotContain", true) => "status:\"^New$\"".into(),
                     ("contains" | "is", false) => format!("status:\"^{status}$\""),
                     ("doesNotContain" | "isNot", false) => format!("status:\"!^{status}$\""),
                     _ => return None,
@@ -565,7 +566,7 @@ mod tests {
         );
         assert_eq!(
             with(c("extra", "doesNotContain", "Read_Status")).as_deref(),
-            Some(r#"coll:"^PhD Literature Review$" status:"""#)
+            Some(r#"coll:"^PhD Literature Review$" status:"^New$""#)
         );
         assert_eq!(with(c("publicationTitle", "contains", "Nature")).as_deref(), Some(r#"coll:"^PhD Literature Review$" journal:"'Nature""#));
         assert_eq!(with(c("joinMode", "any", "")), None);

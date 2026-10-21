@@ -36,7 +36,6 @@ FIELDS
     coll:^thesis              in "thesis" or any sub-collection of it
     year:2023|2024|2025       years are text, so list them; there are no ranges
     doi:""                    the field is empty: references without a DOI
-    status:""                 references without a reading status
 
 FILTER  ( f )
 

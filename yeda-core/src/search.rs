@@ -114,7 +114,7 @@ fn field_values(r: &Ref, name: &str) -> Vec<String> {
         "tag" => r.tags.clone(),
         "coll" | "collection" => r.collections.clone(),
         "key" => vec![r.key.clone()],
-        "status" => r.status.clone().into_iter().collect(),
+        "status" => vec![r.status.clone()],
         other => r
             .extra
             .get(other)
@@ -196,7 +196,7 @@ mod tests {
             authors: vec!["Smith, John".into()],
             year: Some(2020),
             tags: vec!["ml".into(), "priority 1".into()],
-            status: Some("To Read".into()),
+            status: "To Read".into(),
             ..Default::default()
         };
         let mut s = Searcher::new();

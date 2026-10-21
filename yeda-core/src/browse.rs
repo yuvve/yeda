@@ -111,7 +111,7 @@ pub struct Sort {
 /// Sorts `visible` (indices into `lib.refs`); ties keep key order, and references missing the
 /// field go last either way.
 pub fn sort(lib: &Library, visible: &mut [usize], by: Sort) {
-    let status_rank = |r: &Ref| r.status.as_deref().and_then(|s| crate::library::STATUSES.iter().position(|x| *x == s));
+    let status_rank = |r: &Ref| crate::library::STATUSES.iter().position(|x| *x == r.status);
     let text = |r: &Ref| -> Option<String> {
         match by.field {
             SortField::Key => Some(r.key.clone()),
@@ -170,7 +170,7 @@ mod tests {
     fn sorts_with_missing_values_last() {
         let refs = [
             ("a".to_string(), "year = 2020\nstatus = \"Read\"\n".to_string()),
-            ("b".into(), "year = 2024\n".into()),
+            ("b".into(), "year = 2024\nstatus = \"Lost\"\n".into()),
             ("c".into(), "status = \"New\"\n".into()),
         ];
         let lib = Library::parse(None, None, refs, None).unwrap();

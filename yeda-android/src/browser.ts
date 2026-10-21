@@ -28,7 +28,7 @@ interface Row {
 	title: string;
 	authors: string[];
 	year: number | null;
-	status: string | null;
+	status: string;
 	tags: string[];
 	has_pdf: boolean;
 }
@@ -53,7 +53,7 @@ interface Ref {
 	doi?: string;
 	tags: string[];
 	collections: string[];
-	status?: string;
+	status: string;
 	pdf?: Pdf[];
 	extra?: Record<string, unknown>;
 }
@@ -228,7 +228,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 		const rows = await invoke<Row[]>('list', { filter, query: search.value, sort });
 		localStorage.setItem(VIEW_KEY, JSON.stringify({ filter, sort, query: search.value }));
 		const list = h('ul', {}, ...rows.map(r => h('li', { onclick: () => run(() => showDetails(r.key)) },
-			h('div', {}, `${GLYPHS[r.status ?? ''] ?? '·'} `, r.title || r.key),
+			h('div', {}, `${GLYPHS[r.status] ?? '?'} `, r.title || r.key),
 			h('div', { className: 'meta' }, [r.authors[0]?.split(',')[0], r.year].filter(Boolean).join(' · '),
 				r.has_pdf ? '' : ' · no PDF'),
 			r.tags.length > 0 && h('div', {}, ...r.tags.map(chip)))));
@@ -317,10 +317,10 @@ export function showBrowser(openReader: () => void): () => boolean {
 			await showDetails(key);
 		});
 
-		const statusSelect = h('select', {}, h('option', { value: '' }, 'No status'),
+		const statusSelect = h('select', {},
 			...overview.statuses.map(s => h('option', { value: s, selected: s === r.status }, `${GLYPHS[s]} ${s}`)));
 		statusSelect.onchange = () => run(async () => {
-			await invoke('set_status', { key, status: statusSelect.value || null });
+			await invoke('set_status', { key, status: statusSelect.value });
 			await reload();
 		});
 
