@@ -76,6 +76,16 @@ impl SetupForm {
         SetupForm { kind, values, sel, testing: false, old }
     }
 
+    /// The saved-search form filled in from `name`, under a name not yet taken, saving a new search.
+    pub fn duplicate(name: &str, lib: &Library) -> SetupForm {
+        let mut form = SetupForm::new(Kind::Search, name, lib);
+        let copy = std::iter::once(format!("{name} copy")).chain((2..).map(|n| format!("{name} copy {n}"))).find(|n| !lib.searches.contains_key(n));
+        form.values[0] = copy.unwrap_or_default();
+        form.sel = 0;
+        form.old = None;
+        form
+    }
+
     /// Picks the next (or previous) provider preset, filling in its base URL.
     pub fn cycle_provider(&mut self, back: bool) {
         let at = PRESETS.iter().position(|p| p.0 == self.values[1].trim().to_lowercase());
@@ -264,6 +274,8 @@ mod tests {
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");
 
         let lib = Library::parse(Some("[searches]\nnew = { query = \"tag:x\", sort = \"author\", descending = true }\n"), None, [], None).unwrap();
+        let copy = SetupForm::duplicate("new", &lib);
+        assert_eq!((copy.values.as_slice(), copy.old.as_deref()), (["new copy", "tag:x", "-author"].map(String::from).as_slice(), None));
         let mut f = SetupForm::new(Kind::Search, "new", &lib);
         assert_eq!(f.values, ["new", "tag:x", "-author"]);
         f.values[2] = "year".into();

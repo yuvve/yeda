@@ -88,6 +88,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("open", "open the PDF in the reader (yeda read)"),
     ("edit", "edit the reference file in $EDITOR; on a saved search in the library column, its name, query and sort"),
     ("note", "edit the reference's note in $EDITOR"),
+    ("duplicate", "on a saved search in the library column, a new one filled in from it; saved on Enter"),
     ("mark", "mark or unmark the reference"),
     ("range", "mark a range as you move"),
     ("tags", "edit tags"),
@@ -1150,6 +1151,13 @@ impl App {
                 self.mode = Mode::Setup;
             }
             "edit" => self.edit = self.selected().map(|r| (self.path(&library::ref_path(&r.key)), None)),
+            "duplicate" => match self.current_filter() {
+                Filter::Search(name, _) if self.pane == Pane::Sidebar => {
+                    self.setup = Some(SetupForm::duplicate(name, &self.lib));
+                    self.mode = Mode::Setup;
+                }
+                _ => self.status = "select a saved search in the library column to duplicate it".into(),
+            },
             "note" => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
             "tags" => self.open_chooser(PickKind::Tags),
             "move" => self.open_chooser(PickKind::Move),
