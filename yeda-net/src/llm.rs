@@ -84,14 +84,10 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
         "messages": [{"role": "user", "content": content}],
     });
     let mut headers = vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
-    let fallback_models = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
-    if p.fallbacks.unwrap_or(p.base_url.is_none() && fallback_models.contains(&p.model.as_str())) {
-        body["fallbacks"] = json!("default");
-        headers.push(("anthropic-beta", "server-side-fallback-2026-07-01".into()));
-    }
+    add_fallbacks(p, &mut body, &mut headers);
     let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
     match v["stop_reason"].as_str() {
-        Some("refusal") => bail!("the model declined ({})", v["stop_details"]["category"].as_str().unwrap_or("no category")),
+        Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
         Some("max_tokens") => bail!("output hit max_tokens ({}); raise max_tokens in the llm profile", body["max_tokens"]),
         _ => {}
     }
@@ -103,6 +99,18 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
         .filter_map(|b| b["text"].as_str())
         .collect::<String>();
     Ok(Reply { text, note })
+}
+
+fn add_fallbacks(p: &Profile, body: &mut Value, headers: &mut Vec<(&str, String)>) {
+    let fallback_models = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
+    if p.fallbacks.unwrap_or(p.base_url.is_none() && fallback_models.contains(&p.model.as_str())) {
+        body["fallbacks"] = json!("default");
+        headers.push(("anthropic-beta", "server-side-fallback-2026-07-01".into()));
+    }
+}
+
+fn refusal_category(v: &Value) -> &str {
+    v["stop_details"]["category"].as_str().unwrap_or("no category")
 }
 
 fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
@@ -169,11 +177,11 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
 
 fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
     let base = p.url();
-    let headers = [("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
+    let headers = vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
     let mut messages = vec![json!({"role": "user", "content": text})];
     // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.
     for _ in 0..4 {
-        let body = json!({
+        let mut body = json!({
             "model": p.model,
             "max_tokens": p.max_tokens.unwrap_or(16000),
             "system": system,
@@ -181,10 +189,12 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
             "messages": messages,
         });
+        let mut headers = headers.clone();
+        add_fallbacks(p, &mut body, &mut headers);
         let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
         match v["stop_reason"].as_str() {
             Some("pause_turn") => messages.push(json!({"role": "assistant", "content": v["content"]})),
-            Some("refusal") => bail!("the model declined"),
+            Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
             _ => {
                 let blocks = v["content"].as_array().into_iter().flatten();
                 return Ok(blocks.filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect());
