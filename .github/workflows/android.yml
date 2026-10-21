@@ -14,6 +14,8 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    env:
+      APK: yeda.apk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,9 +53,20 @@ jobs:
           echo "AR_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "RANLIB_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
+      # android-v2026.10.21.3 builds yeda-2026.10.21-3.apk, version code 2026102103: Android only
+      # installs over an older code, and the tag's day and build number keep the codes increasing.
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        run: |
+          IFS=. read -r y m d n <<< "${GITHUB_REF_NAME#android-v}"
+          y=$((10#$y)) m=$((10#$m)) d=$((10#$d)) n=$((10#${n:-1}))
+          code=$(printf '%04d%02d%02d%02d' "$y" "$m" "$d" "$n")
+          echo "VERSION_CONFIG={\"version\":\"$y.$m.$d-$n\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
+          echo "APK=yeda-$y.$m.$d-$n.apk" >> "$GITHUB_ENV"
+
       - name: Build APK
         working-directory: yeda-android
-        run: npx tauri android build --apk --target aarch64 --ci
+        run: npx tauri android build --apk --target aarch64 --ci ${VERSION_CONFIG:+--config "$VERSION_CONFIG"}
 
       # Without a keystore secret, a throwaway key signs the APK; installing a later build then needs an uninstall first.
       - name: Sign APK
@@ -70,15 +83,15 @@ jobs:
           fi
           unsigned=$(find yeda-android/src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
-          "$apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --out yeda.apk "$unsigned"
+          "$apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --out "$APK" "$unsigned"
 
       - uses: actions/upload-artifact@v4
         with:
           name: yeda-apk
-          path: yeda.apk
+          path: ${{ env.APK }}
 
       - name: Publish the APK as a release
         if: startsWith(github.ref, 'refs/tags/android-v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" yeda.apk --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
+        run: gh release create "$GITHUB_REF_NAME" "$APK" --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."

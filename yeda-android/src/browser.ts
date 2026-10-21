@@ -1,3 +1,4 @@
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
 import { einkMode, setEinkMode } from '../../yeda-reader/src/pen';
@@ -544,7 +545,8 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('p', { className: 'meta' }, 'settings.toml: the library folder, and [locations] for folders elsewhere on this device.'),
 			button('Edit settings.toml', () => run(showSettingsFile)),
 			h('h2', {}, 'Display'), einkToggle(),
-			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp));
+			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp),
+			h('h2', {}, 'Version'), h('p', {}, `yeda ${await getVersion()}`));
 	}
 
 	function webdavForm() {
