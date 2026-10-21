@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["yuvve"]
 license = "AGPL-3.0-only"
 description = "yeda's PDF reader and annotator"
+readme = "../README.md"
 repository = "https://github.com/yuvve/yeda"
 # The built frontend ships in the crate, so a build from crates.io needs no npm; so do the
 # schemas tauri-build writes, since a published build script must leave its source unchanged.

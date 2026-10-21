@@ -1,5 +1,7 @@
 # yeda-secrets
 
+Part of [yeda](https://github.com/yuvve/yeda), and not meant to be used on its own: install yeda with `cargo install yeda`.
+
 Keeps secrets (WebDAV passwords, LLM API keys) in the system's secret store, never in a file:
 
 - **Linux:** the Secret Service, as served by GNOME Keyring, KWallet or KeePassXC. yeda only uses a provider that is already running; it never lets D-Bus start one, so no keyring prompt appears unasked.

@@ -1,5 +1,7 @@
 # yeda-core
 
+Part of [yeda](https://github.com/yuvve/yeda), and not meant to be used on its own: install yeda with `cargo install yeda`.
+
 The library format and the logic on top of it. It reads no files, makes no network requests and runs no processes. Callers pass in file contents and get back values or `Effect`s, which are writes and removals at library-relative paths for the caller to apply.
 
 | Module | Contents |

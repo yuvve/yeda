@@ -1,5 +1,7 @@
 # yeda-reader
 
+Part of [yeda](https://github.com/yuvve/yeda), and not meant to be used on its own: install yeda with `cargo install yeda`, which runs this reader as `yeda read`.
+
 A desktop PDF reader and annotator with vim keys, built on Tauri v2 and a fork of [zotero/reader](https://github.com/zotero/reader). The fork is a submodule at `reader/`.
 
 ```sh
