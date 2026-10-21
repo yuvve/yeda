@@ -1,7 +1,7 @@
 # yeda-tui
 
 <!-- embed -->
-**tl;dr:** a vibe-coded terminal reference manager whose library you can check into git, with citation graphs, a download assistant that makes fetching PDFs easy, and LLM features such as paper discovery and summary tables.
+**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with citation graphs, a download assistant that makes fetching PDFs easy, and LLM features such as paper discovery and summary tables.
 
 ## AI usage disclaimer
 
