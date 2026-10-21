@@ -2,9 +2,9 @@
 
 <!-- The yeda-tui and yeda-android parts are copied from their READMEs by scripts/readme.py; edit those instead. -->
 <!-- yeda-tui -->
-## AI usage disclaimer
+**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with citation graphs, a download assistant that makes fetching PDFs easy, and LLM features such as paper discovery and summary tables.
 
-**🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded. I built it as a practical tool, caring only that it works, not about code quality. I use it as my research tool, and it works well for my needs. 💩🤖**
+**🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded 💩🤖**
 
 ## About
 
