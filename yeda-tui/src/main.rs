@@ -475,13 +475,20 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                 app.status = result.unwrap_or_else(|e| format!("git-init: {e:#}"));
             })?;
         }
+        if let Some(path) = app.edit_command.take() {
+            let mut result = None;
+            suspend(term, || result = Some(editor().arg(&path).status()))?;
+            match result.unwrap() {
+                Ok(_) => app.command_edited(&path),
+                Err(e) => app.status = format!("editor: {e}"),
+            }
+        }
         if let Some((path, line)) = app.edit.take() {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
             let mut result = None;
-            suspend(term, || result = Some(Command::new(editor).args(line.map(|n| format!("+{n}"))).arg(&path).status()))?;
+            suspend(term, || result = Some(editor().args(line.map(|n| format!("+{n}"))).arg(&path).status()))?;
             match result.unwrap() {
                 Ok(_) => app.reload(),
                 Err(e) => app.status = format!("editor: {e}"),
@@ -489,6 +496,15 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `$EDITOR`, which may carry arguments (`code -w`), else vi.
+fn editor() -> Command {
+    let editor = std::env::var("EDITOR").unwrap_or_default();
+    let mut words = editor.split_whitespace();
+    let mut command = Command::new(words.next().unwrap_or("vi"));
+    command.args(words);
+    command
 }
 
 /// Hands the terminal to `f`, then takes it back.

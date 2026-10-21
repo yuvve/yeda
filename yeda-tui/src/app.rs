@@ -49,6 +49,8 @@ pub enum Mode {
     TablePick,
     /// Picking which of a reference's PDFs a command uses.
     PdfPick,
+    /// The command history, to pick one to edit.
+    History,
     Help(HelpPage),
 }
 
@@ -147,6 +149,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
     (":discover [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described; a adds one"),
     (":found", "the papers the last :discover found"),
+    (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
     (":setup openalex", "set the optional OpenAlex API key, testing it first"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
@@ -226,6 +229,42 @@ pub enum Prompt {
     TableSearch,
     /// What the table's current column must match, applied as typed.
     TableFilter,
+}
+
+/// Applies an editing key to `buf` with its cursor `back` characters from the end; false for
+/// keys it doesn't handle.
+fn edit_line(buf: &mut String, back: &mut usize, code: KeyCode, ctrl: bool) -> bool {
+    let len = buf.chars().count();
+    *back = (*back).min(len);
+    let at = buf.char_indices().nth(len - *back).map_or(buf.len(), |(i, _)| i);
+    match code {
+        KeyCode::Char('u') if ctrl => buf.replace_range(..at, ""),
+        KeyCode::Char('w') if ctrl => {
+            let keep = buf[..at].trim_end().rfind(' ').map_or(0, |i| i + 1);
+            buf.replace_range(keep..at, "");
+        }
+        KeyCode::Char('a') if ctrl => *back = len,
+        KeyCode::Char('e') if ctrl => *back = 0,
+        KeyCode::Char(_) if ctrl => {}
+        KeyCode::Char(c) => buf.insert(at, c),
+        KeyCode::Backspace => {
+            if let Some(c) = buf[..at].chars().next_back() {
+                buf.replace_range(at - c.len_utf8()..at, "");
+            }
+        }
+        KeyCode::Delete => {
+            if *back > 0 {
+                buf.remove(at);
+                *back -= 1;
+            }
+        }
+        KeyCode::Left => *back = (*back + 1).min(len),
+        KeyCode::Right => *back = back.saturating_sub(1),
+        KeyCode::Home => *back = len,
+        KeyCode::End => *back = 0,
+        _ => return false,
+    }
+    true
 }
 
 /// `s` without one pair of surrounding quotes, as a path copied from a shell has.
@@ -522,6 +561,15 @@ pub struct App {
     /// Earlier `:` commands, oldest first, and the one Up/Down is showing.
     history: Vec<String>,
     history_at: Option<usize>,
+    /// The command line's cursor, in characters from the end.
+    pub cursor_back: usize,
+    /// Ctrl-X was pressed on the command line, starting Ctrl-X Ctrl-E.
+    ctrl_x: bool,
+    /// The file the command line is being edited in, by $EDITOR.
+    pub edit_command: Option<PathBuf>,
+    /// What typed text the history list shows commands containing.
+    pub history_filter: String,
+    pub history_sel: usize,
     /// Tab completion in progress on the command line.
     pub completion: Option<Completion>,
     /// The command waiting for a table from the picker, and the arguments after the table's name.
@@ -550,6 +598,11 @@ impl App {
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
             history_at: None,
+            cursor_back: 0,
+            ctrl_x: false,
+            edit_command: None,
+            history_filter: String::new(),
+            history_sel: 0,
             completion: None,
             table_pick: None,
             pdf_pick: None,
@@ -775,6 +828,7 @@ impl App {
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
             Mode::PdfPick => self.pdf_pick_key(k),
+            Mode::History => self.history_key(k),
             Mode::Help(_) => self.help_key(k),
             Mode::Search | Mode::SideSearch | Mode::Prompt(_) => self.input_key(k),
         }
@@ -1085,6 +1139,7 @@ impl App {
             }
         }
         let Some(c) = &self.completion else { return };
+        self.cursor_back = 0;
         self.input = c.line();
         if c.candidates.len() == 1 {
             self.input.push(' ');
@@ -1101,7 +1156,57 @@ impl App {
             (Some(i), false) => Some(i + 1).filter(|&i| i < self.history.len()),
         };
         self.history_at = at;
+        self.cursor_back = 0;
         self.input = at.map(|i| self.history[i].clone()).unwrap_or_default();
+    }
+
+    /// Past commands containing `history_filter`, newest first.
+    pub fn history_matches(&self) -> Vec<&String> {
+        self.history.iter().rev().filter(|c| c.contains(&self.history_filter)).collect()
+    }
+
+    fn open_history(&mut self) {
+        self.history_filter = self.input.trim().to_string();
+        self.history_sel = 0;
+        self.mode = Mode::History;
+    }
+
+    fn history_key(&mut self, k: KeyEvent) {
+        let n = self.history_matches().len().max(1);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Prompt(Prompt::Command),
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => self.history_sel = (self.history_sel + 1) % n,
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => self.history_sel = (self.history_sel + n - 1) % n,
+            KeyCode::Enter => {
+                if let Some(c) = self.history_matches().get(self.history_sel) {
+                    self.input = c.to_string();
+                }
+                self.cursor_back = 0;
+                self.mode = Mode::Prompt(Prompt::Command);
+            }
+            _ => {}
+        }
+    }
+
+    /// Hands the command line to $EDITOR; it comes back on the command line, joined into one line.
+    fn edit_command_line(&mut self) {
+        let Some(cache) = self.lib.cache.clone() else { return self.status = "no cache folder to edit the command in".into() };
+        let path = cache.join("command.txt");
+        if let Err(e) = fs::create_dir_all(&cache).and_then(|_| fs::write(&path, format!("{}\n", self.input))) {
+            return self.status = format!("{}: {e}", path.display());
+        }
+        self.edit_command = Some(path);
+    }
+
+    /// The text $EDITOR left in the command file, back on the command line.
+    pub fn command_edited(&mut self, path: &std::path::Path) {
+        match fs::read_to_string(path) {
+            Ok(text) => {
+                self.input = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                self.cursor_back = 0;
+            }
+            Err(e) => self.status = format!("{}: {e}", path.display()),
+        }
     }
 
     fn input_key(&mut self, k: KeyEvent) {
@@ -1113,28 +1218,31 @@ impl App {
             return self.complete(k.code == KeyCode::BackTab);
         }
         self.completion = None;
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if mode == Mode::Prompt(Prompt::Command) && ctrl {
+            match k.code {
+                KeyCode::Char('e') if std::mem::take(&mut self.ctrl_x) => return self.edit_command_line(),
+                KeyCode::Char('x') => return self.ctrl_x = true,
+                KeyCode::Char('r') => return self.open_history(),
+                _ => {}
+            }
+        }
+        self.ctrl_x = false;
         let buf = match mode {
             Mode::Search => &mut self.query,
             Mode::SideSearch => &mut self.side_query,
             _ => &mut self.input,
         };
-        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match k.code {
-            KeyCode::Char('u') if ctrl => buf.clear(),
-            KeyCode::Char('w') if ctrl => {
-                let keep = buf.trim_end().rfind(' ').map_or(0, |i| i + 1);
-                buf.truncate(keep);
-            }
-            KeyCode::Char(c) => buf.push(c),
-            KeyCode::Backspace => {
-                buf.pop();
-            }
+            _ if edit_line(buf, &mut self.cursor_back, k.code, ctrl) => {}
             KeyCode::Esc => {
                 buf.clear();
+                self.cursor_back = 0;
                 self.mode = Mode::Normal;
                 self.history_at = None;
             }
             KeyCode::Enter => {
+                self.cursor_back = 0;
                 if let Mode::Prompt(p) = std::mem::replace(&mut self.mode, Mode::Normal) {
                     let text = std::mem::take(&mut self.input);
                     self.history_at = None;
@@ -1692,6 +1800,10 @@ impl App {
                 }
                 ("found", _) if self.found.is_empty() => self.status = "nothing found yet: :discover".into(),
                 ("found", _) => self.mode = Mode::Found,
+                ("history", _) => {
+                    self.input.clear();
+                    self.open_history();
+                }
                 ("setup", rest) => {
                     let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
                     let kind = match kind {
@@ -3146,6 +3258,24 @@ fn reap(mut child: std::process::Child) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edits_at_the_cursor() {
+        use ratatui::crossterm::event::KeyCode::*;
+        let (mut buf, mut back) = ("tag ml".to_string(), 0);
+        let mut key = |code, ctrl| assert!(super::edit_line(&mut buf, &mut back, code, ctrl));
+        key(Left, false);
+        key(Left, false);
+        key(Char('x'), false);
+        key(Backspace, false);
+        key(Backspace, false);
+        key(Char('é'), false);
+        key(Delete, false);
+        key(Char('w'), true);
+        key(End, false);
+        key(Char('!'), false);
+        assert_eq!((buf.as_str(), back), ("l!", 0));
+    }
+
     #[test]
     fn unquotes_paths() {
         assert_eq!(super::unquote("\"~/a b.pdf\""), "~/a b.pdf");
