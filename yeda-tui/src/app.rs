@@ -272,6 +272,17 @@ fn unquote(s: &str) -> &str {
     ['"', '\''].iter().find_map(|q| s.strip_prefix(*q)?.strip_suffix(*q)).unwrap_or(s)
 }
 
+/// A typed text that $EDITOR can edit.
+#[derive(Clone, Copy)]
+pub enum TextTarget {
+    /// The command line and the other prompts.
+    Input,
+    Query,
+    SideQuery,
+    Filter(usize),
+    Setup(usize),
+}
+
 /// What to run again once a missing secret has been entered.
 #[derive(Clone)]
 pub enum Retry {
@@ -565,8 +576,8 @@ pub struct App {
     pub cursor_back: usize,
     /// Ctrl-X was pressed on the command line, starting Ctrl-X Ctrl-E.
     ctrl_x: bool,
-    /// The file the command line is being edited in, by $EDITOR.
-    pub edit_command: Option<PathBuf>,
+    /// The file a typed text is being edited in by $EDITOR, and where it goes back.
+    pub edit_text: Option<(PathBuf, TextTarget)>,
     /// What typed text the history list shows commands containing.
     pub history_filter: String,
     pub history_sel: usize,
@@ -600,7 +611,7 @@ impl App {
             history_at: None,
             cursor_back: 0,
             ctrl_x: false,
-            edit_command: None,
+            edit_text: None,
             history_filter: String::new(),
             history_sel: 0,
             completion: None,
@@ -797,6 +808,15 @@ impl App {
         if matches!(self.mode, Mode::Normal | Mode::Prompt(Prompt::Command)) {
             self.pdf_chosen.clear();
         }
+        let mode = self.mode;
+        let field = (self.form.as_ref().map(|f| f.sel), self.setup.as_ref().map(|f| f.sel));
+        self.on_key_in_mode(k);
+        if self.mode != mode || field != (self.form.as_ref().map(|f| f.sel), self.setup.as_ref().map(|f| f.sel)) {
+            self.cursor_back = 0;
+        }
+    }
+
+    fn on_key_in_mode(&mut self, k: KeyEvent) {
         match self.mode {
             Mode::Normal => self.normal_key(k),
             Mode::Secrets => self.secrets_key(k),
@@ -1188,24 +1208,44 @@ impl App {
         }
     }
 
-    /// Hands the command line to $EDITOR; it comes back on the command line, joined into one line.
-    fn edit_command_line(&mut self) {
-        let Some(cache) = self.lib.cache.clone() else { return self.status = "no cache folder to edit the command in".into() };
-        let path = cache.join("command.txt");
-        if let Err(e) = fs::create_dir_all(&cache).and_then(|_| fs::write(&path, format!("{}\n", self.input))) {
-            return self.status = format!("{}: {e}", path.display());
+    fn text_mut(&mut self, target: TextTarget) -> Option<&mut String> {
+        match target {
+            TextTarget::Input => Some(&mut self.input),
+            TextTarget::Query => Some(&mut self.query),
+            TextTarget::SideQuery => Some(&mut self.side_query),
+            TextTarget::Filter(i) => self.form.as_mut()?.values.get_mut(i),
+            TextTarget::Setup(i) => self.setup.as_mut()?.values.get_mut(i),
         }
-        self.edit_command = Some(path);
     }
 
-    /// The text $EDITOR left in the command file, back on the command line.
-    pub fn command_edited(&mut self, path: &std::path::Path) {
-        match fs::read_to_string(path) {
-            Ok(text) => {
-                self.input = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                self.cursor_back = 0;
-            }
-            Err(e) => self.status = format!("{}: {e}", path.display()),
+    /// Hands a typed text to $EDITOR; it comes back in its place.
+    fn edit_in_editor(&mut self, target: TextTarget) {
+        let Some(cache) = self.lib.cache.clone() else { return self.status = "no cache folder to edit the text in".into() };
+        let text = self.text_mut(target).cloned().unwrap_or_default();
+        let path = cache.join("edit.txt");
+        if let Err(e) = fs::create_dir_all(&cache).and_then(|_| fs::write(&path, format!("{text}\n"))) {
+            return self.status = format!("{}: {e}", path.display());
+        }
+        self.edit_text = Some((path, target));
+    }
+
+    /// The text $EDITOR left in the file, back where it came from: joined into one line, except
+    /// in the add prompt, which takes one identifier per line.
+    pub fn text_edited(&mut self, path: &std::path::Path, target: TextTarget) {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) => return self.status = format!("{}: {e}", path.display()),
+        };
+        let lines = self.mode == Mode::Prompt(Prompt::Add);
+        let text = if lines { text.trim_end().to_string() } else { text.split_whitespace().collect::<Vec<_>>().join(" ") };
+        if let Some(buf) = self.text_mut(target) {
+            *buf = text;
+        }
+        self.cursor_back = 0;
+        match self.mode {
+            Mode::Search => self.refilter(),
+            Mode::SideSearch => self.refilter_sidebar(true),
+            _ => {}
         }
     }
 
@@ -1219,9 +1259,17 @@ impl App {
         }
         self.completion = None;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && k.code == KeyCode::Char('g') && mode != Mode::Prompt(Prompt::Secret) {
+            let target = match mode {
+                Mode::Search => TextTarget::Query,
+                Mode::SideSearch => TextTarget::SideQuery,
+                _ => TextTarget::Input,
+            };
+            return self.edit_in_editor(target);
+        }
         if mode == Mode::Prompt(Prompt::Command) && ctrl {
             match k.code {
-                KeyCode::Char('e') if std::mem::take(&mut self.ctrl_x) => return self.edit_command_line(),
+                KeyCode::Char('e') if std::mem::take(&mut self.ctrl_x) => return self.edit_in_editor(TextTarget::Input),
                 KeyCode::Char('x') => return self.ctrl_x = true,
                 KeyCode::Char('r') => return self.open_history(),
                 _ => {}
@@ -1340,12 +1388,14 @@ impl App {
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
             KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
             KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
-            KeyCode::Char('u') if ctrl => form.values[form.sel].clear(),
-            KeyCode::Backspace => {
-                form.values[form.sel].pop();
+            // A secret never goes to a file.
+            KeyCode::Char('g') if ctrl && !form.masked(form.sel) => {
+                let sel = form.sel;
+                self.edit_in_editor(TextTarget::Setup(sel));
             }
-            KeyCode::Char(c) if !ctrl => form.values[form.sel].push(c),
-            _ => {}
+            code => {
+                edit_line(&mut form.values[form.sel], &mut self.cursor_back, code, ctrl);
+            }
         }
         if let Some(form) = &mut self.setup
             && form.kind == setup::Kind::Llm
@@ -1433,7 +1483,8 @@ impl App {
             KeyCode::Char('u') if ctrl => form.select((form.sel + n - 1) % n, &self.lib.refs),
             KeyCode::Char('n') if ctrl => form.pick = (form.pick + 1).min(form.suggestions().len().saturating_sub(1)),
             KeyCode::Char('p') if ctrl => form.pick = form.pick.saturating_sub(1),
-            KeyCode::Tab | KeyCode::Right => form.accept(),
+            KeyCode::Tab => form.accept(),
+            KeyCode::Right if self.cursor_back == 0 => form.accept(),
             KeyCode::Char('l') if ctrl => {
                 form.values[form.sel].clear();
                 form.pick = 0;
@@ -1443,15 +1494,15 @@ impl App {
                 form.other.clear();
                 form.pick = 0;
             }
-            KeyCode::Backspace => {
-                form.values[form.sel].pop();
-                form.pick = 0;
+            KeyCode::Char('g') if ctrl => {
+                let sel = form.sel;
+                self.edit_in_editor(TextTarget::Filter(sel));
             }
-            KeyCode::Char(c) if !ctrl => {
-                form.values[form.sel].push(c);
-                form.pick = 0;
+            code => {
+                if edit_line(&mut form.values[form.sel], &mut self.cursor_back, code, ctrl) {
+                    form.pick = 0;
+                }
             }
-            _ => {}
         }
     }
 
@@ -1692,22 +1743,11 @@ impl App {
             KeyCode::Char('n') if ctrl => step(c, 1),
             KeyCode::Up | KeyCode::BackTab => step(c, -1),
             KeyCode::Char('p') if ctrl => step(c, -1),
-            KeyCode::Char('u') if ctrl => {
-                self.input.clear();
+            KeyCode::Backspace if self.input.is_empty() && c.kind == PickKind::Tags => {
+                c.tags.pop();
                 self.refresh_options();
             }
-            KeyCode::Backspace => {
-                if self.input.is_empty() && c.kind == PickKind::Tags {
-                    c.tags.pop();
-                } else {
-                    self.input.pop();
-                }
-                self.refresh_options();
-            }
-            KeyCode::Char(ch) if !ctrl => {
-                self.input.push(ch);
-                self.refresh_options();
-            }
+            KeyCode::Char('g') if ctrl => self.edit_in_editor(TextTarget::Input),
             KeyCode::Enter if !c.active(&self.input) => self.close_chooser(),
             KeyCode::Enter => {
                 let Some((_, choice)) = c.options.get(c.sel).cloned() else { return };
@@ -1733,7 +1773,11 @@ impl App {
                     (PickKind::Tags, Pick::Unfile) => {}
                 }
             }
-            _ => {}
+            code => {
+                if edit_line(&mut self.input, &mut self.cursor_back, code, ctrl) {
+                    self.refresh_options();
+                }
+            }
         }
     }
 

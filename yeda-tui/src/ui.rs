@@ -341,7 +341,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Search => Some(&app.query),
         Mode::SideSearch => Some(&app.side_query),
         Mode::Prompt(Prompt::Secret | Prompt::Add) => None,
-        Mode::Prompt(_) => Some(&app.input),
+        Mode::Prompt(_) | Mode::Pick => Some(&app.input),
         _ => None,
     };
     if let Some(typed) = typed {
@@ -395,8 +395,8 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
         .zip(&form.values)
         .enumerate()
         .map(|(i, (label, value))| {
-            let cursor = if i == form.sel { "▏" } else { "" };
-            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            let value = if i == form.sel { with_cursor(value, app.cursor_back) } else { value.clone() };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(value)]);
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
@@ -423,8 +423,8 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         .enumerate()
         .map(|(i, ((label, _), value))| {
             let value = if form.masked(i) { "•".repeat(value.chars().count()) } else { value.clone() };
-            let cursor = if i == form.sel { "▏" } else { "" };
-            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(format!("{value}{cursor}"))]);
+            let value = if i == form.sel { with_cursor(&value, app.cursor_back) } else { value.clone() };
+            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(value)]);
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
@@ -514,6 +514,12 @@ fn draw_sort(f: &mut Frame, app: &App, main: Rect) {
 
 fn pdf_name(pdf: &Pdf) -> &str {
     pdf.path.rsplit('/').next().unwrap_or(&pdf.path)
+}
+
+/// `value` with a bar where the cursor is, `back` characters from the end.
+fn with_cursor(value: &str, back: usize) -> String {
+    let at = value.chars().count().saturating_sub(back);
+    value.chars().take(at).chain(std::iter::once('▏')).chain(value.chars().skip(at)).collect()
 }
 
 fn draw_history(f: &mut Frame, app: &App, main: Rect) {

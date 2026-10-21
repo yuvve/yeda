@@ -475,11 +475,11 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                 app.status = result.unwrap_or_else(|e| format!("git-init: {e:#}"));
             })?;
         }
-        if let Some(path) = app.edit_command.take() {
+        if let Some((path, target)) = app.edit_text.take() {
             let mut result = None;
             suspend(term, || result = Some(editor().arg(&path).status()))?;
             match result.unwrap() {
-                Ok(_) => app.command_edited(&path),
+                Ok(_) => app.text_edited(&path, target),
                 Err(e) => app.status = format!("editor: {e}"),
             }
         }

@@ -179,7 +179,10 @@ THE COMMAND LINE  ( : )
     Tab Shift-Tab          complete the last word
     Up Down                earlier / later commands
     Ctrl-R                 past commands containing what is typed (:history)
-    Ctrl-X Ctrl-E          edit the command in $EDITOR; it comes back here
+    Ctrl-G, Ctrl-X Ctrl-E  edit the command in $EDITOR; it comes back here
+
+  The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
+  searches, the filter form, :setup and the tag and collection pickers.
 
 KEY BINDINGS
 
