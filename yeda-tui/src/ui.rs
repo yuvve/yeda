@@ -306,6 +306,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Some(c) if c.kind == PickKind::Tags => {
                 format!("tags: {} › {}", c.tags.iter().map(|t| format!("[{t}]")).collect::<Vec<_>>().join(" "), app.input)
             }
+            Some(c) if c.kind == PickKind::AddTo => format!("add to collection › {}", app.input),
             _ => format!("move to collection › {}", app.input),
         },
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
@@ -356,8 +357,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let area = Rect { x: anchor.x, y: bar.y - height, width: anchor.width, height };
         let hint = if c.kind == PickKind::Tags {
             " Enter toggle · Tab/↓ next · Esc done "
+        } else if c.kind == PickKind::AddTo {
+            " Enter add · type to find or create a collection · Esc cancel "
         } else {
-            " Enter move · Tab/↓ next · Esc cancel "
+            " Enter move · type to find or create a collection · Esc cancel "
         };
         let items: Vec<ListItem> = c.options.iter().map(|(label, _)| ListItem::new(label.clone())).collect();
         let sel = c.active(&app.input).then_some(c.sel);
