@@ -546,7 +546,9 @@ export function showBrowser(openReader: () => void): () => boolean {
 			button('Edit settings.toml', () => run(showSettingsFile)),
 			h('h2', {}, 'Display'), einkToggle(),
 			h('h2', {}, 'Help'), button('Search syntax and screens', showHelp),
-			h('h2', {}, 'Version'), h('p', {}, `yeda ${await getVersion()}`));
+			h('h2', {}, 'Version'), h('p', {}, `yeda ${await getVersion()}`),
+			h('h2', {}, 'Credits'),
+			h('p', { className: 'meta' }, 'App icon: Knowledge graph icons created by Jagat Icon - Flaticon (flaticon.com/free-icons/knowledge-graph)'));
 	}
 
 	function webdavForm() {

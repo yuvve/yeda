@@ -38,6 +38,8 @@ PDFs from outside the library open with "Open with"; their annotations go in a `
 ## Settings
 
 Settings → WebDAV location adds a WebDAV folder for PDFs after a test login. Settings can also be edited as text: the library folder, and `[locations]` for folders on this device. Passwords and tokens are kept in the Android Keystore.
+
+The app icon is from Flaticon: [Knowledge graph icons created by Jagat Icon - Flaticon](https://www.flaticon.com/free-icons/knowledge-graph).
 <!-- /embed -->
 
 ## Building
