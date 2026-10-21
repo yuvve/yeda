@@ -670,6 +670,9 @@ impl App {
         }
         self.visible = browse::visible(&mut self.searcher, &self.lib, &filter, &self.query);
         browse::sort(&self.lib, &mut self.visible, self.sort);
+        // Commands act on marked references, so none may stay marked out of sight.
+        let shown: HashSet<&str> = self.visible.iter().map(|&i| self.lib.refs[i].key.as_str()).collect();
+        self.marked.retain(|k| shown.contains(k.as_str()));
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
         // The anchor is an index into the old `visible`.
         self.visual = None;
