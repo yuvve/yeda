@@ -28,9 +28,14 @@ An Android app reads and annotates the same library.
 cargo install yeda
 ```
 
-Building it needs the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) (WebKitGTK on Linux), which the PDF reader uses. The binary is `yeda`.
+Or download the binary from the [latest release](https://github.com/yuvve/yeda/releases/latest). The binary is `yeda`.
 
-Or download the Linux binary from the [latest release](https://github.com/yuvve/yeda/releases/latest); it needs WebKitGTK 4.1 and poppler.
+yeda runs on Linux only; macOS and Windows have no secret store backend yet ([#292](https://github.com/yuvve/yeda/issues/292)). It needs:
+- the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) for the PDF reader (WebKitGTK 4.1; the `-dev` packages to build);
+- poppler (`pdftotext`, `pdftoppm`), for full-text search, annotation extraction and summaries;
+- a running Secret Service provider (GNOME Keyring, KWallet or KeePassXC) to save passwords and API keys;
+- git, for `:sync`;
+- glibc 2.34 or later, for the release binary.
 
 ```sh
 yeda init       # once: create a library
@@ -80,8 +85,6 @@ pdfs = "/mnt/papers"
 ```
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
-
-Extracting annotations from a PDF (`x`) needs poppler installed.
 
 ## Graphs
 
