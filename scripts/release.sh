@@ -1,7 +1,7 @@
 #!/bin/sh
 # Usage: scripts/release.sh <version>
 # Bumps the workspace version through an issue and PR, publishes every crate to crates.io,
-# then tags v<version> and makes its GitHub release.
+# then tags v<version>; the tag's workflow makes the GitHub release with the APK and Linux binaries.
 set -eu
 v=${1:?usage: scripts/release.sh <version>}
 cd "$(git rev-parse --show-toplevel)"
@@ -30,4 +30,3 @@ cargo build -p yeda
 cargo publish --workspace --exclude yeda-android --allow-dirty
 git tag "v$v"
 git push -q origin "v$v"
-gh release create "v$v" --generate-notes

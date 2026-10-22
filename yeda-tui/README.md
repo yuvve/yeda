@@ -30,6 +30,8 @@ cargo install yeda
 
 Building it needs the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) (WebKitGTK on Linux), which the PDF reader uses. The binary is `yeda`.
 
+Or download the Linux binary from the [latest release](https://github.com/yuvve/yeda/releases/latest); it needs WebKitGTK 4.1 and poppler.
+
 ```sh
 yeda init       # once: create a library
 yeda import     # or instead of init: create it from Zotero
