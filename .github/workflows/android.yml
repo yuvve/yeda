@@ -1,10 +1,10 @@
-name: Android APK
+name: Builds
 
-# Built for `android-v*` tags, pushed after merging changes to the Android app, for `-beta` ones pushed on a
-# PR branch to test it, and by hand.
+# `android-v*` tags publish a beta APK as a pre-release; `v*` tags make the release, with the APK and
+# Linux binaries. The file keeps its name: the APK's version code counts this workflow's runs.
 on:
   push:
-    tags: ["android-v*"]
+    tags: ["android-v*", "v*"]
   pull_request:
     paths: [".github/workflows/android.yml"]
   workflow_dispatch:
@@ -54,21 +54,20 @@ jobs:
           echo "AR_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "RANLIB_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
-      # android-v2026.10.21.3 builds yeda-2026.10.21-3.apk, version code 2026102103: Android only
-      # installs over an older code, and the tag's day and build number keep the codes increasing.
-      # Betas share the day's build numbers, so android-v2026.10.21.4-beta (yeda-2026.10.21-4-beta.apk)
-      # installs over .3, and .5 over it.
+      # Android installs an APK only over one with a lower version code. The run number grows with every build, betas
+      # and releases alike; the offset keeps it above the date codes (2026102203) of earlier APKs.
+      # v0.1.3 builds yeda-0.1.3.apk, android-v2026.10.21.3 yeda-2026.10.21-3.apk (Tauri wants semver).
       - name: Version from the tag
-        if: startsWith(github.ref, 'refs/tags/android-v')
+        if: github.ref_type == 'tag'
         run: |
-          tag=${GITHUB_REF_NAME#android-v}
-          beta=; [[ $tag == *-beta ]] && beta=-beta
-          IFS=. read -r y m d n <<< "${tag%-beta}"
-          y=$((10#$y)) m=$((10#$m)) d=$((10#$d)) n=$((10#${n:-1}))
-          code=$(printf '%04d%02d%02d%02d' "$y" "$m" "$d" "$n")
-          echo "VERSION_CONFIG={\"version\":\"$y.$m.$d-$n$beta\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
-          echo "APK=yeda-$y.$m.$d-$n$beta.apk" >> "$GITHUB_ENV"
-          echo "PRERELEASE=${beta:+--prerelease}" >> "$GITHUB_ENV"
+          name=${GITHUB_REF_NAME#v}
+          if [[ $GITHUB_REF_NAME == android-v* ]]; then
+            IFS=. read -r y m d n <<< "${GITHUB_REF_NAME#android-v}"
+            name=$((10#$y)).$((10#$m)).$((10#$d))-$((10#${n:-1}))
+          fi
+          code=$((2030000000 + GITHUB_RUN_NUMBER))
+          echo "VERSION_CONFIG={\"version\":\"$name\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
+          echo "APK=yeda-$name.apk" >> "$GITHUB_ENV"
 
       - name: Build APK
         working-directory: yeda-android
@@ -96,8 +95,74 @@ jobs:
           name: yeda-apk
           path: ${{ env.APK }}
 
-      - name: Publish the APK as a release
+      - name: Publish the APK as a beta
         if: startsWith(github.ref, 'refs/tags/android-v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$APK" $PRERELEASE --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
+        run: gh release create "$GITHUB_REF_NAME" "$APK" --prerelease --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
+
+  linux:
+    if: "!startsWith(github.ref, 'refs/tags/android-v')"
+    strategy:
+      matrix:
+        # The oldest supported runner, so the binary runs on any glibc since 2.35.
+        runner: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            yeda-reader/reader/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System libraries for Tauri and git2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev pkg-config
+
+      - run: npm ci
+      - run: npm run build:reader -w yeda-reader
+      - run: cargo build --release -p yeda
+
+      - name: Pack the binary
+        run: |
+          name=${GITHUB_REF_NAME#v}
+          [ "$GITHUB_REF_TYPE" = tag ] || name=dev
+          tar -czf "yeda-$name-$(uname -m)-linux.tar.gz" -C target/release yeda
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yeda-linux-${{ matrix.runner }}
+          path: yeda-*-linux.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [apk, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Without a start tag, GitHub starts the notes at the latest release, which may be an APK beta.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          gh release create "$GITHUB_REF_NAME" dist/* --latest --generate-notes ${previous:+--notes-start-tag "$previous"}
