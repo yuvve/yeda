@@ -664,7 +664,7 @@ fn key_help(keymap: &Keymap) -> Vec<Line<'static>> {
 
 fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     let (title, lines): (&str, Vec<Line>) = match page {
-        HelpPage::Keys => (" Keys · j/k scroll · / search · q close · :help for the guide ", key_help(&app.keymap)),
+        HelpPage::Keys => (concat!(" yeda ", env!("CARGO_PKG_VERSION"), " · Keys · j/k scroll · / search · q close · :help for the guide "), key_help(&app.keymap)),
         HelpPage::Guide => {
             // Headings are the unindented lines.
             let lines = GUIDE
