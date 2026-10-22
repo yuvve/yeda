@@ -37,6 +37,18 @@ FIELDS
     year:2023|2024|2025       years are text, so list them; there are no ranges
     doi:""                    the field is empty: references without a DOI
 
+  text: searches the text of the reference's PDFs. It matches exactly
+  rather than fuzzily, ignoring case and line breaks:
+
+    text:"swarm exploration"  a PDF contains that phrase
+    text:lidar|radar !survey  mentions lidar or radar, and isn't a survey
+    text:""                   no text found: scanned or not yet downloaded
+
+  The first text: search reads every PDF on this machine in the background
+  (with poppler's pdftotext) and keeps their text in the cache folder, so
+  later sessions only read new or changed PDFs. WebDAV PDFs are searched
+  once they have been downloaded.
+
 FILTER  ( f )
 
   A form with one box per field (author, title, year, tag, collection,
