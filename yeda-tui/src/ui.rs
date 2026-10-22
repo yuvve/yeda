@@ -677,7 +677,7 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
         HelpPage::Failed => (if app.report_copied { " Failed · copied to the clipboard · q close " } else { " Failed · q close " }, app.report.iter().map(|l| Line::from(l.as_str())).collect()),
     };
     app.help_lines = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
-    let lines: Vec<Line> = lines.into_iter().map(|l| highlight(l, &app.help_query)).collect();
+    let lines: Vec<Line> = lines.into_iter().enumerate().map(|(i, l)| highlight(l, &app.help_query, app.help_hit == Some(i))).collect();
     let area = main;
     app.help_scroll = app.help_scroll.min((lines.len() as u16).saturating_sub(area.height.saturating_sub(2)));
     let mut title = title.to_string();
@@ -689,7 +689,8 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
 }
 
 /// `line` with each case-insensitive occurrence of `query` highlighted.
-fn highlight<'a>(line: Line<'a>, query: &str) -> Line<'a> {
+/// Marks each occurrence of `query` in `line`; those in the `current` match stand out.
+fn highlight<'a>(line: Line<'a>, query: &str, current: bool) -> Line<'a> {
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     let lower = text.to_lowercase();
     let query = query.to_lowercase();
@@ -704,7 +705,8 @@ fn highlight<'a>(line: Line<'a>, query: &str) -> Line<'a> {
             continue;
         }
         spans.push(Span::raw(text[at..i].to_string()));
-        spans.push(Span::raw(text[i..i + query.len()].to_string()).black().on_yellow());
+        let hit = Span::raw(text[i..i + query.len()].to_string()).black();
+        spans.push(if current { hit.on_magenta() } else { hit.on_yellow() });
         at = i + query.len();
     }
     spans.push(Span::raw(text[at..].to_string()));

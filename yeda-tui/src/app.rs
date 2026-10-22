@@ -631,6 +631,8 @@ pub struct App {
     /// What `/` searches for in a help page, and whether it's still being typed.
     pub help_query: String,
     pub help_typing: bool,
+    /// The line of the match `n`/`N` last went to, until another key is pressed.
+    pub help_hit: Option<usize>,
     /// The help page's text, as last drawn, for n/N.
     pub help_lines: Vec<String>,
     pub log: crate::log::Log,
@@ -745,6 +747,7 @@ impl App {
             setup_job: None,
             help_scroll: 0,
             help_query: String::new(),
+            help_hit: None,
             help_typing: false,
             help_lines: Vec::new(),
             secrets: Default::default(),
@@ -1813,6 +1816,7 @@ impl App {
     fn help_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let half = (self.page / 2).max(1) as u16;
+        let hit = self.help_hit.take();
         if self.help_typing {
             match k.code {
                 KeyCode::Esc => {
@@ -1821,7 +1825,7 @@ impl App {
                 }
                 KeyCode::Enter => {
                     self.help_typing = false;
-                    self.help_jump(true, true);
+                    self.help_jump(true, None);
                 }
                 KeyCode::Backspace => {
                     self.help_query.pop();
@@ -1838,8 +1842,8 @@ impl App {
                 self.help_query.clear();
                 self.help_typing = true;
             }
-            KeyCode::Char('n') => self.help_jump(true, false),
-            KeyCode::Char('N') => self.help_jump(false, false),
+            KeyCode::Char('n') => self.help_jump(true, hit),
+            KeyCode::Char('N') => self.help_jump(false, hit),
             KeyCode::Char('d') if ctrl => self.help_scroll = self.help_scroll.saturating_add(half),
             KeyCode::Char('u') if ctrl => self.help_scroll = self.help_scroll.saturating_sub(half),
             KeyCode::Char('j') | KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
@@ -1850,22 +1854,25 @@ impl App {
         }
     }
 
-    /// Scrolls the next (or previous) line matching `help_query` to the top; `here` includes the top line.
-    fn help_jump(&mut self, forward: bool, here: bool) {
+    /// Goes to the next (or previous) line matching `help_query` after the match `from`, else from the
+    /// top line on, and scrolls it to the top.
+    fn help_jump(&mut self, forward: bool, from: Option<usize>) {
         let query = self.help_query.to_lowercase();
         if query.is_empty() {
             return;
         }
         let hits: Vec<usize> = self.help_lines.iter().enumerate().filter(|(_, l)| l.to_lowercase().contains(&query)).map(|(i, _)| i).collect();
-        let top = self.help_scroll as usize;
+        // The scroll stops at the end of the page, so on the last screen it can't tell which match is current.
+        let (after, before) = from.map_or((self.help_scroll as usize, self.help_scroll as usize), |i| (i + 1, i));
         let next = if forward {
-            hits.iter().find(|&&i| i > top || (here && i == top)).or(hits.first())
+            hits.iter().find(|&&i| i >= after).or(hits.first())
         } else {
-            hits.iter().rfind(|&&i| i < top).or(hits.last())
+            hits.iter().rfind(|&&i| i < before).or(hits.last())
         };
         match next {
             Some(&i) => {
                 self.help_scroll = i as u16;
+                self.help_hit = Some(i);
                 let at = hits.iter().position(|&h| h == i).unwrap_or(0) + 1;
                 self.status = format!("/{}: {at} of {}", self.help_query, hits.len());
             }
