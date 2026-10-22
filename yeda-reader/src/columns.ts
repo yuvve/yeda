@@ -51,8 +51,12 @@ function store(key: string, value: unknown) {
 	catch { /* remembering is a convenience */ }
 }
 
-function toolbarButton(text: string, title: string) {
-	return Object.assign(document.createElement('button'), { className: 'toolbar-button', title, textContent: text, tabIndex: -1 });
+// Drawn like zotero/reader's own 20px toolbar icons.
+const COLUMNS_ICON = '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M2 2H9.375V18H2V2ZM3.25 3.25V16.75H8.125V3.25H3.25ZM10.625 2H18V18H10.625V2ZM11.875 3.25V16.75H16.75V3.25H11.875Z" fill="currentColor"/></svg>';
+const ADJUST_ICON = '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1 4.375H15.625V19H14.375V5.625H1V4.375ZM4.375 1H5.625V14.375H19V15.625H4.375V1ZM9.375 6.5H10.625V8.5H9.375V6.5ZM9.375 9.5H10.625V11.5H9.375V9.5ZM9.375 12.5H10.625V13.75H9.375V12.5Z" fill="currentColor"/></svg>';
+
+function toolbarButton(icon: string, title: string) {
+	return Object.assign(document.createElement('button'), { className: 'toolbar-button', title, innerHTML: icon, tabIndex: -1 });
 }
 
 /**
@@ -63,8 +67,8 @@ function toolbarButton(text: string, title: string) {
  * renders the toolbar buttons; returns the hook that takes the reader and returns the toggle.
  */
 export function installColumns(doc: string) {
-	const toggle = toolbarButton('◫', 'Column mode (C)');
-	const adjust = toolbarButton('✎', 'Adjust the columns');
+	const toggle = toolbarButton(COLUMNS_ICON, 'Column mode (C)');
+	const adjust = toolbarButton(ADJUST_ICON, 'Adjust the columns');
 	window.addEventListener('customEvent', (e) => {
 		const { type, append } = (e as CustomEvent).detail;
 		if (type !== 'renderToolbar') return;

@@ -62,6 +62,8 @@ yeda            # open it
 
 `o` opens the selected paper's PDF in yeda's reader, which you control with vim keys. There you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
 
+Column mode (`C`, or the two-columns button in the reader's toolbar) reads a two-column paper one column at a time, each as wide as the window, a screen per page turn. The button next to it sets where the columns are, by dragging a crop box and the gutter over the page; a new paper starts with the last ones set.
+
 ![Reader](yeda-tui/screenshots/reader.png)
 
 ## Settings
@@ -173,7 +175,7 @@ Tap a paper to open it. There you open its PDFs or add one, preview its annotati
 
 ### Reading and annotating
 
-The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink. The ◫ button reads a two-column paper one column at a time, each as wide as the screen; swiping steps down the column and on to the next. ✎ sets where the columns are, by dragging the crop box and the gutter over the page.
+The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink. The two-columns button reads a two-column paper one column at a time, each as wide as the screen; swiping steps down the column and on to the next. The button next to it sets where the columns are, by dragging a crop box and the gutter over the page.
 
 PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
 
