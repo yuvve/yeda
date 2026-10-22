@@ -226,13 +226,14 @@ THE READER  ( o, yeda read )
     Esc                    back to selection
     dd c y                 delete the selected annotation / edit its comment /
                            copy the selected text
-    C                      column mode (also the ◫ button)
+    C                      column mode (also the ◫ button; ✎ adjusts it)
 
   Column mode is for two-column papers: each column fills the window's
-  width and is read a screen at a time, left column then right, with what
-  spans both columns (title, abstract, wide figures) in between at full
-  width. Turning the page steps through them; C again shows the whole page,
-  and C after that carries on where you were. It is remembered per paper.
+  width and is read a screen at a time, left column then right. The ✎
+  button shows the whole page to drag the crop box's edges and the gutter
+  line into place, for every page of the paper; a new paper starts with
+  the last ones set. C again shows the whole page, and C after that
+  carries on where you were. It is remembered per paper.
 
 FINDING PAPERS  ( :discover [what] )
 

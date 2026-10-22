@@ -15,6 +15,7 @@ interface PdfViewer {
 interface View {
 	/** Resolves once the document is shown with its saved zoom and scroll mode applied. */
 	initializedPromise: Promise<unknown>;
+	_iframe: HTMLIFrameElement;
 	_tool: { type: string };
 	_iframeWindow: (Window & { PDFViewerApplication: { pdfViewer: PdfViewer } }) | null;
 	setTool(tool: { type: string }): void;

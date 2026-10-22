@@ -20,7 +20,7 @@ export interface Annotation {
 
 type Entry = Record<string, unknown>;
 
-export interface PdfPage {
+interface PdfPage {
 	getViewport(params: { scale: number }): {
 		width: number;
 		height: number;
@@ -28,7 +28,6 @@ export interface PdfPage {
 		convertToViewportRectangle(rect: number[]): number[];
 	};
 	render(params: { canvasContext: CanvasRenderingContext2D; viewport: unknown }): { promise: Promise<void> };
-	getTextContent(): Promise<{ items: { str: string; transform: number[]; width: number; height: number }[] }>;
 }
 
 declare global {

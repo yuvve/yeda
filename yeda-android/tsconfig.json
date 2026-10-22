@@ -7,6 +7,5 @@
 		"noEmit": true,
 		"lib": ["ESNext", "DOM"]
 	},
-	"include": ["src", "../yeda-reader/src"],
-	"exclude": ["../yeda-reader/src/*.test.ts"]
+	"include": ["src", "../yeda-reader/src"]
 }

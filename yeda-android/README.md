@@ -27,7 +27,7 @@ Tap a paper to open it. There you open its PDFs or add one, preview its annotati
 
 ## Reading and annotating
 
-The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink. The ◫ button reads a two-column paper one column at a time, each as wide as the screen; swiping steps down the column and on to the next.
+The reader is the same as on the desktop: a modified version of Zotero's PDF reader, so Zotero annotations show and can be edited. Once a pen has been used, the pen draws and a finger pans (two fingers zoom), a resting palm is ignored, and the pen's side button or eraser end erases. Settings → Display → E-ink screen shows one page at a time, turned by swiping, with black ink. The ◫ button reads a two-column paper one column at a time, each as wide as the screen; swiping steps down the column and on to the next. ✎ sets where the columns are, by dragging the crop box and the gutter over the page.
 
 PDFs from outside the library open with "Open with"; their annotations go in a `<file>.annotations/` folder next to the PDF.
 
