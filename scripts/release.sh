@@ -11,7 +11,9 @@ git pull -q --ff-only
 
 n=$(gh issue create --title "Release $v" --label "Q3 quick" --body "Bump the workspace version to $v and publish it." | grep -o '[0-9]*$')
 git checkout -q -b "$n-release-$v"
-sed -i "/^\[workspace.package\]/,/^\[/ s/^version = \".*\"/version = \"$v\"/" Cargo.toml
+# The workspace version and the crates' requirements on each other, all in the root Cargo.toml.
+old=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml)
+sed -i "s/version = \"$old\"/version = \"$v\"/" Cargo.toml
 cargo build -p yeda
 git commit -qam "Release $v (#$n)"
 git push -q -u origin HEAD

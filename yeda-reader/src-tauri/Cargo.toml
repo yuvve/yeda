@@ -22,9 +22,9 @@ anyhow = "1.0.104"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
-yeda-core = { path = "../../yeda-core", version = "0.1" }
-yeda-fs = { path = "../../yeda-fs", version = "0.1" }
-yeda-net = { path = "../../yeda-net", version = "0.1" }
+yeda-core = { workspace = true }
+yeda-fs = { workspace = true }
+yeda-net = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0.2"

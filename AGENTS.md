@@ -39,5 +39,6 @@
 
   Urgent means broken, blocking the user now, or risking data or secrets. Important means it serves reading and annotating, the library's integrity or security.
 - Keep no TODO or plan files in the repository; plans go in the issue.
-- Publishing to crates.io is done by the user, with `scripts/release.sh <version>`: it bumps `[workspace.package]` in the root `Cargo.toml` (every crate takes it) through an issue and PR, publishes the workspace and pushes the tag `v<version>`. The tag's workflow makes the GitHub release, with the APK and Linux binaries.
+- README changes go in the PR whose change they describe, not in a later one.
+- Publishing to crates.io is done by the user, with `scripts/release.sh <version>`: it bumps the versions in the root `Cargo.toml` (every crate takes them) through an issue and PR, publishes the workspace and pushes the tag `v<version>`. The tag's workflow makes the GitHub release, with the APK and Linux binaries.
 - After merging a PR that changes what goes into the Android app (yeda-android, yeda-reader, or the crates it uses), tag main `android-vYYYY.MM.DD` (add `.2`, `.3` for later builds that day) and push the tag. That builds the APK and publishes it as a pre-release. To let the user test a PR on the phone before merging, push such a tag on the PR branch instead.

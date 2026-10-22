@@ -11,11 +11,11 @@ categories = ["command-line-utilities", "science", "visualization"]
 exclude = ["screenshots"]
 
 [dependencies]
-yeda-core = { path = "../yeda-core", version = "0.1", features = ["zotero"] }
-yeda-fs = { path = "../yeda-fs", version = "0.1" }
-yeda-net = { path = "../yeda-net", version = "0.1" }
-yeda-reader = { path = "../yeda-reader/src-tauri", version = "0.1" }
-yeda-secrets = { path = "../yeda-secrets", version = "0.1" }
+yeda-core = { workspace = true, features = ["zotero"] }
+yeda-fs = { workspace = true }
+yeda-net = { workspace = true }
+yeda-reader = { workspace = true }
+yeda-secrets = { workspace = true }
 anyhow = "1.0.104"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }

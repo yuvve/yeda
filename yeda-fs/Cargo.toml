@@ -9,4 +9,4 @@ repository = "https://github.com/yuvve/yeda"
 
 [dependencies]
 anyhow = "1.0.104"
-yeda-core = { path = "../yeda-core", version = "0.1" }
+yeda-core = { workspace = true }
