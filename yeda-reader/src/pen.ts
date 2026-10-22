@@ -1,3 +1,5 @@
+import { columnMode } from './columns';
+
 /** A pointer event as the PDF view's handlers take it. */
 type Handler = (event: PointerEvent) => void;
 
@@ -16,6 +18,8 @@ interface View {
 	_tool: { type: string };
 	_iframeWindow: (Window & { PDFViewerApplication: { pdfViewer: PdfViewer } }) | null;
 	setTool(tool: { type: string }): void;
+	navigateToNextPage(): void;
+	navigateToPreviousPage(): void;
 	/** Redraws every page's annotation layer. */
 	_render(): void;
 	/** The gesture in progress; an ink stroke knows its page once it has started. */
@@ -202,8 +206,8 @@ export function installPen(reader: PenReader) {
 					moved = true;
 				}
 			}
-			// On e-ink a page that fits turns instead; only a zoomed-in one pans.
-			else if (!eink || zoomed(v)) {
+			// On e-ink a page that fits turns instead, and so does a column; only a zoomed-in page pans.
+			else if (!eink || (zoomed(v) && !columnMode())) {
 				v.container.scrollBy(-dx, -dy);
 				moved ||= Math.hypot(e.clientX - t.start.clientX, e.clientY - t.start.clientY) > 8;
 			}

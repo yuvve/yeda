@@ -226,6 +226,11 @@ THE READER  ( o, yeda read )
     Esc                    back to selection
     dd c y                 delete the selected annotation / edit its comment /
                            copy the selected text
+    C                      column mode (also the ◫ button)
+
+  Column mode is for two-column papers: each page is read in quarters,
+  top-left, bottom-left, top-right, bottom-right, each filling the window,
+  and turning the page steps through them. It is remembered per paper.
 
 FINDING PAPERS  ( :discover [what] )
 
