@@ -301,7 +301,7 @@ impl Library {
             (None, Some(d)) => d.clone(),
             (None, None) if self.llm.len() == 1 => self.llm.keys().next().unwrap().clone(),
             (None, None) if self.llm.is_empty() => bail!("no [llm.<name>] profile configured"),
-            (None, None) => bail!("several llm profiles; set default_llm or name one ({})", self.llm.keys().cloned().collect::<Vec<_>>().join(", ")),
+            (None, None) => bail!("several llm profiles ({}); set default_llm or pass --llm <profile>", self.llm.keys().cloned().collect::<Vec<_>>().join(", ")),
         };
         let p = self.llm.get(&name).with_context(|| format!("no llm profile named '{name}'"))?;
         Ok((name, p.clone()))

@@ -199,6 +199,10 @@ THE COMMAND LINE  ( : )
   The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
   searches, the filter form, :setup and the tag and collection pickers.
 
+  Options are written --name value (or --name=value), anywhere in a
+  command: :discover --llm gpt swarm robots. -- ends the options, so what
+  follows is text even if it starts with --.
+
 UNDO  ( u, Ctrl-R )
 
   u takes back what the last command changed in the library (references,
@@ -251,10 +255,10 @@ THE READER  ( o, yeda read )
   the whole page, and C after that carries on where you were. It is
   remembered per paper.
 
-FINDING PAPERS  ( :discover [what] )
+FINDING PAPERS  ( :discover [--llm <profile>] [what] )
 
-  :discover asks the default LLM profile for papers like the selected or
-  marked references; with a description (:discover swarm exploration
+  :discover asks the default LLM profile, or the one --llm names, for
+  papers like the selected or marked references; with a description (:discover swarm exploration
   under comms loss) it looks for that, with the marked references as
   context. An Anthropic profile searches the web; an OpenAI-compatible one
   only if the server does (Perplexity, OpenAI's search models). Every
@@ -279,8 +283,10 @@ TABLES  ( :table [name], T )
   fits, so a column like group sorts papers into shared topics; :graph col
   group clusters them.
 
-  :summarize [table] fills the selected reference's row using an LLM profile
-  from [llm.<name>]; each paper's rows are kept in notes/<key>.ai.toml.
+  :summarize[!] [table] [--llm <profile>] fills the selected reference's
+  row using the default LLM profile from [llm.<name>], or the one --llm
+  names; ! overwrites cells already filled. Each paper's rows are kept in
+  notes/<key>.ai.toml.
   :table rename <old> <new> renames a table there and in yeda.toml.
   Without a table name and with several tables, a list to pick from opens;
   Tab completes the name on the command line.
