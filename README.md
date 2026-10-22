@@ -120,6 +120,8 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
+A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
+
 ### Literature tables
 
 A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. You define its columns in `yeda.toml`, each with an optional description of what it should hold:
@@ -150,7 +152,7 @@ When a password or API key is missing, yeda asks for it and offers to save it in
 
 ![The ? key list](yeda-tui/screenshots/keys.png)
 
-Every key runs a command, and every action is a command (`:annotations` is the same as `A`). `?` lists the keys and commands in effect; `:help` is the guide to searching, tables, graphs, fetching and the reader. Keys are rebound in `config.toml` under `[keys.<context>]`:
+Every key runs a command, and every action is a command (`:annotations` is the same as `A`). Options go anywhere in a command as `--name value`, and `--` ends them. `?` lists the keys and commands in effect; `:help` is the guide to searching, tables, graphs, fetching and the reader. Keys are rebound in `config.toml` under `[keys.<context>]`:
 
 ```toml
 [keys.normal]

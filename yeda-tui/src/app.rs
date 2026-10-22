@@ -141,8 +141,9 @@ const CONFIRM_MANY: [(&str, &str); 5] = [
 ];
 
 pub const COMMANDS: &[(&str, &str)] = &[
+    (":add [DOI, arXiv ID or ISBN …]", "add these, or the ones typed in a prompt"),
     (":save <name>", "save the current search"),
-    (":summarize[!] [table] [profile]", "fill the reference's table row with an LLM; ! overwrites"),
+    (":summarize[!] [table] [--llm <profile>]", "fill the reference's table row with an LLM; ! overwrites"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "add a PDF, copying or uploading it to a location"),
@@ -154,7 +155,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described; a adds one"),
+    (":discover [--llm <profile>] [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described with the marked ones as context; a adds one"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
@@ -188,6 +189,7 @@ pub const TEXT_KEYS: &[(&str, &str)] = &[
 pub const NOTES: &[(&str, &str)] = &[
     ("mouse", "a click selects and focuses; the wheel moves the selection, or scrolls the graph"),
     ("narrow", "below 120 columns the right column is hidden, below 80 the library column too"),
+    ("--name value", "an option, anywhere in a command (also --name=value); -- ends options, so the rest is text"),
     ("keys", "change them under [keys.<context>] in ~/.config/yeda/config.toml (:help shows how)"),
 ];
 
@@ -2072,17 +2074,20 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
-                (cmd @ ("summarize" | "summarize!"), args) if args.trim().is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, ""),
-                (cmd @ ("summarize" | "summarize!"), args) => {
-                    if let Err(e) = self.summarize(args, cmd.ends_with('!'), text) {
-                        self.status = format!("{e:#}");
+                (cmd @ ("summarize" | "summarize!"), args) => match options(args, &["llm"]) {
+                    Ok((_, rest)) if rest.is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, args.trim()),
+                    Ok((opts, rest)) => {
+                        if let Err(e) = self.summarize(&rest, opts.get("llm").copied(), cmd.ends_with('!'), text) {
+                            self.status = format!("{e:#}");
+                        }
                     }
-                }
+                    Err(e) => self.status = format!("{e:#}"),
+                },
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
-                ("discover", rest) => {
-                    if let Err(e) = self.discover(rest, text) {
+                ("discover", args) => {
+                    if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text)) {
                         self.status = format!("{e:#}");
                     }
                 }
@@ -2255,8 +2260,8 @@ impl App {
         }
     }
 
-    /// `:discover [what]`: asks the default LLM profile for papers like the selected or marked ones, or as described.
-    fn discover(&mut self, prompt: &str, command: &str) -> anyhow::Result<()> {
+    /// `:discover [what]`: asks the LLM profile `llm`, else the default one, for papers like the selected or marked ones, or as described.
+    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str) -> anyhow::Result<()> {
         if self.discover_job.is_some() {
             anyhow::bail!("already searching");
         }
@@ -2265,7 +2270,7 @@ impl App {
         if prompt.trim().is_empty() && targets.is_empty() {
             anyhow::bail!("usage: :discover <what to look for>, or select references first");
         }
-        let (name, profile) = self.lib.llm_profile(None)?;
+        let (name, profile) = self.lib.llm_profile(llm)?;
         let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
         let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
         let openalex = self.secrets.get(OPENALEX_ACCOUNT).cloned();
@@ -2382,13 +2387,16 @@ impl App {
         false
     }
 
-    fn summarize(&mut self, args: &str, overwrite: bool, command: &str) -> anyhow::Result<()> {
+    fn summarize(&mut self, args: &str, llm: Option<&str>, overwrite: bool, command: &str) -> anyhow::Result<()> {
         if self.summarizer.is_some() {
             anyhow::bail!("a summarization is already running (:cancel stops it)");
         }
         let mut words = args.split_whitespace();
         let table_name = self.table_name(words.next())?;
-        let (profile_name, profile) = self.lib.llm_profile(words.next())?;
+        if words.next().is_some() {
+            anyhow::bail!("usage: :summarize[!] [table] [--llm <profile>]");
+        }
+        let (profile_name, profile) = self.lib.llm_profile(llm)?;
         let table = self.lib.tables[&table_name].clone();
         let targets = self.targets();
         if targets.is_empty() {
@@ -3674,8 +3682,41 @@ fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || child.wait());
 }
 
+/// Splits a command's `--name value` and `--name=value` options, which may come anywhere, from the
+/// rest of its arguments; `--` ends the options. Only `known` names are accepted.
+fn options<'a>(args: &'a str, known: &[&str]) -> anyhow::Result<(HashMap<&'a str, &'a str>, String)> {
+    let (mut opts, mut rest) = (HashMap::new(), Vec::new());
+    let mut words = args.split_whitespace();
+    while let Some(word) = words.next() {
+        let Some(name) = word.strip_prefix("--") else {
+            rest.push(word);
+            continue;
+        };
+        if name.is_empty() {
+            rest.extend(words);
+            break;
+        }
+        let (name, value) = name.split_once('=').map_or_else(|| (name, words.next()), |(n, v)| (n, Some(v)));
+        if !known.contains(&name) {
+            anyhow::bail!("unknown option --{name}; this command takes {}", known.iter().map(|k| format!("--{k}")).collect::<Vec<_>>().join(", "));
+        }
+        opts.insert(name, value.filter(|v| !v.is_empty()).ok_or_else(|| anyhow::anyhow!("--{name} needs a value"))?);
+    }
+    Ok((opts, rest.join(" ")))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn splits_options_from_text() {
+        let (opts, rest) = super::options("swarm --llm claude robots", &["llm"]).unwrap();
+        assert_eq!((opts["llm"], rest.as_str()), ("claude", "swarm robots"));
+        let (opts, rest) = super::options("--llm=gpt -- --not an option", &["llm"]).unwrap();
+        assert_eq!((opts["llm"], rest.as_str()), ("gpt", "--not an option"));
+        assert!(super::options("--llm", &["llm"]).is_err());
+        assert!(super::options("--model x", &["llm"]).is_err());
+    }
+
     #[test]
     fn edits_at_the_cursor() {
         use ratatui::crossterm::event::KeyCode::*;
