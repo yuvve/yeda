@@ -47,7 +47,10 @@ FIELDS
   The first text: search reads every PDF on this machine in the background
   (with poppler's pdftotext) and keeps their text in the cache folder, so
   later sessions only read new or changed PDFs. WebDAV PDFs are searched
-  once they have been downloaded.
+  once cached on this machine: opening a PDF caches it, and :cache
+  downloads the selected or marked ones (V G :cache for all of them).
+  Opening uses the cached copy without asking the server; :cache also
+  picks up PDFs that changed there.
 
 FILTER  ( f )
 

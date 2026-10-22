@@ -453,6 +453,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_discover();
         app.poll_git();
         app.poll_text();
+        app.poll_cache();
         app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
