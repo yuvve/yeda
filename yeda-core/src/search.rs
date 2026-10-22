@@ -1,6 +1,7 @@
 use crate::library::Ref;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
 pub struct Query {
@@ -134,11 +135,13 @@ impl Default for Searcher {
 pub struct Searcher {
     matcher: Matcher,
     buf: Vec<char>,
+    /// The text of each reference's PDFs, lowercased with whitespace collapsed, by key.
+    texts: HashMap<String, String>,
 }
 
 impl Searcher {
     pub fn new() -> Self {
-        Self { matcher: Matcher::new(Config::DEFAULT), buf: Vec::new() }
+        Self { matcher: Matcher::new(Config::DEFAULT), buf: Vec::new(), texts: HashMap::new() }
     }
 
     pub fn score(&mut self, needle: &str, hay: &str) -> Option<u32> {
@@ -150,16 +153,36 @@ impl Searcher {
         self.score(needle, hay).is_some()
     }
 
+    /// Adds the text of one of `key`'s PDFs, for `text:` terms.
+    pub fn add_text(&mut self, key: &str, text: &str) {
+        let all = self.texts.entry(key.to_string()).or_default();
+        for word in text.split_whitespace() {
+            all.push(' ');
+            all.push_str(&word.to_lowercase());
+        }
+    }
+
     /// Every field term and free-text word must match (AND); within one, `|` separates
     /// alternatives of which one must match (OR).
     pub fn matches(&mut self, q: &Query, r: &Ref) -> bool {
         for (name, value) in &q.fields {
-            let values = field_values(r, name);
-            let any = |s: &mut Self, v: &str| v.split('|').any(|alt| values.iter().any(|x| s.fuzzy(&escape_spaces(alt), x)));
-            let ok = match value.strip_prefix('!') {
-                _ if value.is_empty() => values.iter().all(|v| v.is_empty()),
-                Some(v) => !any(self, v),
-                None => any(self, value),
+            let ok = if name == "text" {
+                // A whole paper matches nearly anything fuzzily, and is too long to match fuzzily fast.
+                let text = self.texts.get(&r.key).map_or("", String::as_str);
+                let any = |v: &str| v.split('|').any(|alt| text.contains(&alt.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()));
+                match value.strip_prefix('!') {
+                    _ if value.is_empty() => text.is_empty(),
+                    Some(v) => !any(v),
+                    None => any(value),
+                }
+            } else {
+                let values = field_values(r, name);
+                let any = |s: &mut Self, v: &str| v.split('|').any(|alt| values.iter().any(|x| s.fuzzy(&escape_spaces(alt), x)));
+                match value.strip_prefix('!') {
+                    _ if value.is_empty() => values.iter().all(|v| v.is_empty()),
+                    Some(v) => !any(self, v),
+                    None => any(self, value),
+                }
             };
             if !ok {
                 return false;
@@ -242,5 +265,20 @@ mod tests {
         assert!(!s.matches(&parse("dogs|birds learning"), &r));
         assert!(s.matches(&parse(r#""for cats" deep"#), &r));
         assert_eq!(words(r"a b\ c  d"), ["a", r"b\ c", "d"]);
+    }
+
+    #[test]
+    fn text_matches_pdf_text_exactly() {
+        let r = Ref { key: "k".into(), title: "Cats".into(), ..Default::default() };
+        let mut s = Searcher::new();
+        assert!(!s.matches(&parse("text:swarm"), &r));
+        assert!(s.matches(&parse("text:!swarm"), &r));
+        s.add_text("k", "Multi-robot Swarm\nexploration");
+        assert!(s.matches(&parse("text:swarm"), &r));
+        assert!(s.matches(&parse(r#"text:"swarm  exploration""#), &r));
+        assert!(!s.matches(&parse("text:swrm"), &r));
+        assert!(s.matches(&parse("text:multi-robot"), &r));
+        assert!(s.matches(&parse("text:dogs|robot"), &r));
+        assert!(!s.matches(&parse("text:!robot"), &r));
     }
 }

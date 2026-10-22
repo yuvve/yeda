@@ -1,4 +1,4 @@
-use crate::{citations, fetch, poppler, undo};
+use crate::{citations, fetch, pdftext, poppler, undo};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use crate::keys::{self, Keymap, Lookup};
@@ -435,6 +435,13 @@ impl GraphView {
     }
 }
 
+struct TextJob {
+    rx: Receiver<pdftext::Extracted>,
+    total: usize,
+    done: usize,
+    error: Option<String>,
+}
+
 struct FetchJob {
     rx: Receiver<fetch::Msg>,
     step: undo::Step,
@@ -543,6 +550,9 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
     pub lib: Library,
     searcher: Searcher,
+    /// PDFs whose text `searcher` has, or is being extracted.
+    text_indexed: HashSet<PathBuf>,
+    text_job: Option<TextJob>,
     pub query: String,
     pub mode: Mode,
     pub input: String,
@@ -671,6 +681,8 @@ impl App {
             side_visible: Vec::new(),
             lib,
             searcher: Searcher::new(),
+            text_indexed: HashSet::new(),
+            text_job: None,
             query: String::new(),
             mode: Mode::Normal,
             input: String::new(),
@@ -784,6 +796,68 @@ impl App {
         self.sel = self.sel.min(self.visible.len().saturating_sub(1));
         // The anchor is an index into the old `visible`.
         self.visual = None;
+        if self.text_job.is_none() && self.searches_text() {
+            self.index_text();
+        }
+    }
+
+    fn searches_text(&self) -> bool {
+        let saved = match self.current_filter() {
+            Filter::Search(_, q) => q.as_str(),
+            _ => "",
+        };
+        [self.query.as_str(), saved].iter().any(|q| search::parse(q).fields.iter().any(|(name, _)| name == "text"))
+    }
+
+    /// Starts extracting the text of every PDF on this machine not indexed yet, for `text:` terms.
+    fn index_text(&mut self) {
+        let pdfs: Vec<(String, PathBuf)> = self
+            .lib
+            .refs
+            .iter()
+            .flat_map(|r| r.pdfs.iter().filter_map(|p| Some((r.key.clone(), self.lib.pdf_path(p).ok()?))))
+            .filter(|(_, path)| path.is_file() && !self.text_indexed.contains(path))
+            .collect();
+        if pdfs.is_empty() {
+            return;
+        }
+        self.text_indexed.extend(pdfs.iter().map(|(_, p)| p.clone()));
+        self.status = format!("indexing the text of {} PDFs…", pdfs.len());
+        self.text_job = Some(TextJob { total: pdfs.len(), rx: pdftext::spawn(pdfs, self.lib.cache.clone()), done: 0, error: None });
+    }
+
+    pub fn poll_text(&mut self) {
+        let Some(job) = &mut self.text_job else { return };
+        let before = job.done;
+        let finished = loop {
+            match job.rx.try_recv() {
+                Ok((key, text)) => {
+                    job.done += 1;
+                    match text {
+                        Ok(text) => self.searcher.add_text(&key, &text),
+                        Err(e) => job.error = job.error.take().or(Some(e)),
+                    }
+                }
+                Err(TryRecvError::Empty) => break false,
+                Err(TryRecvError::Disconnected) => break true,
+            }
+        };
+        if job.done == before && !finished {
+            return;
+        }
+        self.status = match (finished, &job.error) {
+            (false, _) => format!("indexing PDF text: {}/{}…", job.done, job.total),
+            (true, None) => format!("indexed the text of {} PDFs", job.total),
+            (true, Some(e)) => format!("indexed the text of {} PDFs; some failed: {e}", job.total),
+        };
+        if finished {
+            self.text_job = None;
+        }
+        let sel = self.selected().map(|r| r.key.clone());
+        self.refilter();
+        if let Some(pos) = sel.and_then(|key| self.visible.iter().position(|&i| self.lib.refs[i].key == key)) {
+            self.sel = pos;
+        }
     }
 
     /// Selects the first match when `jump_to_first`, else keeps the current entry if it still matches.

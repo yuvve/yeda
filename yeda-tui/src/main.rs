@@ -6,6 +6,7 @@ mod discover;
 mod fetch;
 mod keys;
 mod log;
+mod pdftext;
 mod poppler;
 mod setup;
 mod sync;
@@ -451,6 +452,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_setup();
         app.poll_discover();
         app.poll_git();
+        app.poll_text();
         app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;
