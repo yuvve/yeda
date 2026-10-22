@@ -155,7 +155,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover [--llm <profile>] [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described with the marked ones as context; a adds one"),
+    (":discover [--llm <profile>] [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described with the marked ones as context; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
@@ -628,6 +628,7 @@ pub struct App {
     discover_job: Option<Receiver<anyhow::Result<Vec<Candidate>>>>,
     pub found: Vec<Candidate>,
     pub found_sel: usize,
+    pub found_marked: BTreeSet<usize>,
     setup_job: Option<SetupJob>,
     pub help_scroll: u16,
     /// What `/` searches for in a help page, and whether it's still being typed.
@@ -746,6 +747,7 @@ impl App {
             discover_job: None,
             found: Vec::new(),
             found_sel: 0,
+            found_marked: BTreeSet::new(),
             setup_job: None,
             help_scroll: 0,
             help_query: String::new(),
@@ -2338,6 +2340,7 @@ impl App {
                 found.sort_by_key(|c| self.found_in_library(c));
                 self.found = found;
                 self.found_sel = 0;
+                self.found_marked.clear();
                 self.mode = Mode::Found;
             }
             Err(e) => self.status = format!("discover: {e:#}"),
@@ -2355,15 +2358,27 @@ impl App {
         match k.code {
             KeyCode::Char('j') | KeyCode::Down => self.found_sel = (self.found_sel + 1).min(n.saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => self.found_sel = self.found_sel.saturating_sub(1),
-            KeyCode::Char('a') | KeyCode::Enter => match self.found.get(self.found_sel) {
-                Some(c) if self.found_in_library(c) => self.status = "already in the library".into(),
-                Some(c) => match c.id() {
-                    Some(id) if self.job.is_none() => self.submit(Prompt::Add, &id),
-                    Some(_) => self.status = "still adding; try again in a moment".into(),
-                    None => self.status = "no DOI or URL to add it by".into(),
-                },
-                None => {}
-            },
+            KeyCode::Char('v') => {
+                if !self.found_marked.remove(&self.found_sel) {
+                    self.found_marked.insert(self.found_sel);
+                }
+                self.found_sel = (self.found_sel + 1).min(n.saturating_sub(1));
+            }
+            KeyCode::Char('a') | KeyCode::Enter if self.job.is_some() => self.status = "still adding; try again in a moment".into(),
+            KeyCode::Char('a') | KeyCode::Enter => {
+                let picked: Vec<&Candidate> = match self.found_marked.is_empty() {
+                    true => self.found.get(self.found_sel).into_iter().collect(),
+                    false => self.found_marked.iter().filter_map(|&i| self.found.get(i)).collect(),
+                };
+                let ids: Vec<String> = picked.iter().filter(|c| !self.found_in_library(c)).filter_map(|c| c.id()).collect();
+                match (picked.as_slice(), ids.is_empty()) {
+                    ([], _) => {}
+                    ([c], true) if self.found_in_library(c) => self.status = "already in the library".into(),
+                    ([_], true) => self.status = "no DOI or URL to add it by".into(),
+                    (_, true) => self.status = "the marked papers are in the library or have no DOI or URL".into(),
+                    (_, false) => self.submit(Prompt::Add, &ids.join("\n")),
+                }
+            }
             KeyCode::Char('o') => {
                 if let Some(id) = self.found.get(self.found_sel).and_then(Candidate::id) {
                     let url = if id.starts_with("10.") { format!("https://doi.org/{id}") } else { id };

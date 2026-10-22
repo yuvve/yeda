@@ -479,18 +479,24 @@ fn draw_found(f: &mut Frame, app: &App, main: Rect) {
     let items: Vec<ListItem> = app
         .found
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
+            let marked = if app.found_marked.contains(&i) { Span::styled("▌", Style::new().fg(Color::Yellow)) } else { Span::raw(" ") };
             let mark = if app.found_in_library(c) { "◎" } else if c.work.is_some() { "✓" } else { "?" };
             let year = c.found.year.or(c.work.as_ref().and_then(|w| w.year)).map(|y| y.to_string()).unwrap_or_default();
-            let head = Line::raw(format!("{mark} {year:4}  {:<16.16} {}", c.authors(), c.title()));
+            let head = Line::from(vec![marked, Span::raw(format!("{mark} {year:4}  {:<16.16} {}", c.authors(), c.title()))]);
             let why: String = c.found.why.chars().take(width).collect();
-            ListItem::new(vec![head, Line::raw(format!("        {why}")).dim()])
+            ListItem::new(vec![head, Line::raw(format!("         {why}")).dim()])
         })
         .collect();
+    let marked = match app.found_marked.len() {
+        0 => String::new(),
+        n => format!("{n} marked · "),
+    };
     f.render_widget(Clear, area);
     f.render_stateful_widget(
         List::new(items)
-            .block(block(" Found · ✓ in OpenAlex · ? not found · ◎ in library · a add · o open · q close ".into(), true))
+            .block(block(format!(" Found · {marked}✓ in OpenAlex · ? not found · ◎ in library · v mark · a add · o open · q close "), true))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.found_sel)),
