@@ -146,6 +146,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "add a PDF, copying or uploading it to a location"),
+    (":cache", "download the selected or marked references' WebDAV PDFs that are missing here or changed on the server"),
     (":detach", "remove one of the selected reference's PDFs with its annotations; the file stays where it is"),
     (":sync", "commit, pull and push the library with git"),
     (":git-init [url]", "make the library folder a git repository and commit it; with a URL, push it there as origin"),
@@ -442,6 +443,16 @@ struct TextJob {
     error: Option<String>,
 }
 
+/// `:cache`: each PDF's secret-store account and server path, with how its download went.
+struct CacheJob {
+    rx: Receiver<(String, String, anyhow::Result<()>)>,
+    total: usize,
+    done: usize,
+    failed: usize,
+    error: Option<String>,
+    rejected: bool,
+}
+
 struct FetchJob {
     rx: Receiver<fetch::Msg>,
     step: undo::Step,
@@ -553,6 +564,7 @@ pub struct App {
     /// PDFs whose text `searcher` has, or is being extracted.
     text_indexed: HashSet<PathBuf>,
     text_job: Option<TextJob>,
+    cache_job: Option<CacheJob>,
     pub query: String,
     pub mode: Mode,
     pub input: String,
@@ -683,6 +695,7 @@ impl App {
             searcher: Searcher::new(),
             text_indexed: HashSet::new(),
             text_job: None,
+            cache_job: None,
             query: String::new(),
             mode: Mode::Normal,
             input: String::new(),
@@ -2068,6 +2081,7 @@ impl App {
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
                 ("detach", _) => self.detach(text),
+                ("cache", _) => self.cache_pdfs(text),
                 ("sync", _) => self.start_git("sync", crate::sync::run),
                 ("git-init", url) => {
                     let url = Some(url.trim().to_string()).filter(|u| !u.is_empty());
@@ -2542,23 +2556,97 @@ impl App {
         }
     }
 
-    /// Brings the cached copy of the selected reference's WebDAV PDF up to date, then opens it.
+    /// Downloads the selected reference's WebDAV PDF into the cache, then opens it.
     fn download(&mut self, pdf: &Pdf, password: &str) {
         let (Some(remote), Ok(path)) = (self.lib.remote_pdf(pdf), self.lib.pdf_path(pdf)) else { return };
         let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-        match yeda_fs::sync_cached(&path, |cached| {
-            yeda_net::webdav::current_version(remote.dav, password, &remote.path).map(|v| v.is_some() && v.as_deref() == cached)
-        }, || yeda_net::webdav::download(remote.dav, password, &remote.path)) {
+        match sync_pdf(remote.dav, password, &remote.path, &path) {
             Ok(()) => self.launch_reader(&path, pdf),
             Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
                 self.reject(&account);
                 self.open_pdf();
             }
-            Err(e) if path.exists() => {
-                self.status = format!("{e:#}; opened the cached copy");
-                self.launch_reader(&path, pdf);
-            }
             Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    /// `:cache`: brings the cached copies of the targets' WebDAV PDFs up to date in the background.
+    fn cache_pdfs(&mut self, command: &str) {
+        if self.cache_job.is_some() {
+            return self.status = "already caching PDFs".into();
+        }
+        let pdfs: Vec<(library::Dav, String, PathBuf)> = self
+            .targets()
+            .iter()
+            .flat_map(|&i| &self.lib.refs[i].pdfs)
+            .filter_map(|p| Some((self.lib.remote_pdf(p)?, self.lib.pdf_path(p).ok()?)))
+            .map(|(remote, path)| (remote.dav.clone(), remote.path, path))
+            .collect();
+        if pdfs.is_empty() {
+            return self.status = "no WebDAV PDFs".into();
+        }
+        let mut passwords = HashMap::new();
+        for (dav, ..) in &pdfs {
+            let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+            if let std::collections::hash_map::Entry::Vacant(e) = passwords.entry(account) {
+                let Some(p) = self.secret(e.key(), &format!("{}@{}", dav.user, dav.url), Retry::Command(command.into())) else { return };
+                e.insert(p);
+            }
+        }
+        self.status = format!("caching {} PDFs…", pdfs.len());
+        let total = pdfs.len();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for (dav, remote, path) in pdfs {
+                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+                let result = sync_pdf(&dav, &passwords[&account], &remote, &path);
+                let rejected = result.as_ref().is_err_and(yeda_net::webdav::is_unauthorized);
+                if tx.send((account, remote, result)).is_err() || rejected {
+                    break;
+                }
+            }
+        });
+        self.cache_job = Some(CacheJob { rx, total, done: 0, failed: 0, error: None, rejected: false });
+    }
+
+    pub fn poll_cache(&mut self) {
+        let Some(job) = &mut self.cache_job else { return };
+        let before = job.done;
+        let mut rejected = None;
+        let finished = loop {
+            match job.rx.try_recv() {
+                Ok((account, remote, result)) => {
+                    job.done += 1;
+                    if let Err(e) = result {
+                        job.failed += 1;
+                        if yeda_net::webdav::is_unauthorized(&e) {
+                            job.rejected = true;
+                            rejected = Some(account);
+                        }
+                        job.error = job.error.take().or(Some(format!("{remote}: {e:#}")));
+                    }
+                }
+                Err(TryRecvError::Empty) => break false,
+                Err(TryRecvError::Disconnected) => break true,
+            }
+        };
+        if job.done == before && !finished {
+            return;
+        }
+        self.status = match (finished, &job.error) {
+            (false, _) => format!("caching PDFs: {}/{}…", job.done, job.total),
+            (true, None) => format!("{} PDFs cached", job.total),
+            (true, Some(_)) if job.rejected => "the WebDAV password was rejected; run :cache again to enter it".into(),
+            (true, Some(e)) => format!("{} of {} PDFs cached; {} failed: {e}", job.total - job.failed, job.total, job.failed),
+        };
+        if let Some(account) = rejected {
+            self.reject(&account);
+        }
+        if finished {
+            self.cache_job = None;
+            if self.text_job.is_none() && self.searches_text() {
+                self.index_text();
+            }
         }
     }
 
@@ -3001,20 +3089,17 @@ impl App {
             Ok(p) => p,
             Err(e) => return self.status = e.to_string(),
         };
-        if let Some(remote) = self.lib.remote_pdf(&pdf) {
-            let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-            let label = format!("{}@{}", remote.dav.user, remote.dav.url);
-            let file = remote.path.clone();
-            if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
-                self.status = format!("checking {file}…");
-                self.job = Some(Job::Download(pdf.clone(), password));
-            }
-            return;
+        if path.exists() {
+            return self.launch_reader(&path, &pdf);
         }
-        if !path.exists() {
-            return self.status = format!("missing: {}", path.display());
+        let Some(remote) = self.lib.remote_pdf(&pdf) else { return self.status = format!("missing: {}", path.display()) };
+        let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
+        let label = format!("{}@{}", remote.dav.user, remote.dav.url);
+        let file = remote.path.clone();
+        if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
+            self.status = format!("downloading {file}…");
+            self.job = Some(Job::Download(pdf.clone(), password));
         }
-        self.launch_reader(&path, &pdf);
     }
 
     /// Opens the file `path` of the selected reference's `pdf`, with its annotations folder.
@@ -3530,6 +3615,13 @@ fn unreadable(lib: &Library) -> String {
 }
 
 /// Waits for `child` in the background, so it doesn't stay a zombie until yeda exits.
+/// Downloads WebDAV file `remote` to `cached` unless the copy there is the server's current one.
+fn sync_pdf(dav: &library::Dav, password: &str, remote: &str, cached: &std::path::Path) -> anyhow::Result<()> {
+    yeda_fs::sync_cached(cached, |version| {
+        yeda_net::webdav::current_version(dav, password, remote).map(|v| v.is_some() && v.as_deref() == version)
+    }, || yeda_net::webdav::download(dav, password, remote))
+}
+
 fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || child.wait());
 }
