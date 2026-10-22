@@ -84,7 +84,8 @@ impl SetupForm {
                     r.title.clone(),
                     r.authors.join("; "),
                     r.year.map(|y| y.to_string()).unwrap_or_default(),
-                    r.doi.clone().unwrap_or_default(),
+                    // A copy is another work, and a DOI names one.
+                    String::new(),
                 ]
                 .into_iter()
                 .chain(EXTRAS.map(extra))
@@ -271,7 +272,7 @@ impl SetupForm {
             title: v[1].into(),
             authors: v[2].split(';').map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect(),
             year,
-            doi: Some(v[4].to_string()).filter(|d| !d.is_empty()),
+            doi: Some(v[4].to_lowercase()).filter(|d| !d.is_empty()),
             ..Default::default()
         };
         for (k, value) in EXTRAS.iter().zip(&v[5..]) {

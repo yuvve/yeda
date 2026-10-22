@@ -1546,6 +1546,9 @@ impl App {
                     self.select_filter(&Filter::Search(name.clone(), saved.query));
                     self.status = format!("saved search '{name}'");
                 }
+                Ok((_, setup::Setup::Reference(r))) if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) => {
+                    self.status = format!("{} has this DOI already", x.key);
+                }
                 Ok((_, setup::Setup::Reference(mut r))) => {
                     match form.old.as_deref().and_then(|k| self.lib.get(k)) {
                         Some(from) => {
