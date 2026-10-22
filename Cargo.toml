@@ -4,12 +4,12 @@ members = ["yeda-core", "yeda-net", "yeda-fs", "yeda-secrets", "yeda-tui", "yeda
 
 # The version every crate is published under; scripts/release.sh bumps it.
 [workspace.package]
-version = "0.1.1"
+version = "0.1.3"
 
 # The crates' requirements on each other, bumped with the version above.
 [workspace.dependencies]
-yeda-core = { path = "yeda-core", version = "0.1.1" }
-yeda-fs = { path = "yeda-fs", version = "0.1.1" }
-yeda-net = { path = "yeda-net", version = "0.1.1" }
-yeda-reader = { path = "yeda-reader/src-tauri", version = "0.1.1" }
-yeda-secrets = { path = "yeda-secrets", version = "0.1.1" }
+yeda-core = { path = "yeda-core", version = "0.1.3" }
+yeda-fs = { path = "yeda-fs", version = "0.1.3" }
+yeda-net = { path = "yeda-net", version = "0.1.3" }
+yeda-reader = { path = "yeda-reader/src-tauri", version = "0.1.3" }
+yeda-secrets = { path = "yeda-secrets", version = "0.1.3" }
