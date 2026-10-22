@@ -30,12 +30,16 @@ cargo install yeda
 
 Or download the binary from the [latest release](https://github.com/yuvve/yeda/releases/latest). The binary is `yeda`.
 
-yeda runs on Linux only; macOS and Windows have no secret store backend yet ([#292](https://github.com/yuvve/yeda/issues/292)). It needs:
-- the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) for the PDF reader (WebKitGTK 4.1; the `-dev` packages to build);
+yeda runs on Linux only; macOS and Windows have no secret store backend yet ([#292](https://github.com/yuvve/yeda/issues/292)).
+
+Running it needs:
+- WebKitGTK 4.1, for the PDF reader;
 - poppler (`pdftotext`, `pdftoppm`), for full-text search, annotation extraction and summaries;
 - a running Secret Service provider (GNOME Keyring, KWallet or KeePassXC) to save passwords and API keys;
 - git, for `:sync`;
 - glibc 2.34 or later, for the release binary.
+
+Building it with `cargo install` also needs Rust and the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 yeda init       # once: create a library
