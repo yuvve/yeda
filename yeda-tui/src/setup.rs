@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use yeda_core::browse::SortField;
-use yeda_core::library::{Dav, Library, SavedSearch};
+use yeda_core::library::{Dav, Library, Ref, SavedSearch};
 use yeda_core::llm::{Profile, Provider};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -12,16 +12,18 @@ pub enum Kind {
     Search,
     /// The optional OpenAlex API key, which only goes to the secret store.
     Openalex,
+    /// A reference typed in by hand; nothing to test.
+    Reference,
 }
 
-/// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; or a saved search being edited.
+/// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; a saved search being edited; or a new reference.
 pub struct SetupForm {
     pub kind: Kind,
     pub values: Vec<String>,
     pub sel: usize,
     /// The connection is being tested; the form waits.
     pub testing: bool,
-    /// The saved search's name before editing.
+    /// The saved search's name before editing, or the key of the reference being duplicated.
     pub old: Option<String>,
 }
 
@@ -38,6 +40,9 @@ fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str)>
     PRESETS.iter().find(|p| p.0 == name.trim().to_lowercase())
 }
 
+/// The reference form's last fields, kept in `Ref::extra`.
+pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
+
 /// What the form saves, once its connection works.
 #[derive(Clone, Debug)]
 pub enum Setup {
@@ -45,6 +50,7 @@ pub enum Setup {
     Webdav(Dav),
     Search(SavedSearch),
     Openalex,
+    Reference(Ref),
 }
 
 impl SetupForm {
@@ -70,9 +76,32 @@ impl SetupForm {
                 vec![name.into(), s.map(|s| s.query.clone()).unwrap_or_default(), sort.unwrap_or_default()]
             }
             Kind::Openalex => vec![String::new()],
+            Kind::Reference => {
+                let r = lib.get(name).cloned().unwrap_or(Ref { kind: "article".into(), ..Default::default() });
+                let extra = |k: &str| r.extra.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                vec![
+                    r.kind.clone(),
+                    r.title.clone(),
+                    r.authors.join("; "),
+                    r.year.map(|y| y.to_string()).unwrap_or_default(),
+                    r.doi.clone().unwrap_or_default(),
+                ]
+                .into_iter()
+                .chain(EXTRAS.map(extra))
+                .collect()
+            }
         };
-        let sel = if name.is_empty() || kind == Kind::Openalex { 0 } else { 1 };
-        let old = (kind == Kind::Search).then(|| name.to_string());
+        let sel = match kind {
+            Kind::Reference => 1,
+            Kind::Openalex => 0,
+            _ if name.is_empty() => 0,
+            _ => 1,
+        };
+        let old = match kind {
+            Kind::Search => Some(name.to_string()),
+            Kind::Reference => Some(name.to_string()).filter(|n| !n.is_empty()),
+            _ => None,
+        };
         SetupForm { kind, values, sel, testing: false, old }
     }
 
@@ -126,6 +155,17 @@ impl SetupForm {
                 ("Password", "kept in the secret store"),
             ],
             Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
+            Kind::Reference => &[
+                ("Type", "article, inproceedings, incollection, book, preprint, or another, such as report or thesis"),
+                ("Title", ""),
+                ("Authors", "Surname, Given; separated by ;"),
+                ("Year", ""),
+                ("DOI", "optional, like the rest; e edits other fields later"),
+                ("URL", ""),
+                ("Journal", ""),
+                ("Publisher", ""),
+                ("Abstract", "Ctrl-G edits it in $EDITOR"),
+            ],
             Kind::Search => &[
                 ("Name", ""),
                 ("Query", "as typed after /"),
@@ -138,16 +178,23 @@ impl SetupForm {
         if self.kind == Kind::Openalex { "openalex" } else { self.values[0].trim() }
     }
 
+    fn has_secret(&self) -> bool {
+        !matches!(self.kind, Kind::Search | Kind::Reference)
+    }
+
     pub fn secret(&self) -> Option<String> {
-        Some(self.values.last()?.clone()).filter(|s| !s.is_empty() && self.kind != Kind::Search)
+        Some(self.values.last()?.clone()).filter(|s| !s.is_empty() && self.has_secret())
     }
 
     pub fn masked(&self, field: usize) -> bool {
-        self.kind != Kind::Search && field == self.values.len() - 1
+        self.has_secret() && field == self.values.len() - 1
     }
 
     /// The `[llm.<name>]` or `[locations.<name>]` table, checked by reading it back as yeda does.
     pub fn section(&self) -> Result<(toml::Table, Setup)> {
+        if self.kind == Kind::Reference {
+            return Ok((toml::Table::new(), Setup::Reference(self.reference()?)));
+        }
         if self.name().is_empty() {
             bail!("give it a name");
         }
@@ -191,6 +238,7 @@ impl SetupForm {
             }
             Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
             Kind::Openalex => Setup::Openalex,
+            Kind::Reference => unreachable!(),
             Kind::Search => {
                 let (descending, field) = match v[2].strip_prefix('-') {
                     Some(f) => (true, f),
@@ -207,12 +255,40 @@ impl SetupForm {
     }
 }
 
+impl SetupForm {
+    /// The reference the form describes, without a key.
+    fn reference(&self) -> Result<Ref> {
+        let v: Vec<&str> = self.values.iter().map(|s| s.trim()).collect();
+        if v[1].is_empty() {
+            bail!("give it a title");
+        }
+        let year = match v[3] {
+            "" => None,
+            y => Some(y.parse().map_err(|_| anyhow::anyhow!("the year is a number"))?),
+        };
+        let mut r = Ref {
+            kind: if v[0].is_empty() { "misc".into() } else { v[0].to_lowercase() },
+            title: v[1].into(),
+            authors: v[2].split(';').map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect(),
+            year,
+            doi: Some(v[4].to_string()).filter(|d| !d.is_empty()),
+            ..Default::default()
+        };
+        for (k, value) in EXTRAS.iter().zip(&v[5..]) {
+            if !value.is_empty() {
+                r.extra.insert(k.to_string(), (*value).into());
+            }
+        }
+        Ok(r)
+    }
+}
+
 /// Tests the connection; blocks.
 pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     match setup {
         Setup::Llm(p) => yeda_net::llm::ping(p, secret),
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
-        Setup::Search(_) => Ok(()),
+        Setup::Search(_) | Setup::Reference(_) => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
     }
 }
@@ -222,7 +298,7 @@ pub fn account(setup: &Setup) -> String {
     match setup {
         Setup::Llm(p) => yeda_secrets::llm_account(p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
-        Setup::Search(_) => String::new(),
+        Setup::Search(_) | Setup::Reference(_) => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
     }
 }
@@ -283,5 +359,21 @@ mod tests {
         assert_eq!((s.sort, s.descending), (Some(SortField::Year), false));
         f.values[2] = "-pages".into();
         assert!(f.section().is_err());
+    }
+
+    #[test]
+    fn builds_references() {
+        let lib = Library::parse(None, None, [], None).unwrap();
+        let mut f = SetupForm::new(Kind::Reference, "", &lib);
+        assert_eq!((f.values[0].as_str(), f.old.as_deref(), f.secret()), ("article", None, None));
+        assert!(f.section().is_err());
+        f.values[..5].clone_from_slice(&["Report".into(), " Swarms ".into(), "Doe, J.; ; Roe, R.".into(), "20x".into(), "".into()]);
+        assert!(f.section().unwrap_err().to_string().contains("year"));
+        f.values[3] = "2021".into();
+        f.values[5] = "https://example.com".into();
+        let Ok((_, Setup::Reference(r))) = f.section() else { panic!() };
+        assert_eq!((r.kind.as_str(), r.title.as_str(), r.authors.len(), r.year, r.doi), ("report", "Swarms", 2, Some(2021), None));
+        assert_eq!(r.extra.keys().collect::<Vec<_>>(), ["url"]);
+        assert_eq!(r.status, "New");
     }
 }
