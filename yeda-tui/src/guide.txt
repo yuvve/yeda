@@ -292,4 +292,5 @@ TABLES  ( :table [name], T )
   shows only rows with every word somewhere in them; f only rows whose cell
   in this column matches (!x: doesn't match x; "": empty). - hides the
   column and + shows the hidden ones again. Esc closes the cell, then
-  clears search and filters, then closes the table, as does q.
+  clears search and filters, then closes the table; q closes the cell,
+  then the table.
