@@ -90,7 +90,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("open", "open the PDF in the reader (yeda read)"),
     ("edit", "edit the reference file in $EDITOR; on a saved search in the library column, its name, query and sort"),
     ("note", "edit the reference's note in $EDITOR"),
-    ("duplicate", "on a saved search in the library column, a new one filled in from it; saved on Enter"),
+    ("duplicate", "a new reference filled in from the selected one, with its tags, collections and status; on a saved search in the library column, a new search; saved on Enter"),
     ("mark", "mark or unmark the reference"),
     ("range", "mark a range as you move"),
     ("tags", "edit tags"),
@@ -146,6 +146,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "add a PDF, copying or uploading it to a location"),
+    (":new", "add a reference by hand, into the selected collection; saved on Enter"),
     (":cache", "download the selected or marked references' WebDAV PDFs that are missing here or changed on the server"),
     (":detach", "remove one of the selected reference's PDFs with its annotations; the file stays where it is"),
     (":sync", "commit, pull and push the library with git"),
@@ -1268,7 +1269,14 @@ impl App {
                     self.setup = Some(SetupForm::duplicate(name, &self.lib));
                     self.mode = Mode::Setup;
                 }
-                _ => self.status = "select a saved search in the library column to duplicate it".into(),
+                _ if self.pane == Pane::Sidebar => self.status = "select a saved search in the library column to duplicate it".into(),
+                _ => match self.selected() {
+                    Some(r) => {
+                        self.setup = Some(SetupForm::new(setup::Kind::Reference, &r.key.clone(), &self.lib));
+                        self.mode = Mode::Setup;
+                    }
+                    None => self.status = "no reference selected".into(),
+                },
             },
             "note" => self.edit = self.selected().map(|r| (self.path(&library::note_path(&r.key)), None)),
             "tags" => self.open_chooser(PickKind::Tags),
@@ -1537,6 +1545,34 @@ impl App {
                     self.shown_filter = Filter::All;
                     self.select_filter(&Filter::Search(name.clone(), saved.query));
                     self.status = format!("saved search '{name}'");
+                }
+                Ok((_, setup::Setup::Reference(r))) if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) => {
+                    self.status = format!("{} has this DOI already", x.key);
+                }
+                Ok((_, setup::Setup::Reference(mut r))) => {
+                    match form.old.as_deref().and_then(|k| self.lib.get(k)) {
+                        Some(from) => {
+                            (r.tags, r.collections, r.status) = (from.tags.clone(), from.collections.clone(), from.status.clone());
+                            // The Zotero key belongs to the original.
+                            let kept = from.extra.iter().filter(|(k, _)| !setup::EXTRAS.contains(&k.as_str()) && *k != "zotero_key");
+                            r.extra.extend(kept.map(|(k, v)| (k.clone(), v.clone())));
+                        }
+                        None => r.collections = match self.current_filter() {
+                            Filter::Collection(c) => vec![c.clone()],
+                            _ => Vec::new(),
+                        },
+                    }
+                    r.key = self.lib.unique_key(&r);
+                    if self.apply(self.lib.save(&r).map(|e| vec![e])) {
+                        self.setup = None;
+                        self.mode = Mode::Normal;
+                        self.reload();
+                        self.refilter();
+                        if let Some(pos) = self.visible.iter().position(|&i| self.lib.refs[i].key == r.key) {
+                            self.sel = pos;
+                        }
+                        self.status = format!("added {}", r.key);
+                    }
                 }
                 Ok((section, setup)) => {
                     let secret = form.secret();
@@ -2082,6 +2118,10 @@ impl App {
                 ("attach", args) => self.attach(args, text),
                 ("detach", _) => self.detach(text),
                 ("cache", _) => self.cache_pdfs(text),
+                ("new", _) => {
+                    self.setup = Some(SetupForm::new(setup::Kind::Reference, "", &self.lib));
+                    self.mode = Mode::Setup;
+                }
                 ("sync", _) => self.start_git("sync", crate::sync::run),
                 ("git-init", url) => {
                     let url = Some(url.trim().to_string()).filter(|u| !u.is_empty());

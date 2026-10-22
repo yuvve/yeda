@@ -465,10 +465,11 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         crate::setup::Kind::Webdav => "WebDAV location",
         crate::setup::Kind::Search => "Saved search",
         crate::setup::Kind::Openalex => "OpenAlex API key",
+        crate::setup::Kind::Reference => "New reference",
     };
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if form.kind == crate::setup::Kind::Search { "save" } else { "test and save" }), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference) { "save" } else { "test and save" }), true)), area);
 }
 
 /// ✓ found in OpenAlex, ? not found (it may not exist), ◎ already in the library.

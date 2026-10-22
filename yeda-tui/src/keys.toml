@@ -39,14 +39,12 @@
 "x" = "extract"
 "C" = "tag-color"
 "d d" = "delete"
+"y y" = "duplicate"
 ":" = "command"
 "?" = "keys"
 "q" = "close-or-quit"
 "ctrl-e" = "graph-scroll-down"
 "ctrl-y" = "graph-scroll-up"
-
-[keys.library]
-"y y" = "duplicate"
 
 [keys.graph]
 "Enter" = "graph-go"

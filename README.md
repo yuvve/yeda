@@ -13,7 +13,7 @@ I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the 
 yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder.
 
 From one terminal window, with vim keys, you can:
-- add references by DOI, arXiv ID or ISBN, or import your whole Zotero library;
+- add references by DOI, arXiv ID or ISBN, type them in (`:new`), or import your whole Zotero library;
 - organize them with collections, tags, reading status, search and saved searches;
 - read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes;
 - find PDFs, open access or through your library's proxy;
