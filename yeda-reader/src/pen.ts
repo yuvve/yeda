@@ -82,15 +82,13 @@ export function installPen(reader: PenReader) {
 		if (reader._tools.ink) reader._tools.ink.color = '#000000';
 	}
 
-	if (eink) {
-		const setTool = view.setTool.bind(view);
-		// The reader lets the browser scroll natively under the pointer tool; e-ink mode handles touch itself.
-		view.setTool = (tool) => {
-			setTool(tool);
-			const container = view._iframeWindow?.document.getElementById('viewerContainer');
-			if (container) container.style.touchAction = 'none';
-		};
-	}
+	const setTool = view.setTool.bind(view);
+	// The reader lets the browser scroll natively under the pointer tool; e-ink and column mode handle touch themselves.
+	view.setTool = (tool) => {
+		setTool(tool);
+		const container = view._iframeWindow?.document.getElementById('viewerContainer');
+		if (container && (eink || columnMode())) container.style.touchAction = 'none';
+	};
 
 	const down = view._handlePointerDown.bind(view);
 	const move = view._handlePointerMove;
@@ -151,7 +149,9 @@ export function installPen(reader: PenReader) {
 	const viewer = () => view._iframeWindow?.PDFViewerApplication.pdfViewer;
 	const drawing = () => !['pointer', 'hand'].includes(view._tool.type);
 	// E-ink mode takes every touch: swipes turn pages, and native scrolling would smear the screen.
-	const ours = (e: PointerEvent) => e.pointerType === 'touch' && (eink || (penSeen && drawing()));
+	// Column mode does too: swipes step through the columns.
+	const turns = () => eink || columnMode();
+	const ours = (e: PointerEvent) => e.pointerType === 'touch' && (turns() || (penSeen && drawing()));
 	// The page itself, not the container: pdf.js pads the container, so it scrolls a little even at page-fit.
 	const zoomed = (v: PdfViewer) => {
 		const page = v._pages[v.currentPageNumber - 1]?.div;
@@ -206,8 +206,8 @@ export function installPen(reader: PenReader) {
 					moved = true;
 				}
 			}
-			// On e-ink a page that fits turns instead, and so does a column; only a zoomed-in page pans.
-			else if (!eink || (zoomed(v) && !columnMode())) {
+			// On e-ink a page that fits turns instead; only a zoomed-in one pans. Columns always turn.
+			else if (!columnMode() && (!eink || zoomed(v))) {
 				v.container.scrollBy(-dx, -dy);
 				moved ||= Math.hypot(e.clientX - t.start.clientX, e.clientY - t.start.clientY) > 8;
 			}
@@ -263,7 +263,7 @@ export function installPen(reader: PenReader) {
 			const [dx, dy] = [e.clientX - t.start.clientX, e.clientY - t.start.clientY];
 			const dominant = Math.abs(dx) > Math.abs(dy) ? dx : dy;
 			if (single && !moved) {
-				if (eink && Math.abs(dominant) > SWIPE) {
+				if (turns() && Math.abs(dominant) > SWIPE) {
 					if (dominant < 0) reader.navigateToNextPage();
 					else reader.navigateToPreviousPage();
 				}

@@ -228,9 +228,11 @@ THE READER  ( o, yeda read )
                            copy the selected text
     C                      column mode (also the ◫ button)
 
-  Column mode is for two-column papers: each page is read in quarters,
-  top-left, bottom-left, top-right, bottom-right, each filling the window,
-  and turning the page steps through them. It is remembered per paper.
+  Column mode is for two-column papers: each column fills the window's
+  width and is read a screen at a time, left column then right, with what
+  spans both columns (title, abstract, wide figures) in between at full
+  width. Turning the page steps through them; C again shows the whole page,
+  and C after that carries on where you were. It is remembered per paper.
 
 FINDING PAPERS  ( :discover [what] )
 

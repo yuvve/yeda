@@ -45,6 +45,7 @@ jobs:
       - run: npm run build -w yeda-android
 
       - run: npm run check -w yeda-reader
+      - run: npm test -w yeda-reader
       - run: npm run check -w yeda-android
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
