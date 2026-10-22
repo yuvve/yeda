@@ -141,7 +141,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library, and `a` adds one.
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
 
 ## Secrets
 

@@ -263,8 +263,9 @@ FINDING PAPERS  ( :discover [--llm <profile>] [what] )
   context. An Anthropic profile searches the web; an OpenAI-compatible one
   only if the server does (Perplexity, OpenAI's search models). Every
   suggestion is looked up in OpenAlex: ✓ found, ? not found (it may not
-  exist), ◎ already in the library. a adds the paper by its DOI or URL, o
-  opens it, q closes the list; :found opens it again.
+  exist), ◎ already in the library. v marks papers, and a adds the marked
+  ones (else the selected one) by DOI or URL; o opens a paper, q closes
+  the list, and :found opens it again.
 
 TABLES  ( :table [name], T )
 
