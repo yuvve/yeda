@@ -3,7 +3,7 @@
 <!-- embed -->
 The Android app is for reading and annotating your library on a phone or tablet. Adding references, citation graphs, literature tables, finding PDFs and citing stay in the terminal app. The interface is high-contrast and has no animations, so it suits e-ink screens.
 
-Install the APK from the [releases](https://github.com/yuvve/yeda/releases).
+Install the APK from the [latest release](https://github.com/yuvve/yeda/releases/latest). Pre-releases are betas.
 
 <p>
   <img src="screenshots/list.png" width="200" alt="Reference list">
@@ -51,4 +51,4 @@ npx tauri android build --apk --target aarch64     # needs ANDROID_HOME and NDK_
 npm run build && cargo run -p yeda-android         # the same app on the desktop
 ```
 
-`src-tauri/gen/android` is committed because it is customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a release.
+`src-tauri/gen/android` is committed because it is customized. Pushing an `android-v*` tag builds a signed APK and publishes it as a pre-release; a `v*` release includes it too.

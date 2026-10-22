@@ -31,6 +31,8 @@ cargo install yeda
 
 Building it needs the system libraries of [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/) (WebKitGTK on Linux), which the PDF reader uses. The binary is `yeda`.
 
+Or download the Linux binary from the [latest release](https://github.com/yuvve/yeda/releases/latest); it needs WebKitGTK 4.1 and poppler.
+
 ```sh
 yeda init       # once: create a library
 yeda import     # or instead of init: create it from Zotero
@@ -151,7 +153,7 @@ Every key runs a command, and every action is a command (`:annotations` is the s
 <!-- yeda-android -->
 The Android app is for reading and annotating your library on a phone or tablet. Adding references, citation graphs, literature tables, finding PDFs and citing stay in the terminal app. The interface is high-contrast and has no animations, so it suits e-ink screens.
 
-Install the APK from the [releases](https://github.com/yuvve/yeda/releases).
+Install the APK from the [latest release](https://github.com/yuvve/yeda/releases/latest). Pre-releases are betas.
 
 <p>
   <img src="yeda-android/screenshots/list.png" width="200" alt="Reference list">
