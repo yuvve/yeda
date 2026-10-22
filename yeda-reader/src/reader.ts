@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Annotation, AnnotationStore } from './annotations';
+import { installColumns } from './columns';
 import { installPen, PenReader, settleEink } from './pen';
 import { installVim, VimReader } from './vim';
 
@@ -48,7 +49,8 @@ export function reportError(action: string) {
 /** Shows the document the backend has open; `false` if none is. */
 export async function openReader(): Promise<boolean> {
 	let reader: Reader | undefined;
-	const hookVimIntoView = installVim(() => reader);
+	let toggleColumns = noop;
+	const hookVimIntoView = installVim(() => reader, () => toggleColumns());
 	const store = new AnnotationStore();
 	const launch = await invoke<Launch | null>('launch');
 	if (!launch) return false;
@@ -60,6 +62,7 @@ export async function openReader(): Promise<boolean> {
 	const showImage = (a: Annotation) => reader!.setAnnotations([a]);
 
 	document.title = launch.title;
+	const attachColumns = installColumns(launch.title);
 	// zotero/reader lays its toolbar out for a desktop window; on phones it scrolls sideways instead.
 	document.head.append(Object.assign(document.createElement('style'), {
 		// zotero/reader positions the "/ N" page count absolutely, so it needs real width once items stop shrinking.
@@ -85,6 +88,7 @@ export async function openReader(): Promise<boolean> {
 
 	hookVimIntoView(reader);
 	installPen(reader);
+	toggleColumns = attachColumns(reader);
 
 	settleEink(reader).catch(reportError('Setting up e-ink mode'));
 	reader.initializedPromise
