@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use yeda_core::browse::SortField;
@@ -14,6 +16,10 @@ pub enum Kind {
     Openalex,
     /// A reference typed in by hand; nothing to test.
     Reference,
+    /// `[fulltext] proxies`; nothing to test, since a proxy wants a login.
+    Proxy,
+    /// A literature table: its name, columns, then one description per column.
+    Table,
 }
 
 /// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; a saved search being edited; or a new reference.
@@ -25,6 +31,9 @@ pub struct SetupForm {
     pub testing: bool,
     /// The saved search's name before editing, or the key of the reference being duplicated.
     pub old: Option<String>,
+    /// A table's columns that have description fields now, and every description typed, by column.
+    shown: Vec<String>,
+    described: BTreeMap<String, String>,
 }
 
 /// Providers the form knows: name, API and base URL.
@@ -51,6 +60,8 @@ pub enum Setup {
     Search(SavedSearch),
     Openalex,
     Reference(Ref),
+    /// Saved as it is, with nothing to test.
+    Untested,
 }
 
 impl SetupForm {
@@ -76,6 +87,8 @@ impl SetupForm {
                 vec![name.into(), s.map(|s| s.query.clone()).unwrap_or_default(), sort.unwrap_or_default()]
             }
             Kind::Openalex => vec![String::new()],
+            Kind::Proxy => vec![lib.fulltext.proxies.join(" ")],
+            Kind::Table => vec![name.into(), lib.tables.get(name).map(|t| t.columns.join(", ")).unwrap_or_default()],
             Kind::Reference => {
                 let r = lib.get(name).cloned().unwrap_or(Ref { kind: "article".into(), ..Default::default() });
                 let extra = |k: &str| r.extra.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
@@ -94,7 +107,7 @@ impl SetupForm {
         };
         let sel = match kind {
             Kind::Reference => 1,
-            Kind::Openalex => 0,
+            Kind::Openalex | Kind::Proxy => 0,
             _ if name.is_empty() => 0,
             _ => 1,
         };
@@ -103,7 +116,23 @@ impl SetupForm {
             Kind::Reference => Some(name.to_string()).filter(|n| !n.is_empty()),
             _ => None,
         };
-        SetupForm { kind, values, sel, testing: false, old }
+        let described = if kind == Kind::Table { lib.tables.get(name).map(|t| t.describe.clone()).unwrap_or_default() } else { BTreeMap::new() };
+        let mut form = SetupForm { kind, values, sel, testing: false, old, shown: Vec::new(), described };
+        form.sync_columns();
+        form
+    }
+
+    /// Gives each column in a table's Columns field a description field, with what was typed for that column before.
+    pub fn sync_columns(&mut self) {
+        if self.kind != Kind::Table {
+            return;
+        }
+        for (column, text) in self.shown.iter().zip(&self.values[2..]) {
+            self.described.insert(column.clone(), text.clone());
+        }
+        self.shown = self.values[1].split(',').map(str::trim).filter(|c| !c.is_empty()).map(String::from).collect();
+        self.values.truncate(2);
+        self.values.extend(self.shown.iter().map(|c| self.described.get(c).cloned().unwrap_or_default()));
     }
 
     /// The saved-search form filled in from `name`, under a name not yet taken, saving a new search.
@@ -140,10 +169,16 @@ impl SetupForm {
     }
 
     /// Each field's label and hint.
-    pub fn fields(&self) -> &'static [(&'static str, &'static str)] {
-        match self.kind {
+    pub fn fields(&self) -> Vec<(String, &'static str)> {
+        let fields: &[(&str, &str)] = match self.kind {
+            Kind::Table => {
+                let head = [("Name".to_string(), "a new name makes a new table; :table rename renames one"), ("Columns".into(), "separated by commas")];
+                let describe = self.shown.iter().map(|c| (c.clone(), "what the LLM puts in this column; optional"));
+                return head.into_iter().chain(describe).collect();
+            }
+            Kind::Proxy => &[("Proxies", "tried in order, separated by spaces; {url} is where the paper's address goes")],
             Kind::Llm => &[
-                ("Name", "used as :summarize <table> <name>"),
+                ("Name", "used as --llm <name>"),
                 ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter"),
                 ("Model", "e.g. claude-opus-5-5"),
                 ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
@@ -172,15 +207,20 @@ impl SetupForm {
                 ("Query", "as typed after /"),
                 ("Sort", "key, title, author, year, status or type; -year for descending; empty for none"),
             ],
-        }
+        };
+        fields.iter().map(|(label, hint)| (label.to_string(), *hint)).collect()
     }
 
     pub fn name(&self) -> &str {
-        if self.kind == Kind::Openalex { "openalex" } else { self.values[0].trim() }
+        match self.kind {
+            Kind::Openalex => "openalex",
+            Kind::Proxy => "proxy",
+            _ => self.values[0].trim(),
+        }
     }
 
     fn has_secret(&self) -> bool {
-        !matches!(self.kind, Kind::Search | Kind::Reference)
+        matches!(self.kind, Kind::Llm | Kind::Webdav | Kind::Openalex)
     }
 
     pub fn secret(&self) -> Option<String> {
@@ -191,7 +231,7 @@ impl SetupForm {
         self.has_secret() && field == self.values.len() - 1
     }
 
-    /// The `[llm.<name>]` or `[locations.<name>]` table, checked by reading it back as yeda does.
+    /// The `[llm.<name>]`, `[locations.<name>]` or `[tables.<name>]` table, or `[fulltext]`'s proxies, checked by reading it back as yeda does.
     pub fn section(&self) -> Result<(toml::Table, Setup)> {
         if self.kind == Kind::Reference {
             return Ok((toml::Table::new(), Setup::Reference(self.reference()?)));
@@ -240,6 +280,30 @@ impl SetupForm {
             Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
             Kind::Openalex => Setup::Openalex,
             Kind::Reference => unreachable!(),
+            Kind::Proxy => {
+                let proxies: Vec<&str> = v[0].split_whitespace().collect();
+                if let Some(p) = proxies.iter().find(|p| !p.starts_with("http") || !p.contains("{url}")) {
+                    bail!("{p}: a proxy starts with https:// and has {{url}} where the paper's address goes");
+                }
+                if !proxies.is_empty() {
+                    t.insert("proxies".into(), proxies.into());
+                }
+                Setup::Untested
+            }
+            Kind::Table => {
+                if self.shown.is_empty() {
+                    bail!("give it columns");
+                }
+                if let Some(c) = self.shown.iter().enumerate().find_map(|(i, c)| self.shown[..i].contains(c).then_some(c)) {
+                    bail!("{c} is there twice");
+                }
+                let describe: toml::Table = self.shown.iter().zip(&v[2..]).filter(|(_, d)| !d.is_empty()).map(|(c, d)| (c.clone(), (*d).into())).collect();
+                t.insert("columns".into(), self.shown.clone().into());
+                if !describe.is_empty() {
+                    t.insert("describe".into(), describe.into());
+                }
+                Setup::Untested
+            }
             Kind::Search => {
                 let (descending, field) = match v[2].strip_prefix('-') {
                     Some(f) => (true, f),
@@ -284,12 +348,37 @@ impl SetupForm {
     }
 }
 
+/// The `:setup` list: what each row sets, how it is set now, and the command that changes it.
+pub fn overview(lib: &Library) -> Vec<[String; 3]> {
+    let row = |what: String, now: String, command: String| [what, now, command];
+    let mut rows = Vec::new();
+    for (name, p) in &lib.llm {
+        let default = if lib.default_llm.as_deref() == Some(name) { " · default" } else { "" };
+        rows.push(row(format!("LLM {name}"), format!("{} · {}{default}", p.model, p.url()), format!("setup llm {name}")));
+    }
+    rows.push(row("New LLM profile".into(), String::new(), "setup llm".into()));
+    for (name, d) in &lib.remotes {
+        rows.push(row(format!("WebDAV {name}"), format!("{}@{}", d.user, d.url), format!("setup webdav {name}")));
+    }
+    rows.push(row("New WebDAV location".into(), String::new(), "setup webdav".into()));
+    rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
+    let proxies = if lib.fulltext.proxies.is_empty() { "none".into() } else { lib.fulltext.proxies.join(" ") };
+    rows.push(row("Library proxies".into(), proxies, "setup proxy".into()));
+    for (name, t) in &lib.tables {
+        rows.push(row(format!("Table {name}"), t.columns.join(", "), format!("setup table {name}")));
+    }
+    rows.push(row("New table".into(), String::new(), "setup table".into()));
+    rows.push(row("yeda.toml".into(), "everything else in the library's config".into(), "config library".into()));
+    rows.push(row("config.toml".into(), "this device's config".into(), "config device".into()));
+    rows
+}
+
 /// Tests the connection; blocks.
 pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     match setup {
         Setup::Llm(p) => yeda_net::llm::ping(p, secret),
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
-        Setup::Search(_) | Setup::Reference(_) => Ok(()),
+        Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
     }
 }
@@ -299,7 +388,7 @@ pub fn account(setup: &Setup) -> String {
     match setup {
         Setup::Llm(p) => yeda_secrets::llm_account(p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
-        Setup::Search(_) | Setup::Reference(_) => String::new(),
+        Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
     }
 }
@@ -360,6 +449,32 @@ mod tests {
         assert_eq!((s.sort, s.descending), (Some(SortField::Year), false));
         f.values[2] = "-pages".into();
         assert!(f.section().is_err());
+    }
+
+    #[test]
+    fn builds_tables_and_proxies() {
+        let lib = Library::parse(Some("[tables.lit]\ncolumns = [\"a\", \"b\"]\nexamples = 2\n[tables.lit.describe]\nb = \"the b\"\n"), None, [], None).unwrap();
+        let mut f = SetupForm::new(Kind::Table, "lit", &lib);
+        assert_eq!(f.values, ["lit", "a, b", "", "the b"]);
+        f.values[1] = "b, c".into();
+        f.sync_columns();
+        assert_eq!(f.values[2..], ["the b", ""]);
+        f.values[3] = "the c".into();
+        f.values[1] = "a, c".into();
+        f.sync_columns();
+        assert_eq!(f.values[2..], ["", "the c"]);
+        let (t, _) = f.section().unwrap();
+        assert_eq!(t.to_string(), "columns = [\"a\", \"c\"]\n\n[describe]\nc = \"the c\"\n");
+        f.values[1] = "a, a".into();
+        f.sync_columns();
+        assert!(f.section().unwrap_err().to_string().contains("twice"));
+
+        let mut f = SetupForm::new(Kind::Proxy, "", &lib);
+        assert!(f.section().unwrap().0.is_empty());
+        f.values[0] = "https://p.example.edu/login?url={url} https://q.example.edu/".into();
+        assert!(f.section().unwrap_err().to_string().starts_with("https://q."));
+        f.values[0] = "https://p.example.edu/login?url={url}".into();
+        assert_eq!(f.section().unwrap().0["proxies"].as_array().unwrap().len(), 1);
     }
 
     #[test]

@@ -184,6 +184,8 @@ FETCHING PDFS  ( :fetch [location] )
     [fulltext]
     location = "papers"                                  # where PDFs go
     proxies = ["https://proxy.example.edu/login?url={url}"]  # in order
+
+  :setup proxy sets the proxies in a form.
     # downloads = "~/yeda-downloads"   the window's own download folder
 
 THE COMMAND LINE  ( : )
@@ -269,8 +271,9 @@ FINDING PAPERS  ( :discover [--llm <profile>] [what] )
 
 TABLES  ( :table [name], T )
 
-  Define literature tables in yeda.toml under [tables.<name>], each with its
-  columns and an optional describe per column:
+  Define literature tables with :setup table [name], a form with the
+  columns and what each holds, or in yeda.toml under [tables.<name>], each
+  with its columns and an optional describe per column:
 
     [tables.lit]
     columns = ["contribution", "group", "subproblem"]

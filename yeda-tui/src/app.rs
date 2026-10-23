@@ -42,6 +42,8 @@ pub enum Mode {
     Filter,
     /// The `:setup` form.
     Setup,
+    /// The `:setup` list of everything it sets.
+    SetupMenu,
     /// The papers `:discover` found.
     Found,
     /// git's output from `:sync` or `:git-init`.
@@ -158,8 +160,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":discover [--llm <profile>] [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described with the marked ones as context; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
+    (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
     (":setup openalex", "set the optional OpenAlex API key, testing it first"),
+    (":setup proxy", "set the library proxies :fetch opens papers through"),
+    (":setup table [name]", "add or change a literature table: its columns and what each holds"),
+    (":config [library|device]", "edit yeda.toml, or this device's config.toml, in $EDITOR"),
     (":secrets", "every password and API key the config uses: where each is set; set, replace or remove them"),
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
@@ -629,6 +635,9 @@ pub struct App {
     pub found: Vec<Candidate>,
     pub found_sel: usize,
     pub found_marked: BTreeSet<usize>,
+    /// The `:setup` list's rows, from `setup::overview`; empty when it is closed.
+    pub setup_menu: Vec<[String; 3]>,
+    pub setup_menu_sel: usize,
     setup_job: Option<SetupJob>,
     pub help_scroll: u16,
     /// What `/` searches for in a help page, and whether it's still being typed.
@@ -748,6 +757,8 @@ impl App {
             found: Vec::new(),
             found_sel: 0,
             found_marked: BTreeSet::new(),
+            setup_menu: Vec::new(),
+            setup_menu_sel: 0,
             setup_job: None,
             help_scroll: 0,
             help_query: String::new(),
@@ -1007,6 +1018,7 @@ impl App {
             Mode::Pick => self.pick_key(k),
             Mode::Filter => self.filter_key(k),
             Mode::Setup => self.setup_key(k),
+            Mode::SetupMenu => self.setup_menu_key(k),
             Mode::Found => self.found_key(k),
             Mode::Git => self.git_key(k),
             Mode::Sort => self.sort_key(k),
@@ -1423,6 +1435,9 @@ impl App {
         if let Some(buf) = self.text_mut(target) {
             *buf = text;
         }
+        if let Some(form) = &mut self.setup {
+            form.sync_columns();
+        }
         self.cursor_back = 0;
         match self.mode {
             Mode::Search => self.refilter(),
@@ -1538,17 +1553,13 @@ impl App {
         }
         let n = form.values.len();
         match k.code {
-            KeyCode::Esc => {
-                self.setup = None;
-                self.mode = Mode::Normal;
-            }
+            KeyCode::Esc => self.close_setup(),
             KeyCode::Enter => match form.section() {
                 Ok((_, setup::Setup::Search(saved))) => {
                     let (name, old) = (form.name().to_string(), form.old.clone());
                     let result = self.lib.save_search(&name, &saved, old.as_deref().filter(|o| *o != name));
                     self.after_config_change(result);
-                    self.setup = None;
-                    self.mode = Mode::Normal;
+                    self.close_setup();
                     // Applies the new sort even if only the sort changed.
                     self.shown_filter = Filter::All;
                     self.select_filter(&Filter::Search(name.clone(), saved.query));
@@ -1572,8 +1583,7 @@ impl App {
                     }
                     r.key = self.lib.unique_key(&r);
                     if self.apply(self.lib.save(&r).map(|e| vec![e])) {
-                        self.setup = None;
-                        self.mode = Mode::Normal;
+                        self.close_setup();
                         self.reload();
                         self.refilter();
                         if let Some(pos) = self.visible.iter().position(|&i| self.lib.refs[i].key == r.key) {
@@ -1582,6 +1592,7 @@ impl App {
                         self.status = format!("added {}", r.key);
                     }
                 }
+                Ok((section, setup::Setup::Untested)) => self.save_setup(section, ""),
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
@@ -1607,11 +1618,49 @@ impl App {
                 edit_line(&mut form.values[form.sel], &mut self.cursor_back, code, ctrl);
             }
         }
-        if let Some(form) = &mut self.setup
-            && form.kind == setup::Kind::Llm
-            && form.sel == 1
-        {
-            form.provider_changed();
+        if let Some(form) = &mut self.setup {
+            if form.kind == setup::Kind::Llm && form.sel == 1 {
+                form.provider_changed();
+            }
+            form.sync_columns();
+        }
+    }
+
+    /// Closes the `:setup` form, back to the `:setup` list if it was opened from there.
+    fn close_setup(&mut self) {
+        self.setup = None;
+        self.mode = Mode::Normal;
+        if !self.setup_menu.is_empty() {
+            self.open_setup_menu();
+        }
+    }
+
+    fn open_setup_menu(&mut self) {
+        self.setup_menu = setup::overview(&self.lib);
+        self.setup_menu_sel = self.setup_menu_sel.min(self.setup_menu.len() - 1);
+        self.mode = Mode::SetupMenu;
+    }
+
+    fn setup_menu_key(&mut self, k: KeyEvent) {
+        let last = self.setup_menu.len() - 1;
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => self.setup_menu_sel = (self.setup_menu_sel + 1).min(last),
+            KeyCode::Char('k') | KeyCode::Up => self.setup_menu_sel = self.setup_menu_sel.saturating_sub(1),
+            KeyCode::Char('g') | KeyCode::Home => self.setup_menu_sel = 0,
+            KeyCode::Char('G') | KeyCode::End => self.setup_menu_sel = last,
+            KeyCode::Enter => {
+                let command = self.setup_menu[self.setup_menu_sel][2].clone();
+                self.submit(Prompt::Command, &command);
+                if self.mode != Mode::Setup {
+                    self.setup_menu.clear();
+                    self.mode = Mode::Normal;
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.setup_menu.clear();
+                self.mode = Mode::Normal;
+            }
+            _ => {}
         }
     }
 
@@ -1630,7 +1679,7 @@ impl App {
             self.status = format!("not saved: {e:#}");
             return;
         }
-        let (name, kind) = (form.name().to_string(), form.kind);
+        let kind = form.kind;
         let mut stored = String::new();
         if let Some(secret) = &job.secret {
             let account = setup::account(&job.setup);
@@ -1641,28 +1690,42 @@ impl App {
             self.rejected.remove(&account);
         }
         if kind == setup::Kind::Openalex {
-            self.setup = None;
-            self.mode = Mode::Normal;
+            self.close_setup();
             self.status = format!("saved the OpenAlex key to the secret store{stored}");
             return;
         }
-        let section = if kind == setup::Kind::Llm { "llm" } else { "locations" };
+        self.save_setup(job.section, &stored);
+    }
+
+    /// Writes the form's section into yeda.toml, keeping the keys it has no field for.
+    fn save_setup(&mut self, section: toml::Table, stored: &str) {
+        let Some(form) = &self.setup else { return };
+        let name = form.name().to_string();
+        // The keys a form leaves out when their field is empty.
+        let (path, cleared): (Vec<&str>, &[&str]) = match form.kind {
+            setup::Kind::Llm => (vec!["llm", &name], &["base_url"]),
+            setup::Kind::Table => (vec!["tables", &name], &["describe"]),
+            setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
+            _ => (vec!["locations", &name], &[]),
+        };
         let result = self.lib.update_config(|t| {
-            let entry = config_section(t, section)?.entry(name.clone()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            if !entry.is_table() {
-                *entry = toml::Value::Table(toml::Table::new());
+            let mut table = t;
+            for key in &path {
+                let entry = table.entry(*key).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+                if !entry.is_table() {
+                    *entry = toml::Value::Table(toml::Table::new());
+                }
+                table = entry.as_table_mut().unwrap();
             }
-            let table = entry.as_table_mut().unwrap();
-            if kind == setup::Kind::Llm {
-                table.remove("base_url");
+            for key in cleared {
+                table.remove(*key);
             }
-            table.extend(job.section);
+            table.extend(section);
             Ok(())
         });
         self.after_config_change(result);
-        self.setup = None;
-        self.mode = Mode::Normal;
-        self.status = format!("saved [{section}.{name}] to yeda.toml{stored}");
+        self.close_setup();
+        self.status = format!("saved [{}] to yeda.toml{stored}", path.join("."));
     }
 
     fn filter_key(&mut self, k: KeyEvent) {
@@ -2099,20 +2162,31 @@ impl App {
                     self.input.clear();
                     self.open_history();
                 }
+                ("setup", rest) if rest.trim().is_empty() => self.open_setup_menu(),
                 ("setup", rest) => {
                     let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
                     let kind = match kind {
                         "llm" => setup::Kind::Llm,
                         "webdav" => setup::Kind::Webdav,
                         "openalex" => setup::Kind::Openalex,
+                        "proxy" => setup::Kind::Proxy,
+                        "table" => setup::Kind::Table,
                         _ => {
-                            self.status = "usage: :setup llm|webdav [name], or :setup openalex".into();
+                            self.status = "usage: :setup [llm|webdav|table [name]], :setup openalex or :setup proxy".into();
                             return;
                         }
                     };
                     self.setup = Some(SetupForm::new(kind, name.trim(), &self.lib));
                     self.mode = Mode::Setup;
                 }
+                ("config", which) => match which.trim() {
+                    "" | "library" => self.edit = Some((self.path(library::CONFIG), None)),
+                    "device" => match dirs::config_dir() {
+                        Some(d) => self.edit = Some((d.join("yeda/config.toml"), None)),
+                        None => self.status = "no config folder on this device".into(),
+                    },
+                    _ => self.status = "usage: :config [library|device]".into(),
+                },
                 ("failed", _) if self.report.is_empty() => self.status = "nothing failed".into(),
                 ("failed", _) => self.open_help(HelpPage::Failed),
                 ("log", _) => match self.log.path.clone() {
