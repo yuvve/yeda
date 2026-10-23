@@ -399,6 +399,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Setup => draw_setup(f, app, main),
+        Mode::SetupMenu => draw_setup_menu(f, app, main),
         Mode::Found => draw_found(f, app, main),
         Mode::Git => draw_git(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
@@ -446,6 +447,7 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
 fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     let Some(form) = &app.setup else { return };
     let fields = form.fields();
+    let w = fields.iter().map(|(label, _)| label.chars().count()).max().unwrap_or(0).max(10);
     let mut lines: Vec<Line> = fields
         .iter()
         .zip(&form.values)
@@ -453,23 +455,25 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         .map(|(i, ((label, _), value))| {
             let value = if form.masked(i) { "•".repeat(value.chars().count()) } else { value.clone() };
             let value = if i == form.sel { with_cursor(&value, app.cursor_back) } else { value.clone() };
-            let line = Line::from(vec![Span::raw(format!("{label:>10}  ")).bold(), Span::raw(value)]);
+            let line = Line::from(vec![Span::raw(format!("{label:>w$}  ")).bold(), Span::raw(value)]);
             if i == form.sel { line.reversed() } else { line }
         })
         .collect();
     lines.push(Line::raw(""));
     let hint = if form.testing { "testing the connection…" } else { fields[form.sel].1 };
-    lines.push(Line::raw(format!("{:>10}  {hint}", "")).dim());
+    lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
     let what = match form.kind {
         crate::setup::Kind::Llm => "LLM profile",
         crate::setup::Kind::Webdav => "WebDAV location",
         crate::setup::Kind::Search => "Saved search",
         crate::setup::Kind::Openalex => "OpenAlex API key",
         crate::setup::Kind::Reference => "New reference",
+        crate::setup::Kind::Proxy => "Library proxies",
+        crate::setup::Kind::Table => "Literature table",
     };
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference) { "save" } else { "test and save" }), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table) { "save" } else { "test and save" }), true)), area);
 }
 
 /// ✓ found in OpenAlex, ? not found (it may not exist), ◎ already in the library.
@@ -522,6 +526,21 @@ fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.secret_sel)),
+    );
+}
+
+fn draw_setup_menu(f: &mut Frame, app: &App, main: Rect) {
+    let width = app.setup_menu.iter().map(|[what, ..]| what.chars().count()).max().unwrap_or(0);
+    let items: Vec<ListItem> = app.setup_menu.iter().map(|[what, now, _]| ListItem::new(Line::from(vec![Span::raw(format!("{what:<width$}  ")), Span::raw(now.clone()).dim()]))).collect();
+    let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
+    let area = popup(main, (lines + 2).clamp(50, main.width.saturating_sub(4)), items.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items)
+            .block(block(" Setup · Enter change · Esc close ".into(), true))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.setup_menu_sel)),
     );
 }
 

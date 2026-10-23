@@ -95,6 +95,8 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
+`:setup` lists what it sets (LLM profiles, WebDAV locations, the OpenAlex key, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
+
 ## Graphs
 
 `:graph` draws a citation graph of the selected paper, or of the marked ones (`v`, `V`). Rows are years, newest at the top:
@@ -124,7 +126,7 @@ A command uses `default_llm` unless it names another profile: `:discover --llm g
 
 ### Literature tables
 
-A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. You define its columns in `yeda.toml`, each with an optional description of what it should hold:
+A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. `:setup table` defines its columns, each with an optional description of what it should hold; in `yeda.toml` they look like this:
 
 ```toml
 [tables.lit]
