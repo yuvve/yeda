@@ -18,12 +18,14 @@ cargo build -p yeda
 git commit -qam "Release $v (#$n)"
 git push -q -u origin HEAD
 gh pr create --title "Release $v" --body "Closes #$n"
-# CI may not have registered its checks right after the PR opens.
-sleep 10
+# CI registers its checks a while after the PR opens; until then there is nothing to watch.
+until [ "$(gh pr view --json statusCheckRollup -q '.statusCheckRollup | length')" -gt 0 ]; do sleep 5; done
 gh pr checks --watch --fail-fast
-gh pr merge --squash --delete-branch
+# GitHub deletes the remote branch on merge; gh's --delete-branch would stop the script if its local cleanup failed.
+gh pr merge --squash
 git checkout -q main
 git pull -q --ff-only
+git branch -q -D "$n-release-$v"
 
 # --allow-dirty: the reader's dist/ and Tauri's schemas are build outputs git ignores.
 cargo build -p yeda
