@@ -1,12 +1,12 @@
 name: Builds
 
 # `android-v*` tags publish a beta APK as a pre-release; `v*` tags make the release, with the APK and
-# Linux binaries. The file keeps its name: the APK's version code counts this workflow's runs.
+# Linux binaries.
 on:
   push:
     tags: ["android-v*", "v*"]
   pull_request:
-    paths: [".github/workflows/android.yml"]
+    paths: [".github/workflows/builds.yml"]
   workflow_dispatch:
 
 permissions:
@@ -55,7 +55,7 @@ jobs:
           echo "RANLIB_aarch64_linux_android=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
       # Android installs an APK only over one with a lower version code. The run number grows with every build, betas
-      # and releases alike; the offset keeps it above the date codes (2026102203) of earlier APKs.
+      # and releases alike; the offset keeps it above the codes of earlier APKs, the last from android.yml's run 54.
       # v0.1.3 builds yeda-0.1.3.apk, android-v2026.10.21.3 yeda-2026.10.21-3.apk (Tauri wants semver).
       - name: Version from the tag
         if: github.ref_type == 'tag'
@@ -65,7 +65,7 @@ jobs:
             IFS=. read -r y m d n <<< "${GITHUB_REF_NAME#android-v}"
             name=$((10#$y)).$((10#$m)).$((10#$d))-$((10#${n:-1}))
           fi
-          code=$((2030000000 + GITHUB_RUN_NUMBER))
+          code=$((2031000000 + GITHUB_RUN_NUMBER))
           echo "VERSION_CONFIG={\"version\":\"$name\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
           echo "APK=yeda-$name.apk" >> "$GITHUB_ENV"
 
