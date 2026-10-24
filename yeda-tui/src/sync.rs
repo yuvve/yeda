@@ -22,13 +22,19 @@ fn stdout(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Where git's output goes as it runs, line by line.
-pub type Log<'a> = &'a (dyn Fn(String) + Sync);
+pub enum Event {
+    /// A line of git's output.
+    Line(String),
+    /// Files synced so far, of how many.
+    Progress(usize, usize),
+}
+
+pub type Log<'a> = &'a (dyn Fn(Event) + Sync);
 
 /// Runs git with its output going to `log`. The TUI stays on screen, so git must not ask for
 /// anything: credentials come from a credential helper or ssh-agent, else the command fails.
 fn streamed(dir: &Path, args: &[&str], log: Log) -> Result<bool> {
-    log(format!("$ git {}", args.join(" ")));
+    log(Event::Line(format!("$ git {}", args.join(" "))));
     let mut command = git(dir);
     command.args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
@@ -37,7 +43,7 @@ fn streamed(dir: &Path, args: &[&str], log: Log) -> Result<bool> {
     let mut child = command.spawn().context("git")?;
     let lines = |out: Box<dyn Read + Send>| {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
-            log(line);
+            log(Event::Line(line));
         }
     };
     let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
@@ -59,8 +65,17 @@ fn own_repository(dir: &Path) -> Result<bool> {
 }
 
 /// Git carries the data only: PDFs sync through WebDAV or Syncthing.
+const DATA: [&str; 3] = [".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"];
+
 fn add_all(dir: &Path) -> Result<()> {
-    stdout(dir, &["add", "-A", "--", ".", ":(exclude,icase)*.pdf", ":(exclude)*.tmp"]).map(drop)
+    stdout(dir, &[&["add", "-A", "--"][..], &DATA].concat()).map(drop)
+}
+
+fn require_repository(dir: &Path) -> Result<()> {
+    if !own_repository(dir)? {
+        bail!("the library folder is not a git repository of its own; :git-init [url] makes it one");
+    }
+    Ok(())
 }
 
 /// Git carries no PDFs and none of yeda's atomic-write temporaries.
@@ -94,20 +109,32 @@ pub fn init(dir: &Path, url: Option<&str>, log: Log) -> Result<String> {
     Ok(format!("git repository created and pushed to {url}"))
 }
 
+/// The files that differ between `range`'s two ends.
+fn files(dir: &Path, range: &str) -> Result<std::collections::BTreeSet<String>> {
+    Ok(stdout(dir, &["diff", "--name-only", range])?.lines().map(String::from).collect())
+}
+
 /// Commits everything, merges the upstream branch and pushes; returns what happened.
 pub fn run(dir: &Path, log: Log) -> Result<String> {
-    if !own_repository(dir)? {
-        bail!("the library folder is not a git repository of its own; :git-init [url] makes it one");
-    }
+    require_repository(dir)?;
     add_all(dir)?;
-    let committed = !output(dir, &["diff", "--cached", "--quiet"])?.status.success();
-    if committed {
-        log(stdout(dir, &["commit", "-m", "yeda sync"])?.trim_end().to_string());
+    if !output(dir, &["diff", "--cached", "--quiet"])?.status.success() {
+        log(Event::Line(stdout(dir, &["commit", "-m", "yeda sync"])?.trim_end().to_string()));
     }
-    if !streamed(dir, &["pull", "--no-rebase", "--no-edit"], log)? {
+    if !streamed(dir, &["fetch"], log)? {
+        bail!("git fetch failed; {NO_CREDENTIALS}");
+    }
+    if !output(dir, &["rev-parse", "--verify", "-q", "@{u}"])?.status.success() {
+        bail!("the branch has no upstream; git push -u origin HEAD sets one");
+    }
+    let (incoming, outgoing) = (files(dir, "HEAD...@{u}")?, files(dir, "@{u}...HEAD")?);
+    let total = incoming.union(&outgoing).count();
+    log(Event::Progress(0, total));
+    if !incoming.is_empty() && !streamed(dir, &["merge", "--no-edit", "@{u}"], log)? {
         let conflicts = stdout(dir, &["diff", "--name-only", "--diff-filter=U"])?;
         if conflicts.is_empty() {
-            bail!("git pull failed; {NO_CREDENTIALS}");
+            output(dir, &["merge", "--abort"])?;
+            bail!("git merge failed");
         }
         // Left mid-merge, the next :sync would commit the conflict markers.
         if let Err(e) = resolve(dir, conflicts.lines()) {
@@ -115,10 +142,60 @@ pub fn run(dir: &Path, log: Log) -> Result<String> {
             return Err(e);
         }
     }
-    if !streamed(dir, &["push"], log)? {
+    log(Event::Progress(incoming.len(), total));
+    if stdout(dir, &["rev-parse", "HEAD"])? != stdout(dir, &["rev-parse", "@{u}"])? && !streamed(dir, &["push"], log)? {
         bail!("git push failed; {NO_CREDENTIALS}");
     }
-    Ok(if committed { "synced: committed local changes, pulled and pushed" } else { "synced: pulled and pushed" }.into())
+    log(Event::Progress(total, total));
+    Ok(match (incoming.len(), outgoing.len()) {
+        (0, 0) => "synced: nothing changed".into(),
+        (i, o) => format!("synced {total} files: {i} pulled, {o} pushed"),
+    })
+}
+
+/// A file that differs from the last commit.
+pub struct Change {
+    /// A added, D deleted, M modified, or git's letter for anything else.
+    pub status: char,
+    pub path: String,
+    untracked: bool,
+}
+
+/// Every change since the last commit, as `:sync` would commit it.
+pub fn changes(dir: &Path) -> Result<Vec<Change>> {
+    require_repository(dir)?;
+    let tracked = stdout(dir, &[&["diff", "HEAD", "--name-status", "--no-renames", "-z", "--"][..], &DATA].concat())?;
+    let untracked = stdout(dir, &[&["ls-files", "--others", "--exclude-standard", "-z", "--"][..], &DATA].concat())?;
+    let mut fields = tracked.split_terminator('\0');
+    let mut changes = Vec::new();
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        changes.push(Change { status: status.chars().next().unwrap_or('M'), path: path.into(), untracked: false });
+    }
+    changes.extend(untracked.split_terminator('\0').map(|path| Change { status: 'A', path: path.into(), untracked: true }));
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(changes)
+}
+
+pub fn diff(dir: &Path, change: &Change) -> Result<String> {
+    if change.untracked {
+        // Exits 1 when the files differ, which they always do.
+        let out = output(dir, &["diff", "--no-index", "--", "/dev/null", &change.path])?;
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    stdout(dir, &["diff", "HEAD", "--", &change.path])
+}
+
+/// Puts the files back as they were at the last commit; new files are deleted.
+pub fn revert(dir: &Path, changes: &[&Change]) -> Result<()> {
+    let paths = |untracked: bool| changes.iter().filter(|c| c.untracked == untracked).map(|c| c.path.as_str()).collect::<Vec<_>>();
+    let (untracked, tracked) = (paths(true), paths(false));
+    if !untracked.is_empty() {
+        stdout(dir, &[&["clean", "-f", "--"][..], &untracked].concat())?;
+    }
+    if !tracked.is_empty() {
+        stdout(dir, &[&["restore", "--source=HEAD", "--staged", "--worktree", "--"][..], &tracked].concat())?;
+    }
+    Ok(())
 }
 
 /// Merges conflicted annotation files by id; any other conflict aborts the merge.
@@ -168,9 +245,42 @@ mod tests {
         let b = clone("b");
         write(&a, "[[annotation]]\nid = \"x\"\n");
         write(&b, "not toml [[\n");
-        run(&a, &|_| {}).unwrap();
+        let progress = std::sync::Mutex::new(None);
+        run(&a, &|e| if let Event::Progress(done, total) = e { *progress.lock().unwrap() = Some((done, total)) }).unwrap();
+        assert_eq!(*progress.lock().unwrap(), Some((1, 1)));
         assert!(run(&b, &|_| {}).is_err());
         assert!(!b.join(".git/MERGE_HEAD").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn revert_undoes_additions_deletions_and_edits() {
+        let dir = std::env::temp_dir().join(format!("yeda-diff-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("refs")).unwrap();
+        stdout(&dir, &["init", "-q"]).unwrap();
+        stdout(&dir, &["config", "user.email", "t@t"]).unwrap();
+        stdout(&dir, &["config", "user.name", "t"]).unwrap();
+        for f in ["refs/a.toml", "refs/b.toml"] {
+            std::fs::write(dir.join(f), "x\n").unwrap();
+        }
+        add_all(&dir).unwrap();
+        stdout(&dir, &["commit", "-q", "-m", "base"]).unwrap();
+        std::fs::write(dir.join("refs/a.toml"), "y\n").unwrap();
+        std::fs::remove_file(dir.join("refs/b.toml")).unwrap();
+        std::fs::write(dir.join("refs/c.toml"), "z\n").unwrap();
+        std::fs::write(dir.join("refs/staged.toml"), "z\n").unwrap();
+        std::fs::write(dir.join("paper.pdf"), "%PDF").unwrap();
+        stdout(&dir, &["add", "refs/staged.toml"]).unwrap();
+        let changes = changes(&dir).unwrap();
+        let listed: Vec<_> = changes.iter().map(|c| format!("{} {}", c.status, c.path)).collect();
+        assert_eq!(listed, ["M refs/a.toml", "D refs/b.toml", "A refs/c.toml", "A refs/staged.toml"]);
+        assert!(diff(&dir, &changes[2]).unwrap().contains("+z"));
+        revert(&dir, &changes.iter().collect::<Vec<_>>()).unwrap();
+        assert!(super::changes(&dir).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("refs/a.toml")).unwrap(), "x\n");
+        assert!(dir.join("refs/b.toml").exists() && !dir.join("refs/c.toml").exists() && !dir.join("refs/staged.toml").exists());
+        assert!(dir.join("paper.pdf").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
