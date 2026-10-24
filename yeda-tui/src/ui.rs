@@ -628,8 +628,7 @@ fn draw_git(f: &mut Frame, app: &App, main: Rect) {
     let skip = lines.len().saturating_sub(height.saturating_sub(2) as usize);
     let area = popup(main, width, height);
     f.render_widget(Clear, area);
-    let progress = g.progress.map(|(done, total)| format!("{done}/{total} files · ")).unwrap_or_default();
-    let title = format!(" :{} · {progress}{} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
+    let title = format!(" :{} · {} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
     f.render_widget(Paragraph::new(lines.split_off(skip)).wrap(Wrap { trim: false }).block(block(title, true)), area);
 }
 

@@ -22,19 +22,13 @@ fn stdout(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-pub enum Event {
-    /// A line of git's output.
-    Line(String),
-    /// Files synced so far, of how many.
-    Progress(usize, usize),
-}
-
-pub type Log<'a> = &'a (dyn Fn(Event) + Sync);
+/// Where git's output goes as it runs, line by line.
+pub type Log<'a> = &'a (dyn Fn(String) + Sync);
 
 /// Runs git with its output going to `log`. The TUI stays on screen, so git must not ask for
 /// anything: credentials come from a credential helper or ssh-agent, else the command fails.
 fn streamed(dir: &Path, args: &[&str], log: Log) -> Result<bool> {
-    log(Event::Line(format!("$ git {}", args.join(" "))));
+    log(format!("$ git {}", args.join(" ")));
     let mut command = git(dir);
     command.args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
@@ -43,7 +37,7 @@ fn streamed(dir: &Path, args: &[&str], log: Log) -> Result<bool> {
     let mut child = command.spawn().context("git")?;
     let lines = |out: Box<dyn Read + Send>| {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
-            log(Event::Line(line));
+            log(line);
         }
     };
     let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
@@ -114,12 +108,16 @@ fn files(dir: &Path, range: &str) -> Result<std::collections::BTreeSet<String>> 
     Ok(stdout(dir, &["diff", "--name-only", range])?.lines().map(String::from).collect())
 }
 
+fn files_count(n: usize) -> String {
+    format!("{n} file{}", if n == 1 { "" } else { "s" })
+}
+
 /// Commits everything, merges the upstream branch and pushes; returns what happened.
 pub fn run(dir: &Path, log: Log) -> Result<String> {
     require_repository(dir)?;
     add_all(dir)?;
     if !output(dir, &["diff", "--cached", "--quiet"])?.status.success() {
-        log(Event::Line(stdout(dir, &["commit", "-m", "yeda sync"])?.trim_end().to_string()));
+        log(stdout(dir, &["commit", "-m", "yeda sync"])?.trim_end().to_string());
     }
     if !streamed(dir, &["fetch"], log)? {
         bail!("git fetch failed; {NO_CREDENTIALS}");
@@ -129,7 +127,7 @@ pub fn run(dir: &Path, log: Log) -> Result<String> {
     }
     let (incoming, outgoing) = (files(dir, "HEAD...@{u}")?, files(dir, "@{u}...HEAD")?);
     let total = incoming.union(&outgoing).count();
-    log(Event::Progress(0, total));
+    log(format!("{} to sync: {} to pull, {} to push", files_count(total), incoming.len(), outgoing.len()));
     if !incoming.is_empty() && !streamed(dir, &["merge", "--no-edit", "@{u}"], log)? {
         let conflicts = stdout(dir, &["diff", "--name-only", "--diff-filter=U"])?;
         if conflicts.is_empty() {
@@ -142,14 +140,12 @@ pub fn run(dir: &Path, log: Log) -> Result<String> {
             return Err(e);
         }
     }
-    log(Event::Progress(incoming.len(), total));
     if stdout(dir, &["rev-parse", "HEAD"])? != stdout(dir, &["rev-parse", "@{u}"])? && !streamed(dir, &["push"], log)? {
         bail!("git push failed; {NO_CREDENTIALS}");
     }
-    log(Event::Progress(total, total));
     Ok(match (incoming.len(), outgoing.len()) {
         (0, 0) => "synced: nothing changed".into(),
-        (i, o) => format!("synced {total} files: {i} pulled, {o} pushed"),
+        (i, o) => format!("synced {}: {i} pulled, {o} pushed", files_count(total)),
     })
 }
 
@@ -245,9 +241,7 @@ mod tests {
         let b = clone("b");
         write(&a, "[[annotation]]\nid = \"x\"\n");
         write(&b, "not toml [[\n");
-        let progress = std::sync::Mutex::new(None);
-        run(&a, &|e| if let Event::Progress(done, total) = e { *progress.lock().unwrap() = Some((done, total)) }).unwrap();
-        assert_eq!(*progress.lock().unwrap(), Some((1, 1)));
+        assert_eq!(run(&a, &|_| {}).unwrap(), "synced 1 file: 0 pulled, 1 pushed");
         assert!(run(&b, &|_| {}).is_err());
         assert!(!b.join(".git/MERGE_HEAD").exists());
         std::fs::remove_dir_all(&root).unwrap();

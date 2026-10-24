@@ -315,15 +315,13 @@ pub enum TextTarget {
 pub struct GitView {
     pub title: String,
     pub lines: Vec<String>,
-    /// Files synced so far, of how many.
-    pub progress: Option<(usize, usize)>,
     /// What came of it, once it is done.
     pub done: Option<String>,
     rx: Receiver<GitMsg>,
 }
 
 enum GitMsg {
-    Event(crate::sync::Event),
+    Line(String),
     Done(anyhow::Result<String>),
 }
 
@@ -2387,10 +2385,10 @@ impl App {
         let dir = self.dir.clone();
         std::thread::spawn(move || {
             let lines = tx.clone();
-            let result = task(&dir, &move |event| drop(lines.send(GitMsg::Event(event))));
+            let result = task(&dir, &move |line| drop(lines.send(GitMsg::Line(line))));
             let _ = tx.send(GitMsg::Done(result));
         });
-        self.git = Some(GitView { title: title.into(), lines: vec![], progress: None, done: None, rx });
+        self.git = Some(GitView { title: title.into(), lines: vec![], done: None, rx });
         self.mode = Mode::Git;
     }
 
@@ -2399,11 +2397,7 @@ impl App {
         let mut finished = false;
         while let Ok(msg) = g.rx.try_recv() {
             match msg {
-                GitMsg::Event(crate::sync::Event::Line(line)) => g.lines.push(line),
-                GitMsg::Event(crate::sync::Event::Progress(done, total)) => {
-                    g.progress = Some((done, total));
-                    self.status = format!("{}: {done}/{total} files…", g.title);
-                }
+                GitMsg::Line(line) => g.lines.push(line),
                 GitMsg::Done(result) => {
                     g.done = Some(result.unwrap_or_else(|e| format!("{}: {e:#}", g.title)));
                     finished = true;
