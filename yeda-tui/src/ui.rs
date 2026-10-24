@@ -402,6 +402,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::SetupMenu => draw_setup_menu(f, app, main),
         Mode::Found => draw_found(f, app, main),
         Mode::Git => draw_git(f, app, main),
+        Mode::Diff => draw_diff(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
         Mode::PdfPick => draw_pdf_pick(f, app, main),
@@ -629,6 +630,47 @@ fn draw_git(f: &mut Frame, app: &App, main: Rect) {
     f.render_widget(Clear, area);
     let title = format!(" :{} · {} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
     f.render_widget(Paragraph::new(lines.split_off(skip)).wrap(Wrap { trim: false }).block(block(title, true)), area);
+}
+
+fn draw_diff(f: &mut Frame, app: &App, main: Rect) {
+    let Some(v) = &app.diff else { return };
+    let area = popup(main, main.width.saturating_sub(4), main.height.saturating_sub(2));
+    let width = v.changes.iter().map(|c| c.path.chars().count() as u16 + 6).max().unwrap_or(0).min(area.width / 3);
+    let [files, diff] = Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(area);
+    let items: Vec<ListItem> = v
+        .changes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let marked = if v.marked.contains(&i) { Span::styled("▌", Style::new().fg(Color::Yellow)) } else { Span::raw(" ") };
+            let color = match c.status {
+                'A' => Color::Green,
+                'D' => Color::Red,
+                'M' => Color::Yellow,
+                _ => Color::Magenta,
+            };
+            ListItem::new(Line::from(vec![marked, Span::styled(format!("{} ", c.status), Style::new().fg(color).bold()), Span::styled(c.path.clone(), Style::new().fg(color))]))
+        })
+        .collect();
+    let lines: Vec<Line> = v
+        .text
+        .lines()
+        .map(|l| match l.chars().next() {
+            _ if l.starts_with("+++") || l.starts_with("---") => Line::raw(l).bold(),
+            Some('+') => Line::styled(l, Style::new().fg(Color::Green)),
+            Some('-') => Line::styled(l, Style::new().fg(Color::Red)),
+            Some('@') => Line::styled(l, Style::new().fg(Color::Cyan)),
+            _ => Line::raw(l),
+        })
+        .collect();
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items).block(block(format!(" Changes ({}) ", v.changes.len()), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        files,
+        &mut ListState::default().with_selected(Some(v.sel)),
+    );
+    let title = v.changes.get(v.sel).map_or(String::new(), |c| format!(" {} · v mark · d d undo · Ctrl-D Ctrl-U scroll · q close ", c.path));
+    f.render_widget(Paragraph::new(lines).scroll((v.scroll, 0)).block(block(title, false)), diff);
 }
 
 fn draw_table_pick(f: &mut Frame, app: &App, main: Rect) {

@@ -48,6 +48,8 @@ pub enum Mode {
     Found,
     /// git's output from `:sync` or `:git-init`.
     Git,
+    /// `:diff`: the changes since the last commit.
+    Diff,
     Sort,
     /// Picking the table a command runs on.
     TablePick,
@@ -153,6 +155,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":cache", "download the selected or marked references' WebDAV PDFs that are missing here or changed on the server"),
     (":detach", "remove one of the selected reference's PDFs with its annotations; the file stays where it is"),
     (":sync", "commit, pull and push the library with git"),
+    (":diff", "the library's changes since the last :sync; v marks, d d undoes the selected or marked files"),
     (":git-init [url]", "make the library folder a git repository and commit it; with a URL, push it there as origin"),
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
@@ -320,6 +323,19 @@ pub struct GitView {
 enum GitMsg {
     Line(String),
     Done(anyhow::Result<String>),
+}
+
+pub struct DiffView {
+    pub changes: Vec<crate::sync::Change>,
+    pub sel: usize,
+    pub marked: BTreeSet<usize>,
+    /// The selected file's diff.
+    pub text: String,
+    pub scroll: u16,
+    /// The first `d` of `d d`.
+    d: bool,
+    /// Asking y/n before undoing.
+    confirming: bool,
 }
 
 /// What to run again once a missing secret has been entered.
@@ -596,6 +612,7 @@ pub struct App {
     pub edit: Option<(PathBuf, Option<usize>)>,
     /// `:sync` or `:git-init`, running or done, with git's output.
     pub git: Option<GitView>,
+    pub diff: Option<DiffView>,
     pub job: Option<Job>,
     picker: Picker,
     summarizer: Option<Summarizer>,
@@ -726,6 +743,7 @@ impl App {
             quit: false,
             edit: None,
             git: None,
+            diff: None,
             job: None,
             picker,
             summarizer: None,
@@ -1021,6 +1039,7 @@ impl App {
             Mode::SetupMenu => self.setup_menu_key(k),
             Mode::Found => self.found_key(k),
             Mode::Git => self.git_key(k),
+            Mode::Diff => self.diff_key(k),
             Mode::Sort => self.sort_key(k),
             Mode::TablePick => self.table_pick_key(k),
             Mode::PdfPick => self.pdf_pick_key(k),
@@ -2212,6 +2231,7 @@ impl App {
                     self.mode = Mode::Setup;
                 }
                 ("sync", _) => self.start_git("sync", crate::sync::run),
+                ("diff", _) => self.open_diff(),
                 ("git-init", url) => {
                     let url = Some(url.trim().to_string()).filter(|u| !u.is_empty());
                     self.start_git("git-init", move |dir, log| crate::sync::init(dir, url.as_deref(), log));
@@ -2394,6 +2414,81 @@ impl App {
         if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
             self.mode = Mode::Normal;
         }
+    }
+
+    fn open_diff(&mut self) {
+        match crate::sync::changes(&self.dir) {
+            Ok(changes) if changes.is_empty() => self.status = "no changes since the last sync".into(),
+            Ok(changes) => {
+                self.diff = Some(DiffView { changes, sel: 0, marked: BTreeSet::new(), text: String::new(), scroll: 0, d: false, confirming: false });
+                self.show_diff(0);
+                self.mode = Mode::Diff;
+            }
+            Err(e) => self.status = format!("diff: {e:#}"),
+        }
+    }
+
+    fn show_diff(&mut self, sel: usize) {
+        let Some(v) = &mut self.diff else { return };
+        v.sel = sel.min(v.changes.len().saturating_sub(1));
+        v.scroll = 0;
+        v.text = match v.changes.get(v.sel) {
+            Some(c) => crate::sync::diff(&self.dir, c).unwrap_or_else(|e| format!("{e:#}")),
+            None => String::new(),
+        };
+    }
+
+    fn diff_key(&mut self, k: KeyEvent) {
+        let Some(v) = &mut self.diff else { return self.mode = Mode::Normal };
+        if std::mem::take(&mut v.confirming) {
+            match k.code {
+                KeyCode::Char('y') => self.undo_changes(),
+                _ => self.status = "cancelled".into(),
+            }
+            return;
+        }
+        let (sel, d, ctrl) = (v.sel, std::mem::take(&mut v.d), k.modifiers.contains(KeyModifiers::CONTROL));
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => self.show_diff(sel + 1),
+            KeyCode::Char('k') | KeyCode::Up => self.show_diff(sel.saturating_sub(1)),
+            KeyCode::Char('d') if ctrl => v.scroll = v.scroll.saturating_add(10),
+            KeyCode::Char('u') if ctrl => v.scroll = v.scroll.saturating_sub(10),
+            KeyCode::Char('v') => {
+                if !v.marked.remove(&sel) {
+                    v.marked.insert(sel);
+                }
+                self.show_diff(sel + 1);
+            }
+            KeyCode::Char('d') if d => {
+                v.confirming = true;
+                self.status = match v.marked.len() {
+                    0 => format!("undo the changes to {}? (y/n)", v.changes[sel].path),
+                    1 => format!("undo the changes to {}? (y/n)", v.changes[*v.marked.first().unwrap()].path),
+                    n => format!("undo the changes to {n} marked files? (y/n)"),
+                };
+            }
+            KeyCode::Char('d') => v.d = true,
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+    }
+
+    fn undo_changes(&mut self) {
+        let Some(v) = &self.diff else { return };
+        let picked: Vec<&crate::sync::Change> = match v.marked.is_empty() {
+            true => v.changes.get(v.sel).into_iter().collect(),
+            false => v.marked.iter().filter_map(|&i| v.changes.get(i)).collect(),
+        };
+        let n = picked.len();
+        let (result, sel) = (crate::sync::revert(&self.dir, &picked), v.sel);
+        self.reload();
+        self.mode = Mode::Normal;
+        self.open_diff();
+        self.show_diff(sel);
+        self.status = match result {
+            Ok(()) => format!("undid the changes to {n} file{}", if n == 1 { "" } else { "s" }),
+            Err(e) => format!("{e:#}"),
+        };
     }
 
     pub fn poll_discover(&mut self) {
