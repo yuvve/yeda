@@ -4,8 +4,9 @@ use anyhow::Result;
 use std::time::Duration;
 use yeda_core::fulltext::is_pdf;
 
+use crate::MAX_BYTES;
+
 const USER_AGENT: &str = concat!("yeda/", env!("CARGO_PKG_VERSION"), " (+https://github.com/yuvve/yeda)");
-const MAX_BYTES: u64 = 200 << 20;
 
 /// The open-access PDF at `url`. A login, challenge or landing page is an error: paywalled copies
 /// come through the bundled browser, whose cookies only work from that browser.
