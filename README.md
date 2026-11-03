@@ -122,6 +122,8 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
+An Anthropic profile takes an API key or an OAuth token; yeda tells them apart by themselves. An OAuth token uses your Claude subscription instead of API credits: run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints. Anthropic may restrict subscription use outside Claude Code.
+
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 
 ### Literature tables
@@ -148,7 +150,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key is stored for its server's address, so a key is only sent to the server it was entered for.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for.
 
 ## Keys and commands
 
