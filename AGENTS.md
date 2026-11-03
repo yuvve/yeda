@@ -15,6 +15,7 @@
 
 ## Testing
 - `cargo test --workspace`; `npx tsc --noEmit` in yeda-android.
+- The Audit workflow runs `cargo audit` and `npm audit` on lockfile changes and weekly; Dependabot opens one grouped update PR a week per ecosystem, and one for the zotero/reader submodule.
 - CI runs `cargo clippy --workspace --all-targets -- -D warnings` on the latest stable Rust, which may be newer than the local default; run it with that version (`rustup toolchain install <version>`, then `cargo +<version> clippy …`).
 - APK:
   ```sh

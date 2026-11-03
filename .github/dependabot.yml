@@ -1,0 +1,30 @@
+# Weekly dependency updates, one grouped PR per ecosystem. Security advisories come as soon as
+# GitHub publishes them, outside the schedule.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # zotero/reader, with pdf.js inside it: the PDF parser that every untrusted PDF reaches.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
