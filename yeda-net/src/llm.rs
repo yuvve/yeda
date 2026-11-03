@@ -45,6 +45,8 @@ pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply
 }
 
 fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
+    // The key goes in a header, so only to https servers (or a local one).
+    yeda_core::require_https(url)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15 * 60)))
         .http_status_as_error(false)
