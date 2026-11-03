@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use serde_json::{Value, json};
+use std::sync::OnceLock;
 use std::time::Duration;
 use yeda_core::llm::{Profile, Provider};
 
@@ -67,7 +68,7 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
             "format": {"type": "json_schema", "schema": prompt.schema},
         },
     });
-    let headers = authorize(p, key, &mut body);
+    let headers = authorize(p, key, &mut body)?;
     let question = json!({"type": "text", "text": prompt.text});
     let mut note = None;
     body["messages"] = match &prompt.paper {
@@ -110,14 +111,30 @@ fn is_oauth(key: &str) -> bool {
 }
 
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+static CLAUDE_CODE_VERSION: OnceLock<String> = OnceLock::new();
+
+/// The latest Claude Code release: Anthropic rejects OAuth requests from versions far behind it.
+fn claude_code_version() -> Result<String> {
+    if let Some(v) = CLAUDE_CODE_VERSION.get() {
+        return Ok(v.clone());
+    }
+    let url = "https://registry.npmjs.org/@anthropic-ai/claude-code/latest";
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(30))).build().into();
+    let text = agent.get(url).call().with_context(|| url.to_string())?.body_mut().read_to_string()?;
+    let v: Value = serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))?;
+    let v = v["version"].as_str().with_context(|| format!("{url}: no version"))?;
+    Ok(CLAUDE_CODE_VERSION.get_or_init(|| v.into()).clone())
+}
 
 /// The headers for an Anthropic request, adapting `body` (which already has its `system`) to the key.
-fn authorize(p: &Profile, key: &str, body: &mut Value) -> Vec<(&'static str, String)> {
+fn authorize(p: &Profile, key: &str, body: &mut Value) -> Result<Vec<(&'static str, String)>> {
     let mut headers = vec![("anthropic-version", "2023-06-01".to_string())];
     let mut betas = Vec::new();
     if is_oauth(key) {
         headers.push(("authorization", format!("Bearer {key}")));
-        betas.push("oauth-2025-04-20");
+        headers.push(("user-agent", format!("claude-code/{} (external, cli)", claude_code_version()?)));
+        headers.push(("x-app", "cli".into()));
+        betas.extend(["claude-code-20250219", "oauth-2025-04-20"]);
         // The API accepts an OAuth token only when the system prompt starts with Claude Code's identity.
         let system = body["system"].take();
         body["system"] = json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "text", "text": system}]);
@@ -134,7 +151,7 @@ fn authorize(p: &Profile, key: &str, body: &mut Value) -> Vec<(&'static str, Str
     if !betas.is_empty() {
         headers.push(("anthropic-beta", betas.join(",")));
     }
-    headers
+    Ok(headers)
 }
 
 fn refusal_category(v: &Value) -> &str {
@@ -216,7 +233,7 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
             "messages": messages,
         });
-        let headers = authorize(p, key, &mut body);
+        let headers = authorize(p, key, &mut body)?;
         let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
         match v["stop_reason"].as_str() {
             Some("pause_turn") => messages.push(json!({"role": "assistant", "content": v["content"]})),
@@ -253,24 +270,27 @@ mod tests {
 
     #[test]
     fn oauth_token_is_sent_as_claude_code_without_default_fallbacks() {
+        let _ = CLAUDE_CODE_VERSION.set("9.9.9".into());
         let mut body = json!({"system": "s"});
-        let h = authorize(&profile(None), "sk-ant-oat01-x", &mut body);
+        let h = authorize(&profile(None), "sk-ant-oat01-x", &mut body).unwrap();
         assert_eq!(header(&h, "authorization"), Some("Bearer sk-ant-oat01-x"));
         assert_eq!(header(&h, "x-api-key"), None);
-        assert_eq!(header(&h, "anthropic-beta"), Some("oauth-2025-04-20"));
+        assert_eq!(header(&h, "anthropic-beta"), Some("claude-code-20250219,oauth-2025-04-20"));
+        assert_eq!(header(&h, "x-app"), Some("cli"));
+        assert_eq!(header(&h, "user-agent"), Some("claude-code/9.9.9 (external, cli)"));
         assert_eq!(body["system"], json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "text", "text": "s"}]));
         assert!(body.get("fallbacks").is_none());
 
         let mut body = json!({"system": "s"});
-        let h = authorize(&profile(Some(true)), "sk-ant-oat01-x", &mut body);
-        assert_eq!(header(&h, "anthropic-beta"), Some("oauth-2025-04-20,server-side-fallback-2026-07-01"));
+        let h = authorize(&profile(Some(true)), "sk-ant-oat01-x", &mut body).unwrap();
+        assert_eq!(header(&h, "anthropic-beta"), Some("claude-code-20250219,oauth-2025-04-20,server-side-fallback-2026-07-01"));
         assert_eq!(body["fallbacks"], "default");
     }
 
     #[test]
     fn api_key_keeps_plain_system_and_default_fallbacks() {
         let mut body = json!({"system": "s"});
-        let h = authorize(&profile(None), "sk-ant-api03-x", &mut body);
+        let h = authorize(&profile(None), "sk-ant-api03-x", &mut body).unwrap();
         assert_eq!(header(&h, "x-api-key"), Some("sk-ant-api03-x"));
         assert_eq!(header(&h, "authorization"), None);
         assert_eq!(header(&h, "anthropic-beta"), Some("server-side-fallback-2026-07-01"));
