@@ -150,7 +150,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. An LLM key is stored for its server's address, so a key is only sent to the server it was entered for.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for.
 
 ## Keys and commands
 

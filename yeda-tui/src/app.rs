@@ -2345,13 +2345,13 @@ impl App {
 
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
     /// `command` is the whole command line, run again once a missing key is entered.
-    /// The API key or OAuth token stored for the profile's server, else a prompt naming the server, after which
+    /// The API key or OAuth token stored for the profile `name`, else a prompt naming it, after which
     /// `command` runs again. `None` while prompting.
-    fn llm_key(&mut self, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
-        let account = yeda_secrets::llm_account(profile.url());
+    fn llm_key(&mut self, name: &str, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
+        let account = yeda_secrets::llm_account(name, profile.url());
         if profile.needs_key() {
             let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token (from `claude setup-token`)" } else { "API key" };
-            self.secret(&account, &format!("{what} sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
+            self.secret(&account, &format!("{what} for {name}, sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
         } else {
             Some(yeda_secrets::get(&account).ok().flatten())
         }
@@ -2368,7 +2368,7 @@ impl App {
             anyhow::bail!("usage: :discover <what to look for>, or select references first");
         }
         let (name, profile) = self.lib.llm_profile(llm)?;
-        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        let Some(key) = self.llm_key(&name, &profile, command) else { return Ok(()) };
         let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
         let openalex = self.secrets.get(OPENALEX_ACCOUNT).cloned();
         self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
@@ -2597,7 +2597,7 @@ impl App {
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
-        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        let Some(key) = self.llm_key(&profile_name, &profile, command) else { return Ok(()) };
         if !self.confirm_many(&format!("summarize into {table_name}"), jobs.len(), command) {
             return Ok(());
         }
@@ -2745,7 +2745,7 @@ impl App {
         }
         for (name, profile) in self.lib.llm.iter().filter(|(_, p)| p.needs_key()) {
             let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token" } else { "API key" };
-            items.push((yeda_secrets::llm_account(profile.url()), format!("LLM {name} {what}: {}", profile.url())));
+            items.push((yeda_secrets::llm_account(name, profile.url()), format!("LLM {name}: {what} for {}", profile.url())));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
         let mut seen = HashSet::new();

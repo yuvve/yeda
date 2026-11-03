@@ -55,7 +55,7 @@ pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 /// What the form saves, once its connection works.
 #[derive(Clone, Debug)]
 pub enum Setup {
-    Llm(Profile),
+    Llm(String, Profile),
     Webdav(Dav),
     Search(SavedSearch),
     Openalex,
@@ -182,7 +182,7 @@ impl SetupForm {
                 ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter"),
                 ("Model", "e.g. claude-opus-5-5"),
                 ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
-                ("API key / OAuth token", "anthropic: an API key or an OAuth token from `claude setup-token`, told apart automatically; kept in the secret store; empty for a local server"),
+                ("Key / token", "API key, or for anthropic an OAuth token (claude setup-token)"),
             ],
             Kind::Webdav => &[
                 ("Name", "used as pdf.location and in :attach"),
@@ -264,7 +264,7 @@ impl SetupForm {
                 if p.needs_key() && self.secret().is_none() {
                     bail!("{}", if p.provider == Provider::Anthropic { "Anthropic needs an API key or an OAuth token (from `claude setup-token`)" } else { "OpenAI needs an API key" });
                 }
-                Setup::Llm(p)
+                Setup::Llm(v[0].to_string(), p)
             }
             Kind::Webdav => {
                 if !v[1].starts_with("https://") && !v[1].starts_with("http://") {
@@ -376,7 +376,7 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
 /// Tests the connection; blocks.
 pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     match setup {
-        Setup::Llm(p) => yeda_net::llm::ping(p, secret),
+        Setup::Llm(_, p) => yeda_net::llm::ping(p, secret),
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
@@ -386,7 +386,7 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
 /// The secret-store account the secret is kept under.
 pub fn account(setup: &Setup) -> String {
     match setup {
-        Setup::Llm(p) => yeda_secrets::llm_account(p.url()),
+        Setup::Llm(name, p) => yeda_secrets::llm_account(name, p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(g.values[3], "https://generativelanguage.googleapis.com/v1beta/openai");
         let (t, s) = g.section().unwrap();
         assert_eq!(t["provider"].as_str(), Some("openai"));
-        assert_eq!(account(&s), "llm:https://generativelanguage.googleapis.com/v1beta/openai");
+        assert_eq!(account(&s), "llm:new:https://generativelanguage.googleapis.com/v1beta/openai");
         g.cycle_provider(true);
         g.cycle_provider(true);
         assert!(!g.section().unwrap().0.contains_key("base_url"));
