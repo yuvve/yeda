@@ -3372,8 +3372,8 @@ impl App {
     }
 
     fn delete_selected(&mut self) {
-        let effects = self.targets().iter().flat_map(|&i| self.lib.delete(&self.lib.refs[i].key)).collect();
-        self.apply(Ok(effects));
+        let effects = self.targets().iter().map(|&i| self.lib.delete(&self.lib.refs[i].key)).collect::<anyhow::Result<Vec<_>>>();
+        self.apply(effects.map(|e| e.concat()));
         self.marked.clear();
         self.reload();
     }
