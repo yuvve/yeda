@@ -26,11 +26,17 @@ pub struct Reply {
 
 const ANTHROPIC_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
 
-/// `key` is the API key stored for the profile's `url()`, if any.
+/// Keys hold no whitespace; a long token copied from a terminal can wrap onto several lines.
+fn clean(key: Option<&str>) -> Option<String> {
+    key.map(|k| k.split_whitespace().collect::<String>()).filter(|k| !k.is_empty())
+}
+
+/// `key` is the API key or OAuth token stored for the profile's `url()`, if any.
 pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
-    let key = key.map(str::trim).filter(|k| !k.is_empty());
+    let key = clean(key);
+    let key = key.as_deref();
     if key.is_none() && p.needs_key() {
-        bail!("no API key for {}", p.url());
+        bail!("no API key or OAuth token for {}", p.url());
     }
     match p.provider {
         Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
@@ -204,9 +210,10 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
 /// A plain answer to `text`, searching the web where the provider can: Anthropic's web search
 /// tool, or an OpenAI-compatible server that searches by itself.
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
-    let key = key.map(str::trim).filter(|k| !k.is_empty());
+    let key = clean(key);
+    let key = key.as_deref();
     if key.is_none() && p.needs_key() {
-        bail!("no API key for {}", p.url());
+        bail!("no API key or OAuth token for {}", p.url());
     }
     match p.provider {
         Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
@@ -290,6 +297,7 @@ mod tests {
     #[test]
     fn api_key_keeps_plain_system_and_default_fallbacks() {
         let mut body = json!({"system": "s"});
+        assert_eq!(clean(Some(" sk-ant-oat01-ab\ncd \n")).as_deref(), Some("sk-ant-oat01-abcd"));
         let h = authorize(&profile(None), "sk-ant-api03-x", &mut body).unwrap();
         assert_eq!(header(&h, "x-api-key"), Some("sk-ant-api03-x"));
         assert_eq!(header(&h, "authorization"), None);
