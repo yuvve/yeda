@@ -10,7 +10,7 @@
 	},
 	"app": {
 		"windows": [{ "title": "yeda", "width": 600, "height": 900 }],
-		"security": { "csp": null }
+		"security": { "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost data: blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'" }
 	},
 	"bundle": {
 		"active": true,
