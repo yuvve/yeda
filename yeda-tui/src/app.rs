@@ -2350,7 +2350,8 @@ impl App {
     fn llm_key(&mut self, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
         let account = yeda_secrets::llm_account(profile.url());
         if profile.needs_key() {
-            self.secret(&account, &format!("API key sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
+            let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or `claude setup-token` token" } else { "API key" };
+            self.secret(&account, &format!("{what} sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
         } else {
             Some(yeda_secrets::get(&account).ok().flatten())
         }

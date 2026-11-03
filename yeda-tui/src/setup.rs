@@ -182,7 +182,7 @@ impl SetupForm {
                 ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter"),
                 ("Model", "e.g. claude-opus-5-5"),
                 ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
-                ("API key", "kept in the secret store; empty for a local server"),
+                ("API key", "or, for anthropic, a `claude setup-token` token; kept in the secret store; empty for a local server"),
             ],
             Kind::Webdav => &[
                 ("Name", "used as pdf.location and in :attach"),
@@ -262,7 +262,7 @@ impl SetupForm {
                 }
                 let p = Profile::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the provider is one of {}", PRESETS.map(|p| p.0).join(", ")))?;
                 if p.needs_key() && self.secret().is_none() {
-                    bail!("{} needs an API key", if p.provider == Provider::Anthropic { "Anthropic" } else { "OpenAI" });
+                    bail!("{}", if p.provider == Provider::Anthropic { "Anthropic needs an API key or a `claude setup-token` token" } else { "OpenAI needs an API key" });
                 }
                 Setup::Llm(p)
             }

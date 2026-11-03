@@ -27,7 +27,7 @@ const ANTHROPIC_REQUEST_LIMIT: usize = 32 * 1024 * 1024;
 
 /// `key` is the API key stored for the profile's `url()`, if any.
 pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
-    let key = key.filter(|k| !k.is_empty());
+    let key = key.map(str::trim).filter(|k| !k.is_empty());
     if key.is_none() && p.needs_key() {
         bail!("no API key for {}", p.url());
     }
@@ -58,33 +58,36 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
 
 fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
     let base = p.url();
-    let mut content = Vec::new();
-    let mut note = None;
-    match &prompt.paper {
-        // The limit is on the whole request, where the PDF is base64.
-        Some(paper) if paper.pdf.len().div_ceil(3) * 4 + prompt.text.len() + prompt.system.len() <= ANTHROPIC_REQUEST_LIMIT => {
-            let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
-            content.push(json!({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}));
-        }
-        Some(paper) => {
-            note = Some("PDF too large for the request limit (32 MB); sent extracted text instead".to_string());
-            content.push(json!({"type": "text", "text": format!("Paper text:\n{}", (paper.text)()?)}));
-        }
-        None => note = Some("no PDF; summarized from metadata and notes only".into()),
-    }
-    content.push(json!({"type": "text", "text": prompt.text}));
     let mut body = json!({
         "model": p.model,
         "max_tokens": p.max_tokens.unwrap_or(32000),
-        "system": system(key, &prompt.system),
+        "system": prompt.system,
         "output_config": {
             "effort": p.effort.as_deref().unwrap_or("high"),
             "format": {"type": "json_schema", "schema": prompt.schema},
         },
-        "messages": [{"role": "user", "content": content}],
     });
-    let mut headers = anthropic_headers(key);
-    add_fallbacks(p, &mut body, &mut headers);
+    let headers = authorize(p, key, &mut body);
+    let question = json!({"type": "text", "text": prompt.text});
+    let mut note = None;
+    body["messages"] = match &prompt.paper {
+        Some(paper) => {
+            let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
+            let doc = json!({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}});
+            body["messages"] = json!([{"role": "user", "content": [doc, question]}]);
+            if serde_json::to_vec(&body)?.len() <= ANTHROPIC_REQUEST_LIMIT {
+                body["messages"].take()
+            } else {
+                note = Some("PDF too large for the request limit (32 MB); sent extracted text instead".to_string());
+                let text = json!({"type": "text", "text": format!("Paper text:\n{}", (paper.text)()?)});
+                json!([{"role": "user", "content": [text, question]}])
+            }
+        }
+        None => {
+            note = Some("no PDF; summarized from metadata and notes only".into());
+            json!([{"role": "user", "content": [question]}])
+        }
+    };
     let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
     match v["stop_reason"].as_str() {
         Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
@@ -106,42 +109,32 @@ fn is_oauth(key: &str) -> bool {
     key.starts_with("sk-ant-oat")
 }
 
-fn anthropic_headers(key: &str) -> Vec<(&'static str, String)> {
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// The headers for an Anthropic request, adapting `body` (which already has its `system`) to the key.
+fn authorize(p: &Profile, key: &str, body: &mut Value) -> Vec<(&'static str, String)> {
     let mut headers = vec![("anthropic-version", "2023-06-01".to_string())];
+    let mut betas = Vec::new();
     if is_oauth(key) {
         headers.push(("authorization", format!("Bearer {key}")));
-        headers.push(("anthropic-beta", "oauth-2025-04-20".into()));
+        betas.push("oauth-2025-04-20");
+        // The API accepts an OAuth token only when the system prompt starts with Claude Code's identity.
+        let system = body["system"].take();
+        body["system"] = json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "text", "text": system}]);
     } else {
         headers.push(("x-api-key", key.to_string()));
     }
-    headers
-}
-
-/// The API accepts an OAuth token only when the system prompt starts with Claude Code's identity.
-fn system(key: &str, system: &str) -> Value {
-    if is_oauth(key) {
-        json!([
-            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
-            {"type": "text", "text": system},
-        ])
-    } else {
-        json!(system)
-    }
-}
-
-fn add_beta(headers: &mut Vec<(&str, String)>, beta: &str) {
-    match headers.iter_mut().find(|(k, _)| *k == "anthropic-beta") {
-        Some((_, v)) => *v = format!("{v},{beta}"),
-        None => headers.push(("anthropic-beta", beta.into())),
-    }
-}
-
-fn add_fallbacks(p: &Profile, body: &mut Value, headers: &mut Vec<(&str, String)>) {
     let fallback_models = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
-    if p.fallbacks.unwrap_or(p.base_url.is_none() && fallback_models.contains(&p.model.as_str())) {
+    // Unverified with subscription tokens, so they only get fallbacks when the profile asks.
+    let default = p.base_url.is_none() && !is_oauth(key) && fallback_models.contains(&p.model.as_str());
+    if p.fallbacks.unwrap_or(default) {
         body["fallbacks"] = json!("default");
-        add_beta(headers, "server-side-fallback-2026-07-01");
+        betas.push("server-side-fallback-2026-07-01");
     }
+    if !betas.is_empty() {
+        headers.push(("anthropic-beta", betas.join(",")));
+    }
+    headers
 }
 
 fn refusal_category(v: &Value) -> &str {
@@ -194,7 +187,7 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
 /// A plain answer to `text`, searching the web where the provider can: Anthropic's web search
 /// tool, or an OpenAI-compatible server that searches by itself.
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
-    let key = key.filter(|k| !k.is_empty());
+    let key = key.map(str::trim).filter(|k| !k.is_empty());
     if key.is_none() && p.needs_key() {
         bail!("no API key for {}", p.url());
     }
@@ -212,20 +205,18 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
 
 fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
     let base = p.url();
-    let headers = anthropic_headers(key);
     let mut messages = vec![json!({"role": "user", "content": text})];
     // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.
     for _ in 0..4 {
         let mut body = json!({
             "model": p.model,
             "max_tokens": p.max_tokens.unwrap_or(16000),
-            "system": self::system(key, system),
+            "system": system,
             "output_config": {"effort": p.effort.as_deref().unwrap_or("medium")},
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
             "messages": messages,
         });
-        let mut headers = headers.clone();
-        add_fallbacks(p, &mut body, &mut headers);
+        let headers = authorize(p, key, &mut body);
         let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
         match v["stop_reason"].as_str() {
             Some("pause_turn") => messages.push(json!({"role": "assistant", "content": v["content"]})),
@@ -243,15 +234,46 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
 mod tests {
     use super::*;
 
+    fn profile(fallbacks: Option<bool>) -> Profile {
+        Profile {
+            provider: Provider::Anthropic,
+            model: "claude-opus-5-5".into(),
+            base_url: None,
+            max_tokens: None,
+            effort: None,
+            fallbacks,
+            max_input_chars: None,
+            json_schema: None,
+        }
+    }
+
+    fn header<'a>(h: &'a [(&str, String)], name: &str) -> Option<&'a str> {
+        h.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+    }
+
     #[test]
-    fn oauth_token_uses_bearer_and_claude_code_system() {
-        let mut h = anthropic_headers("sk-ant-oat01-x");
-        add_beta(&mut h, "b2");
-        assert!(h.contains(&("authorization", "Bearer sk-ant-oat01-x".into())));
-        assert!(h.contains(&("anthropic-beta", "oauth-2025-04-20,b2".into())));
-        assert!(!h.iter().any(|(k, _)| *k == "x-api-key"));
-        assert_eq!(system("sk-ant-oat01-x", "s")[1]["text"], "s");
-        assert!(anthropic_headers("sk-ant-api03-x").contains(&("x-api-key", "sk-ant-api03-x".into())));
-        assert_eq!(system("sk-ant-api03-x", "s"), json!("s"));
+    fn oauth_token_is_sent_as_claude_code_without_default_fallbacks() {
+        let mut body = json!({"system": "s"});
+        let h = authorize(&profile(None), "sk-ant-oat01-x", &mut body);
+        assert_eq!(header(&h, "authorization"), Some("Bearer sk-ant-oat01-x"));
+        assert_eq!(header(&h, "x-api-key"), None);
+        assert_eq!(header(&h, "anthropic-beta"), Some("oauth-2025-04-20"));
+        assert_eq!(body["system"], json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "text", "text": "s"}]));
+        assert!(body.get("fallbacks").is_none());
+
+        let mut body = json!({"system": "s"});
+        let h = authorize(&profile(Some(true)), "sk-ant-oat01-x", &mut body);
+        assert_eq!(header(&h, "anthropic-beta"), Some("oauth-2025-04-20,server-side-fallback-2026-07-01"));
+        assert_eq!(body["fallbacks"], "default");
+    }
+
+    #[test]
+    fn api_key_keeps_plain_system_and_default_fallbacks() {
+        let mut body = json!({"system": "s"});
+        let h = authorize(&profile(None), "sk-ant-api03-x", &mut body);
+        assert_eq!(header(&h, "x-api-key"), Some("sk-ant-api03-x"));
+        assert_eq!(header(&h, "authorization"), None);
+        assert_eq!(header(&h, "anthropic-beta"), Some("server-side-fallback-2026-07-01"));
+        assert_eq!(body["system"], "s");
     }
 }
