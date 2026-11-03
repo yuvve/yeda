@@ -122,7 +122,7 @@ provider = "anthropic"           # or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
-An Anthropic profile takes an API key or the token `claude setup-token` prints, which uses your Claude subscription instead of API credits.
+An Anthropic profile takes an API key or the token `claude setup-token` prints, which uses your Claude subscription instead of API credits. Anthropic may restrict subscription use outside Claude Code.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 
