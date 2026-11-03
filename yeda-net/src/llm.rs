@@ -76,14 +76,14 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
     let mut body = json!({
         "model": p.model,
         "max_tokens": p.max_tokens.unwrap_or(32000),
-        "system": prompt.system,
+        "system": system(key, &prompt.system),
         "output_config": {
             "effort": p.effort.as_deref().unwrap_or("high"),
             "format": {"type": "json_schema", "schema": prompt.schema},
         },
         "messages": [{"role": "user", "content": content}],
     });
-    let mut headers = vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
+    let mut headers = anthropic_headers(key);
     add_fallbacks(p, &mut body, &mut headers);
     let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
     match v["stop_reason"].as_str() {
@@ -101,11 +101,46 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
     Ok(Reply { text, note })
 }
 
+/// A token from `claude setup-token`, which uses the Claude subscription instead of API credits.
+fn is_oauth(key: &str) -> bool {
+    key.starts_with("sk-ant-oat")
+}
+
+fn anthropic_headers(key: &str) -> Vec<(&'static str, String)> {
+    let mut headers = vec![("anthropic-version", "2023-06-01".to_string())];
+    if is_oauth(key) {
+        headers.push(("authorization", format!("Bearer {key}")));
+        headers.push(("anthropic-beta", "oauth-2025-04-20".into()));
+    } else {
+        headers.push(("x-api-key", key.to_string()));
+    }
+    headers
+}
+
+/// The API accepts an OAuth token only when the system prompt starts with Claude Code's identity.
+fn system(key: &str, system: &str) -> Value {
+    if is_oauth(key) {
+        json!([
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": system},
+        ])
+    } else {
+        json!(system)
+    }
+}
+
+fn add_beta(headers: &mut Vec<(&str, String)>, beta: &str) {
+    match headers.iter_mut().find(|(k, _)| *k == "anthropic-beta") {
+        Some((_, v)) => *v = format!("{v},{beta}"),
+        None => headers.push(("anthropic-beta", beta.into())),
+    }
+}
+
 fn add_fallbacks(p: &Profile, body: &mut Value, headers: &mut Vec<(&str, String)>) {
     let fallback_models = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
     if p.fallbacks.unwrap_or(p.base_url.is_none() && fallback_models.contains(&p.model.as_str())) {
         body["fallbacks"] = json!("default");
-        headers.push(("anthropic-beta", "server-side-fallback-2026-07-01".into()));
+        add_beta(headers, "server-side-fallback-2026-07-01");
     }
 }
 
@@ -177,14 +212,14 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
 
 fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
     let base = p.url();
-    let headers = vec![("x-api-key", key.to_string()), ("anthropic-version", "2023-06-01".to_string())];
+    let headers = anthropic_headers(key);
     let mut messages = vec![json!({"role": "user", "content": text})];
     // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.
     for _ in 0..4 {
         let mut body = json!({
             "model": p.model,
             "max_tokens": p.max_tokens.unwrap_or(16000),
-            "system": system,
+            "system": self::system(key, system),
             "output_config": {"effort": p.effort.as_deref().unwrap_or("medium")},
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
             "messages": messages,
@@ -202,4 +237,21 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
         }
     }
     bail!("the search did not finish")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_token_uses_bearer_and_claude_code_system() {
+        let mut h = anthropic_headers("sk-ant-oat01-x");
+        add_beta(&mut h, "b2");
+        assert!(h.contains(&("authorization", "Bearer sk-ant-oat01-x".into())));
+        assert!(h.contains(&("anthropic-beta", "oauth-2025-04-20,b2".into())));
+        assert!(!h.iter().any(|(k, _)| *k == "x-api-key"));
+        assert_eq!(system("sk-ant-oat01-x", "s")[1]["text"], "s");
+        assert!(anthropic_headers("sk-ant-api03-x").contains(&("x-api-key", "sk-ant-api03-x".into())));
+        assert_eq!(system("sk-ant-api03-x", "s"), json!("s"));
+    }
 }
