@@ -28,11 +28,11 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// The Basic auth header, which carries the password in the clear: never over plain http.
-fn authorization(dav: &Dav, password: &str) -> Result<String> {
-    yeda_core::require_https(&dav.url)?;
+/// The Basic auth header. Plain http is allowed, for servers on a home network or VPN: the
+/// password then goes in the clear.
+fn authorization(dav: &Dav, password: &str) -> String {
     let pair = format!("{}:{password}", dav.user);
-    Ok(format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair)))
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair))
 }
 
 fn check(url: &str, status: ureq::http::StatusCode) -> Result<()> {
@@ -54,7 +54,7 @@ fn version(resp: &ureq::http::Response<ureq::Body>) -> Option<String> {
 /// The file at `path` and its version.
 pub fn download(dav: &Dav, password: &str, path: &str) -> Result<(Vec<u8>, Option<String>)> {
     let url = dav.file_url(path);
-    let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)?).call().with_context(|| url.clone())?;
+    let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
     check(&url, resp.status())?;
     let version = version(&resp);
     let bytes = resp.body_mut().with_config().limit(u64::MAX).read_to_vec().with_context(|| url)?;
@@ -64,7 +64,7 @@ pub fn download(dav: &Dav, password: &str, path: &str) -> Result<(Vec<u8>, Optio
 /// The version of the file at `path`, without downloading it.
 pub fn current_version(dav: &Dav, password: &str, path: &str) -> Result<Option<String>> {
     let url = dav.file_url(path);
-    let resp = agent().head(&url).header("Authorization", authorization(dav, password)?).call().with_context(|| url.clone())?;
+    let resp = agent().head(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
     check(&url, resp.status())?;
     Ok(version(&resp))
 }
@@ -73,7 +73,7 @@ pub fn current_version(dav: &Dav, password: &str, path: &str) -> Result<Option<S
 pub fn upload(dav: &Dav, password: &str, path: &str, bytes: &[u8]) -> Result<()> {
     if let Some((dir, _)) = path.rsplit_once('/') {
         let url = dav.file_url(dir) + "/";
-        let mkcol = ureq::http::Request::builder().method("MKCOL").uri(&url).header("Authorization", authorization(dav, password)?).body(())?;
+        let mkcol = ureq::http::Request::builder().method("MKCOL").uri(&url).header("Authorization", authorization(dav, password)).body(())?;
         let resp = agent().run(mkcol).with_context(|| url.clone())?;
         // 405: the folder exists already.
         if resp.status().as_u16() != 405 {
@@ -81,7 +81,7 @@ pub fn upload(dav: &Dav, password: &str, path: &str, bytes: &[u8]) -> Result<()>
         }
     }
     let url = dav.file_url(path);
-    let resp = agent().put(&url).header("Authorization", authorization(dav, password)?).send(bytes).with_context(|| url.clone())?;
+    let resp = agent().put(&url).header("Authorization", authorization(dav, password)).send(bytes).with_context(|| url.clone())?;
     check(&url, resp.status())
 }
 
@@ -89,12 +89,12 @@ pub fn upload(dav: &Dav, password: &str, path: &str, bytes: &[u8]) -> Result<()>
 /// doesn't exist yet is created.
 pub fn login(dav: &Dav, password: &str) -> Result<()> {
     let url = dav.file_url("");
-    let req = ureq::http::Request::builder().method("PROPFIND").uri(&url).header("Authorization", authorization(dav, password)?).header("Depth", "0").body(())?;
+    let req = ureq::http::Request::builder().method("PROPFIND").uri(&url).header("Authorization", authorization(dav, password)).header("Depth", "0").body(())?;
     let resp = agent().run(req).with_context(|| url.clone())?;
     if resp.status().as_u16() != 404 {
         return check(&url, resp.status());
     }
-    let mkcol = ureq::http::Request::builder().method("MKCOL").uri(&url).header("Authorization", authorization(dav, password)?).body(())?;
+    let mkcol = ureq::http::Request::builder().method("MKCOL").uri(&url).header("Authorization", authorization(dav, password)).body(())?;
     let resp = agent().run(mkcol).with_context(|| url.clone())?;
     // 409: the folder above it is missing too.
     if resp.status().as_u16() == 409 {

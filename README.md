@@ -150,7 +150,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for. Passwords and keys only go to `https://` servers; plain `http://` is accepted for servers on this machine only (a local LLM, say).
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for. API keys and tokens only go to `https://` servers; plain `http://` is accepted for servers on this machine only (a local LLM, say). A WebDAV server may be plain `http://` too, for a home network or VPN; its password then goes in the clear.
 
 ## Keys and commands
 

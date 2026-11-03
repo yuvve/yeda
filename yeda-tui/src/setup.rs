@@ -268,7 +268,9 @@ impl SetupForm {
                 Setup::Llm(v[0].to_string(), p)
             }
             Kind::Webdav => {
-                yeda_core::require_https(v[1])?;
+                if !v[1].starts_with("https://") && !v[1].starts_with("http://") {
+                    bail!("the URL starts with https:// or http://");
+                }
                 if v[2].is_empty() || self.secret().is_none() {
                     bail!("give the user name and password");
                 }
