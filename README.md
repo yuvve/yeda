@@ -118,7 +118,7 @@ Both features below use an LLM profile from the library's `yeda.toml`; `:setup l
 default_llm = "claude"
 
 [llm.claude]
-provider = "anthropic"           # or "openai" for any OpenAI-compatible server
+provider = "anthropic"           # or "mistral", or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
@@ -146,7 +146,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). Anthropic and Mistral profiles search the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
 
 ## Secrets
 
