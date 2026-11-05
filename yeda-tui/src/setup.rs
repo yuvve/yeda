@@ -71,9 +71,8 @@ impl SetupForm {
             Kind::Llm => match lib.llm.get(name) {
                 Some(p) => {
                     let builtin = PRESETS.iter().find(|q| q.1 == p.provider).unwrap_or(&PRESETS[1]);
-                    let url = p.base_url.clone().unwrap_or(builtin.2.into());
-                    let provider = PRESETS.iter().find(|q| q.1 == p.provider && q.2 == url.trim_end_matches('/')).unwrap_or(builtin).0;
-                    vec![name.into(), provider.into(), p.model.clone(), url, String::new()]
+                    let provider = PRESETS.iter().find(|q| q.2 == p.url()).unwrap_or(builtin).0;
+                    vec![name.into(), provider.into(), p.model.clone(), p.url().into(), String::new()]
                 }
                 None => vec![name.into(), "anthropic".into(), String::new(), PRESETS[0].2.into(), String::new()],
             },
@@ -418,6 +417,8 @@ mod tests {
         let lib = Library::parse(Some("[llm.local]\nprovider = \"openai\"\nmodel = \"qwen\"\nbase_url = \"http://localhost:8080/v1\"\n"), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "local", &lib);
         assert_eq!(f.values, ["local", "openai", "qwen", "http://localhost:8080/v1", ""]);
+        let old = Library::parse(Some("[llm.or]\nprovider = \"openai\"\nmodel = \"m\"\nbase_url = \"https://openrouter.ai/api/v1/\"\n"), None, [], None).unwrap();
+        assert_eq!(SetupForm::new(Kind::Llm, "or", &old).values[1], "openrouter");
         let mut g = SetupForm::new(Kind::Llm, "new", &lib);
         assert_eq!(g.values[1..4], ["anthropic", "", "https://api.anthropic.com"]);
         g.cycle_provider(false);

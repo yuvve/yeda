@@ -2743,8 +2743,12 @@ impl App {
         for (name, dav) in &self.lib.remotes {
             items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
         }
-        for (name, profile) in self.lib.llm.iter().filter(|(_, p)| p.needs_key()) {
-            let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token" } else { "API key" };
+        for (name, profile) in &self.lib.llm {
+            let what = match profile.provider {
+                yeda_core::llm::Provider::Anthropic => "API key or OAuth token",
+                _ if profile.needs_key() => "API key",
+                _ => "API key, optional",
+            };
             items.push((yeda_secrets::llm_account(name, profile.url()), format!("LLM {name}: {what} for {}", profile.url())));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
