@@ -1,3 +1,4 @@
+use crate::MAX_BYTES;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use std::time::Duration;
@@ -55,7 +56,11 @@ pub fn download(dav: &Dav, password: &str, path: &str) -> Result<(Vec<u8>, Optio
     let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)).call().with_context(|| url.clone())?;
     check(&url, resp.status())?;
     let version = version(&resp);
-    let bytes = resp.body_mut().with_config().limit(u64::MAX).read_to_vec().with_context(|| url)?;
+    // A whole file in memory, so a server (or a wrong URL) that sends without end is cut off.
+    if let Some(len) = resp.headers().get("content-length").and_then(|v| v.to_str().ok()?.parse::<u64>().ok()).filter(|&len| len > MAX_BYTES) {
+        bail!("{url}: {} MB, more than the {} MB limit", len >> 20, MAX_BYTES >> 20);
+    }
+    let bytes = resp.body_mut().with_config().limit(MAX_BYTES).read_to_vec().with_context(|| format!("{url} (limit {} MB)", MAX_BYTES >> 20))?;
     Ok((bytes, version))
 }
 
