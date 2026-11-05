@@ -2640,6 +2640,22 @@ impl App {
         Ok(())
     }
 
+    /// The background jobs still running, by what they do.
+    pub fn busy(&self) -> Vec<&'static str> {
+        [
+            (self.discover_job.is_some(), "discover"),
+            (self.summarizer.is_some(), "summarize"),
+            (self.fetch_job.is_some(), "fetch"),
+            (self.setup_job.is_some(), "connection test"),
+            (self.graph_job.is_some(), "graph"),
+            (self.text_job.is_some(), "text extraction"),
+            (self.cache_job.is_some(), "cache"),
+        ]
+        .into_iter()
+        .filter_map(|(running, what)| running.then_some(what))
+        .collect()
+    }
+
     /// Applies finished summaries; called from the event loop.
     pub fn poll_worker(&mut self) {
         let Some(s) = &mut self.summarizer else { return };

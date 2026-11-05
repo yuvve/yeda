@@ -363,6 +363,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         _ => f.render_widget(Paragraph::new(status.clone()), bar),
     }
+    let busy = app.busy();
+    if !busy.is_empty() {
+        const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() / 200;
+        let spinner = format!(" {} {} ", FRAMES[tick as usize % FRAMES.len()], busy.join(", "));
+        let width = (Line::from(spinner.as_str()).width() as u16).min(bar.width);
+        f.render_widget(Paragraph::new(spinner).dim(), Rect { x: bar.right() - width, width, ..bar });
+    }
     let typed = match app.mode {
         Mode::Search => Some(&app.query),
         Mode::SideSearch => Some(&app.side_query),
