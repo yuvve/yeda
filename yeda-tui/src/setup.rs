@@ -42,7 +42,7 @@ pub const PRESETS: [(&str, Provider, &str); 5] = [
     ("openai", Provider::Openai, "https://api.openai.com/v1"),
     ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai"),
     ("mistral", Provider::Mistral, "https://api.mistral.ai/v1"),
-    ("openrouter", Provider::Openai, "https://openrouter.ai/api/v1"),
+    ("openrouter", Provider::Openrouter, "https://openrouter.ai/api/v1"),
 ];
 
 fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str)> {
@@ -247,6 +247,7 @@ impl SetupForm {
                 let api = match known {
                     Some((_, Provider::Anthropic, ..)) => "anthropic".to_string(),
                     Some((_, Provider::Mistral, ..)) => "mistral".to_string(),
+                    Some((_, Provider::Openrouter, ..)) => "openrouter".to_string(),
                     Some(_) => "openai".to_string(),
                     None => v[1].to_lowercase(),
                 };
@@ -266,6 +267,7 @@ impl SetupForm {
                     bail!("{}", match p.provider {
                         Provider::Anthropic => "Anthropic needs an API key or an OAuth token (from `claude setup-token`)",
                         Provider::Mistral => "Mistral needs an API key",
+                        Provider::Openrouter => "OpenRouter needs an API key",
                         Provider::Openai => "OpenAI needs an API key",
                     });
                 }
@@ -432,6 +434,11 @@ mod tests {
         assert!(!t.contains_key("base_url"));
         let saved = Library::parse(Some(&format!("[llm.new]\n{t}")), None, [], None).unwrap();
         assert_eq!(SetupForm::new(Kind::Llm, "new", &saved).values[1..4], ["mistral", "gemini-x", "https://api.mistral.ai/v1"]);
+        g.cycle_provider(false);
+        let (t, _) = g.section().unwrap();
+        assert_eq!(t["provider"].as_str(), Some("openrouter"));
+        assert!(!t.contains_key("base_url"));
+        g.cycle_provider(true);
         g.cycle_provider(true);
         g.cycle_provider(true);
         g.cycle_provider(true);

@@ -40,7 +40,7 @@ pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply
     }
     match p.provider {
         Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
-        Provider::Openai | Provider::Mistral => openai(p, prompt, key),
+        Provider::Openai | Provider::Mistral | Provider::Openrouter => openai(p, prompt, key),
     }
 }
 
@@ -173,6 +173,11 @@ fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
             let doc = json!({"type": "document_url", "document_url": format!("data:application/pdf;base64,{data}")});
             json!([doc, {"type": "text", "text": prompt.text}])
         }
+        Some(paper) if p.provider == Provider::Openrouter => {
+            let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
+            let file = json!({"type": "file", "file": {"filename": "paper.pdf", "file_data": format!("data:application/pdf;base64,{data}")}});
+            json!([file, {"type": "text", "text": prompt.text}])
+        }
         Some(paper) => {
             let mut paper = (paper.text)()?;
             if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
@@ -215,8 +220,8 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
     complete(&p, &prompt, key).map(|_| ())
 }
 
-/// A plain answer to `text`, searching the web where the provider can: Anthropic's and Mistral's
-/// web search tools, or an OpenAI-compatible server that searches by itself.
+/// A plain answer to `text`, searching the web where the provider can: Anthropic's, Mistral's and
+/// OpenRouter's web search tools, or an OpenAI-compatible server that searches by itself.
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
     let key = clean(key);
     let key = key.as_deref();
@@ -226,9 +231,12 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
     match p.provider {
         Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
         Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default()),
-        Provider::Openai => {
+        Provider::Openai | Provider::Openrouter => {
             let base = p.url();
-            let body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            if p.provider == Provider::Openrouter {
+                body["tools"] = json!([{"type": "openrouter:web_search"}]);
+            }
             let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
             let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
             Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())

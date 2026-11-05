@@ -4,9 +4,10 @@ use serde::Deserialize;
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Anthropic,
-    /// OpenAI-compatible chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, OpenRouter, …
+    /// OpenAI-compatible chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, …
     Openai,
     Mistral,
+    Openrouter,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +38,7 @@ impl Profile {
             Provider::Anthropic => "https://api.anthropic.com",
             Provider::Openai => "https://api.openai.com/v1",
             Provider::Mistral => "https://api.mistral.ai/v1",
+            Provider::Openrouter => "https://openrouter.ai/api/v1",
         };
         self.base_url.as_deref().unwrap_or(default).trim_end_matches('/')
     }
