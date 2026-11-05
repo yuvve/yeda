@@ -41,7 +41,7 @@ pub const PRESETS: [(&str, Provider, &str); 5] = [
     ("anthropic", Provider::Anthropic, "https://api.anthropic.com"),
     ("openai", Provider::Openai, "https://api.openai.com/v1"),
     ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai"),
-    ("mistral", Provider::Openai, "https://api.mistral.ai/v1"),
+    ("mistral", Provider::Mistral, "https://api.mistral.ai/v1"),
     ("openrouter", Provider::Openai, "https://openrouter.ai/api/v1"),
 ];
 
@@ -70,7 +70,7 @@ impl SetupForm {
         let values = match kind {
             Kind::Llm => match lib.llm.get(name) {
                 Some(p) => {
-                    let builtin = if p.provider == Provider::Anthropic { &PRESETS[0] } else { &PRESETS[1] };
+                    let builtin = PRESETS.iter().find(|q| q.1 == p.provider).unwrap_or(&PRESETS[1]);
                     let url = p.base_url.clone().unwrap_or(builtin.2.into());
                     let provider = PRESETS.iter().find(|q| q.1 == p.provider && q.2 == url.trim_end_matches('/')).unwrap_or(builtin).0;
                     vec![name.into(), provider.into(), p.model.clone(), url, String::new()]
@@ -246,6 +246,7 @@ impl SetupForm {
                 let known = preset(v[1]);
                 let api = match known {
                     Some((_, Provider::Anthropic, ..)) => "anthropic".to_string(),
+                    Some((_, Provider::Mistral, ..)) => "mistral".to_string(),
                     Some(_) => "openai".to_string(),
                     None => v[1].to_lowercase(),
                 };
@@ -262,7 +263,11 @@ impl SetupForm {
                 }
                 let p = Profile::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the provider is one of {}", PRESETS.map(|p| p.0).join(", ")))?;
                 if p.needs_key() && self.secret().is_none() {
-                    bail!("{}", if p.provider == Provider::Anthropic { "Anthropic needs an API key or an OAuth token (from `claude setup-token`)" } else { "OpenAI needs an API key" });
+                    bail!("{}", match p.provider {
+                        Provider::Anthropic => "Anthropic needs an API key or an OAuth token (from `claude setup-token`)",
+                        Provider::Mistral => "Mistral needs an API key",
+                        Provider::Openai => "OpenAI needs an API key",
+                    });
                 }
                 Setup::Llm(v[0].to_string(), p)
             }
@@ -421,6 +426,13 @@ mod tests {
         let (t, s) = g.section().unwrap();
         assert_eq!(t["provider"].as_str(), Some("openai"));
         assert_eq!(account(&s), "llm:new:https://generativelanguage.googleapis.com/v1beta/openai");
+        g.cycle_provider(false);
+        let (t, _) = g.section().unwrap();
+        assert_eq!(t["provider"].as_str(), Some("mistral"));
+        assert!(!t.contains_key("base_url"));
+        let saved = Library::parse(Some(&format!("[llm.new]\n{t}")), None, [], None).unwrap();
+        assert_eq!(SetupForm::new(Kind::Llm, "new", &saved).values[1..4], ["mistral", "gemini-x", "https://api.mistral.ai/v1"]);
+        g.cycle_provider(true);
         g.cycle_provider(true);
         g.cycle_provider(true);
         assert!(!g.section().unwrap().0.contains_key("base_url"));

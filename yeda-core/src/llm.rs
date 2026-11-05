@@ -6,6 +6,7 @@ pub enum Provider {
     Anthropic,
     /// OpenAI-compatible chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, OpenRouter, …
     Openai,
+    Mistral,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,9 +26,9 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// Anthropic always needs a key; an OpenAI-compatible server only when it is OpenAI's own.
+    /// An OpenAI-compatible server needs a key only when it is OpenAI's own.
     pub fn needs_key(&self) -> bool {
-        self.provider == Provider::Anthropic || self.base_url.is_none()
+        self.provider != Provider::Openai || self.base_url.is_none()
     }
 
     /// Where requests, and so the API key, go.
@@ -35,6 +36,7 @@ impl Profile {
         let default = match self.provider {
             Provider::Anthropic => "https://api.anthropic.com",
             Provider::Openai => "https://api.openai.com/v1",
+            Provider::Mistral => "https://api.mistral.ai/v1",
         };
         self.base_url.as_deref().unwrap_or(default).trim_end_matches('/')
     }
