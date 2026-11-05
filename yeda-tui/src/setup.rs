@@ -389,10 +389,16 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     }
 }
 
+/// Profiles on one server share its key, except Anthropic's: there each profile can hold either an
+/// API key or an OAuth token.
+pub fn llm_account(name: &str, p: &Profile) -> String {
+    yeda_secrets::llm_account((p.provider == Provider::Anthropic).then_some(name), p.url())
+}
+
 /// The secret-store account the secret is kept under.
 pub fn account(setup: &Setup) -> String {
     match setup {
-        Setup::Llm(name, p) => yeda_secrets::llm_account(name, p.url()),
+        Setup::Llm(name, p) => llm_account(name, p),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
@@ -428,7 +434,7 @@ mod tests {
         assert_eq!(g.values[3], "https://generativelanguage.googleapis.com/v1beta/openai");
         let (t, s) = g.section().unwrap();
         assert_eq!(t["provider"].as_str(), Some("openai"));
-        assert_eq!(account(&s), "llm:new:https://generativelanguage.googleapis.com/v1beta/openai");
+        assert_eq!(account(&s), "llm:https://generativelanguage.googleapis.com/v1beta/openai");
         g.cycle_provider(false);
         let (t, _) = g.section().unwrap();
         assert_eq!(t["provider"].as_str(), Some("mistral"));
