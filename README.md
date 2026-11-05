@@ -240,6 +240,8 @@ Each device also has its own config, which may give a location a different folde
 
 All passwords and API keys are kept in the system secret store.
 
+`yeda.toml` is trusted like code: whoever can write to the library's git remote or Syncthing folder decides which servers get LLM requests, which proxies the fetch window logs in to, and which WebDAV servers hold the PDFs. What they cannot get is a secret: each is stored with its server's address, so a changed address finds none and yeda asks for one, naming the server; read that name before answering. The status line also names the server of every LLM request and the proxies before the fetch window opens, and the log keeps those lines.
+
 ## Building
 
 ```sh

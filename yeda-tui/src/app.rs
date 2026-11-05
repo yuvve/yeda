@@ -2371,8 +2371,10 @@ impl App {
         let Some(key) = self.llm_key(&name, &profile, command) else { return Ok(()) };
         let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
         let openalex = self.secrets.get(OPENALEX_ACCOUNT).cloned();
+        // The server is named, since a shared yeda.toml decides where the text goes.
+        let server = profile.url().to_string();
         self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
-        self.status = format!("asking {name} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
+        self.status = format!("asking {name} at {server} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
         Ok(())
     }
 
@@ -2605,12 +2607,14 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let total = jobs.len();
+        // The server is named, since a shared yeda.toml decides where the paper goes.
+        let server = profile.url().to_string();
         std::thread::spawn(move || {
             for (i, job) in jobs.into_iter().enumerate() {
                 if flag.load(Ordering::Relaxed) {
                     break;
                 }
-                let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name}…", job.key, i + 1)));
+                let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name} at {server}…", job.key, i + 1)));
                 let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
                 let path = job.pdf.clone().unwrap_or_default();
                 let text = || poppler::pdf_text(&path);
