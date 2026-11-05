@@ -118,7 +118,7 @@ Both features below use an LLM profile from the library's `yeda.toml`; `:setup l
 default_llm = "claude"
 
 [llm.claude]
-provider = "anthropic"           # or "mistral", or "openai" for any OpenAI-compatible server
+provider = "anthropic"           # or "mistral", "openrouter", or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
@@ -146,11 +146,11 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). Anthropic and Mistral profiles search the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). Anthropic, Mistral and OpenRouter profiles search the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for.
 
 ## Keys and commands
 

@@ -2348,7 +2348,7 @@ impl App {
     /// The API key or OAuth token stored for the profile `name`, else a prompt naming it, after which
     /// `command` runs again. `None` while prompting.
     fn llm_key(&mut self, name: &str, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
-        let account = yeda_secrets::llm_account(name, profile.url());
+        let account = crate::setup::llm_account(name, profile);
         if profile.needs_key() {
             let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token (from `claude setup-token`)" } else { "API key" };
             self.secret(&account, &format!("{what} for {name}, sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
@@ -2743,9 +2743,15 @@ impl App {
         for (name, dav) in &self.lib.remotes {
             items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
         }
-        for (name, profile) in self.lib.llm.iter().filter(|(_, p)| p.needs_key()) {
-            let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token" } else { "API key" };
-            items.push((yeda_secrets::llm_account(name, profile.url()), format!("LLM {name}: {what} for {}", profile.url())));
+        for (name, profile) in &self.lib.llm {
+            let what = match profile.provider {
+                yeda_core::llm::Provider::Anthropic => "API key or OAuth token",
+                _ if profile.needs_key() => "API key",
+                _ => "API key, optional",
+            };
+            let account = crate::setup::llm_account(name, profile);
+            let names: Vec<&str> = self.lib.llm.iter().filter(|(n, q)| crate::setup::llm_account(n, q) == account).map(|(n, _)| n.as_str()).collect();
+            items.push((account, format!("LLM {}: {what} for {}", names.join(", "), profile.url())));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
         let mut seen = HashSet::new();
