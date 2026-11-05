@@ -134,7 +134,7 @@ mod tests {
         let r = library::Ref { key: "a2020".into(), title: "A".into(), ..Default::default() };
         apply(&dir, [lib.save(&r).unwrap(), Effect::write("annotations/a2020/img/x.png", "png")]).unwrap();
         assert_eq!(load_library(&dir, None, None).unwrap().refs, vec![r]);
-        apply(&dir, lib.delete("a2020")).unwrap();
+        apply(&dir, lib.delete("a2020").unwrap()).unwrap();
         assert!(load_library(&dir, None, None).unwrap().refs.is_empty());
         assert!(!dir.join("annotations/a2020").exists());
         fs::remove_dir_all(&dir).unwrap();

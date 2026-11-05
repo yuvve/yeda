@@ -86,7 +86,12 @@ fn run(req: Request, tx: &Sender<Msg>) {
     if browser.is_empty() {
         return;
     }
-    send(Msg::Progress(format!("fetch: {} papers need the browser window…", browser.len())));
+    // The proxies are named, since a shared yeda.toml decides where the window logs in.
+    let through = match req.settings.proxies.iter().map(|p| fulltext::proxy_host(p).unwrap_or_else(|| p.clone())).collect::<Vec<_>>() {
+        hosts if hosts.is_empty() => String::new(),
+        hosts => format!(" through {}", hosts.join(", ")),
+    };
+    send(Msg::Progress(format!("fetch: {} papers need the browser window{through}…", browser.len())));
     let mut pending: HashSet<String> = browser.iter().map(|i| i.key.clone()).collect();
     if let Err(e) = in_browser(&req, &browser, &mut pending, &send) {
         for key in &pending {
