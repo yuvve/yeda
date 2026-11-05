@@ -29,6 +29,8 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
+/// The Basic auth header. Plain http is allowed, for servers on a home network or VPN: the
+/// password then goes in the clear.
 fn authorization(dav: &Dav, password: &str) -> String {
     let pair = format!("{}:{password}", dav.user);
     format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair))

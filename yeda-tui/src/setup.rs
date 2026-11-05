@@ -256,6 +256,7 @@ impl SetupForm {
                 let url = v[3].trim_end_matches('/');
                 let builtin = PRESETS.iter().any(|q| q.0 == api && q.2 == url);
                 if !url.is_empty() && !builtin {
+                    yeda_core::require_https(url)?;
                     t.insert("base_url".into(), url.into());
                 }
                 if v[2].is_empty() {
@@ -274,7 +275,7 @@ impl SetupForm {
             }
             Kind::Webdav => {
                 if !v[1].starts_with("https://") && !v[1].starts_with("http://") {
-                    bail!("the URL starts with https://");
+                    bail!("the URL starts with https:// or http://");
                 }
                 if v[2].is_empty() || self.secret().is_none() {
                     bail!("give the user name and password");
@@ -288,8 +289,12 @@ impl SetupForm {
             Kind::Reference => unreachable!(),
             Kind::Proxy => {
                 let proxies: Vec<&str> = v[0].split_whitespace().collect();
-                if let Some(p) = proxies.iter().find(|p| !p.starts_with("http") || !p.contains("{url}")) {
-                    bail!("{p}: a proxy starts with https:// and has {{url}} where the paper's address goes");
+                for p in &proxies {
+                    // You log in to the proxy in the fetch window: that password must not go in the clear either.
+                    yeda_core::require_https(p)?;
+                    if !p.contains("{url}") {
+                        bail!("{p}: a proxy has {{url}} where the paper's address goes");
+                    }
                 }
                 if !proxies.is_empty() {
                     t.insert("proxies".into(), proxies.into());

@@ -451,6 +451,7 @@ enum OpenRef {
 /// Runs a git operation off the main thread with the Keystore's token for `url`;
 /// a missing or rejected token becomes `NeedsPassword`.
 async fn with_git_login(url: String, run: impl FnOnce(&git::Login) -> anyhow::Result<String> + Send + 'static) -> Res<OpenRef> {
+    yeda_core::require_https(&url).map_err(err)?;
     let account = yeda_secrets::git_account(&url);
     let token = yeda_secrets::get(&account).map_err(err)?;
     let rejected = token.is_some();
@@ -482,7 +483,7 @@ async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
 async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, url: String, user: String, password: String) -> Res<()> {
     let (name, url, user) = (name.trim().to_string(), url.trim().to_string(), user.trim().to_string());
     if name.is_empty() || user.is_empty() || password.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("give a name, an https:// URL, the user name and the password".into());
+        return Err("give a name, an https:// or http:// URL, the user name and the password".into());
     }
     let dav = library::Dav { url, user };
     let login = dav.clone();
