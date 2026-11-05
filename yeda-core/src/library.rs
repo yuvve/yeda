@@ -381,9 +381,11 @@ impl Library {
         self.get(key).is_some() || self.unreadable.iter().any(|(k, _)| k == key)
     }
 
-    /// Removes a reference with its annotations and notes.
-    pub fn delete(&self, key: &str) -> Vec<Effect> {
-        vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key)), Effect::remove(ai_path(key))]
+    /// Removes a reference with its annotations and notes. `key` is checked, since a client may
+    /// take it from outside the library: `..` would remove a folder above it.
+    pub fn delete(&self, key: &str) -> Result<Vec<Effect>> {
+        anyhow::ensure!(valid_key(key), "invalid citekey {key:?}");
+        Ok(vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key)), Effect::remove(ai_path(key))])
     }
 
     /// Where the PDF is on this machine; for a WebDAV location, its place in `cache`, which may not
@@ -419,6 +421,7 @@ impl Library {
 }
 
 pub fn parse_ref(key: String, text: &str) -> Result<Ref> {
+    anyhow::ensure!(valid_key(&key), "invalid citekey {key:?}");
     let mut r: Ref = toml::from_str(text).with_context(|| ref_path(&key))?;
     for pdf in &r.pdfs {
         // Reference files come from other devices; their PDF must stay inside its location, and
@@ -479,6 +482,12 @@ mod tests {
         assert_eq!(ref_key("...toml"), None);
         assert_eq!(ref_key("..toml"), None);
         assert!(!valid_key("a/b"));
+        assert!(parse_ref("../x".into(), "title = \"A\"\n").is_err());
+        assert!(parse_ref("".into(), "title = \"A\"\n").is_err());
+        let lib = Library::default();
+        assert!(lib.delete("../..").is_err());
+        assert!(lib.delete("a/b").is_err());
+        assert_eq!(lib.delete("a2020").unwrap().len(), 4);
     }
 
     #[test]
