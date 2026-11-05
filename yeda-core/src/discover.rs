@@ -8,13 +8,20 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Found {
+    #[serde(deserialize_with = "null_as_empty")]
     pub title: String,
+    #[serde(deserialize_with = "null_as_empty")]
     pub authors: String,
     pub year: Option<i32>,
     pub doi: Option<String>,
     pub url: Option<String>,
     /// Why it fits, in a sentence.
+    #[serde(deserialize_with = "null_as_empty")]
     pub why: String,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(d).map(Option::unwrap_or_default)
 }
 
 pub const SYSTEM: &str = "You find research papers for a researcher. Search the web when you can. \
@@ -61,7 +68,7 @@ mod tests {
 
     #[test]
     fn reads_the_papers() {
-        let answer = "Here [1] is what I found.\n```json\n[{\"title\": \"A\", \"authors\": \"Smith et al.\", \"year\": 2020, \"doi\": \"https://doi.org/10.1/x\", \"why\": \"fits\"},\n {\"title\": \"B\", \"doi\": \"unknown\"}, {\"title\": \"\"}]\n```";
+        let answer = "Here [1] is what I found.\n```json\n[{\"title\": \"A\", \"authors\": \"Smith et al.\", \"year\": 2020, \"doi\": \"https://doi.org/10.1/x\", \"why\": \"fits\"},\n {\"title\": \"B\", \"authors\": null, \"doi\": \"unknown\", \"why\": null}, {\"title\": \"\"}]\n```";
         let found = parse(answer).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!((found[0].doi.as_deref(), found[0].year), (Some("10.1/x"), Some(2020)));

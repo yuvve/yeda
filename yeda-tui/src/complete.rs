@@ -31,13 +31,19 @@ impl Completion {
 
 /// What the next word after `head` can be.
 fn options(lib: &Library, head: &str) -> Vec<String> {
-    let words: Vec<&str> = head.split_whitespace().collect();
+    let mut words: Vec<&str> = head.split_whitespace().collect();
+    if words.last() == Some(&"--llm") {
+        return lib.llm.keys().cloned().collect();
+    }
+    if let Some(i) = words.iter().position(|w| *w == "--llm") {
+        words.drain(i..=i + 1);
+    }
     let Some((command, args)) = words.split_first() else { return command_names() };
     let tables = || lib.tables.keys().cloned().collect::<Vec<_>>();
     let locations = || lib.locations.keys().chain(lib.remotes.keys()).cloned().collect::<Vec<_>>();
     let mut options = match (command.trim_end_matches('!'), args.len()) {
         ("summarize", 0) | ("export", 0) => tables(),
-        ("summarize", 1) => lib.llm.keys().cloned().collect(),
+        ("summarize", 1) | ("discover", 0) => vec!["--llm".into()],
         ("table", 0) => [tables(), vec!["close".into(), "rename".into()]].concat(),
         ("table", 1) if args[0] == "rename" => tables(),
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
@@ -75,7 +81,11 @@ mod tests {
         let c = Completion::new(&lib, "summ").unwrap();
         assert_eq!(c.candidates, ["summarize"]);
         assert_eq!(Completion::new(&lib, "summarize! l").unwrap().candidates, ["lab", "lit"]);
-        assert_eq!(Completion::new(&lib, "summarize lit ").unwrap().line(), "summarize lit claude");
+        assert_eq!(Completion::new(&lib, "summarize lit ").unwrap().line(), "summarize lit --llm");
+        assert_eq!(Completion::new(&lib, "summarize lit --llm c").unwrap().line(), "summarize lit --llm claude");
+        assert_eq!(Completion::new(&lib, "summarize! --llm claude l").unwrap().candidates, ["lab", "lit"]);
+        assert_eq!(Completion::new(&lib, "discover --llm ").unwrap().candidates, ["claude"]);
+        assert_eq!(Completion::new(&lib, "discover swarm robots --llm ").unwrap().candidates, ["claude"]);
         assert_eq!(Completion::new(&lib, "table ").unwrap().candidates, ["close", "lab", "lit", "rename"]);
         assert_eq!(Completion::new(&lib, "table rename l").unwrap().candidates, ["lab", "lit"]);
         assert!(Completion::new(&lib, "cite ie").unwrap().candidates.contains(&"ieee".to_string()));

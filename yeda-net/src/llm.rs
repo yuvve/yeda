@@ -40,7 +40,7 @@ pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply
     }
     match p.provider {
         Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
-        Provider::Openai => openai(p, prompt, key),
+        Provider::Openai | Provider::Mistral | Provider::Openrouter => openai(p, prompt, key),
     }
 }
 
@@ -169,17 +169,30 @@ fn refusal_category(v: &Value) -> &str {
 fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let base = p.url();
     let mut note = None;
-    let mut user = prompt.text.clone();
-    if let Some(paper) = &prompt.paper {
-        let mut paper = (paper.text)()?;
-        if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
-            note = Some(format!("paper text truncated from {} to {max} characters", paper.chars().count()));
-            paper = paper.chars().take(max).collect();
+    let user = match &prompt.paper {
+        Some(paper) if p.provider == Provider::Mistral => {
+            let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
+            let doc = json!({"type": "document_url", "document_url": format!("data:application/pdf;base64,{data}")});
+            json!([doc, {"type": "text", "text": prompt.text}])
         }
-        user = format!("{user}\n\nPaper text:\n{paper}");
-    } else {
-        note = Some("no PDF; summarized from metadata and notes only".into());
-    }
+        Some(paper) if p.provider == Provider::Openrouter => {
+            let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
+            let file = json!({"type": "file", "file": {"filename": "paper.pdf", "file_data": format!("data:application/pdf;base64,{data}")}});
+            json!([file, {"type": "text", "text": prompt.text}])
+        }
+        Some(paper) => {
+            let mut paper = (paper.text)()?;
+            if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
+                note = Some(format!("paper text truncated from {} to {max} characters", paper.chars().count()));
+                paper = paper.chars().take(max).collect();
+            }
+            json!(format!("{}\n\nPaper text:\n{paper}", prompt.text))
+        }
+        None => {
+            note = Some("no PDF; summarized from metadata and notes only".into());
+            json!(prompt.text)
+        }
+    };
     let mut body = json!({
         "model": p.model,
         "messages": [{"role": "system", "content": prompt.system}, {"role": "user", "content": user}],
@@ -193,7 +206,7 @@ fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     }
     let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
     let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
-    if v["choices"][0]["finish_reason"] == "length" {
+    if matches!(v["choices"][0]["finish_reason"].as_str(), Some("length" | "model_length")) {
         bail!("output was cut off at the token limit; raise max_tokens in the llm profile");
     }
     let text = v["choices"][0]["message"]["content"].as_str().context("no message content in response")?;
@@ -209,8 +222,8 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
     complete(&p, &prompt, key).map(|_| ())
 }
 
-/// A plain answer to `text`, searching the web where the provider can: Anthropic's web search
-/// tool, or an OpenAI-compatible server that searches by itself.
+/// A plain answer to `text`, searching the web where the provider can: Anthropic's, Mistral's and
+/// OpenRouter's web search tools, or an OpenAI-compatible server that searches by itself.
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
     let key = clean(key);
     let key = key.as_deref();
@@ -219,9 +232,13 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
     }
     match p.provider {
         Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
-        Provider::Openai => {
+        Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default()),
+        Provider::Openai | Provider::Openrouter => {
             let base = p.url();
-            let body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            if p.provider == Provider::Openrouter {
+                body["tools"] = json!([{"type": "openrouter:web_search"}]);
+            }
             let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
             let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
             Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
@@ -254,6 +271,33 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
         }
     }
     bail!("the search did not finish")
+}
+
+fn mistral_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
+    let mut body = json!({
+        "model": p.model,
+        "instructions": system,
+        "inputs": text,
+        "tools": [{"type": "web_search"}],
+        "stream": false,
+        "store": false,
+    });
+    if let Some(m) = p.max_tokens {
+        body["completion_args"] = json!({"max_tokens": m});
+    }
+    let v = post(&format!("{}/conversations", p.url()), &[("authorization", format!("Bearer {key}"))], &body)?;
+    Ok(conversation_text(&v))
+}
+
+/// The answer in a Mistral conversation response: its messages' text, without the source references.
+fn conversation_text(v: &Value) -> String {
+    let messages = v["outputs"].as_array().into_iter().flatten().filter(|o| o["type"] == "message.output");
+    messages
+        .flat_map(|m| match &m["content"] {
+            Value::String(s) => vec![s.as_str()],
+            c => c.as_array().into_iter().flatten().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -294,6 +338,20 @@ mod tests {
         let h = authorize(&profile(Some(true)), "sk-ant-oat01-x", &mut body).unwrap();
         assert_eq!(header(&h, "anthropic-beta"), Some("claude-code-20250219,oauth-2025-04-20,server-side-fallback-2026-07-01"));
         assert_eq!(body["fallbacks"], "default");
+    }
+
+    #[test]
+    fn mistral_conversation_text_skips_tool_entries_and_references() {
+        let v = json!({"outputs": [
+            {"type": "tool.execution", "name": "web_search"},
+            {"type": "message.output", "content": [
+                {"type": "text", "text": "See "},
+                {"type": "tool_reference", "tool": "web_search", "title": "t", "url": "u"},
+                {"type": "text", "text": "this."},
+            ]},
+            {"type": "message.output", "content": " Done."},
+        ]});
+        assert_eq!(conversation_text(&v), "See this. Done.");
     }
 
     #[test]

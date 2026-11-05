@@ -118,7 +118,7 @@ Both features below use an LLM profile from the library's `yeda.toml`; `:setup l
 default_llm = "claude"
 
 [llm.claude]
-provider = "anthropic"           # or "openai" for any OpenAI-compatible server
+provider = "anthropic"           # or "mistral", "openrouter", or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
@@ -146,11 +146,11 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). An Anthropic profile searches the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). Anthropic, Mistral and OpenRouter profiles search the web for them. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. Each LLM profile keeps its own API key or OAuth token, stored with its server's address, so a key is only sent to the server it was entered for. API keys and tokens only go to `https://` servers; plain `http://` is accepted for servers on this machine only (a local LLM, say). A WebDAV server may be plain `http://` too, for a home network or VPN; its password then goes in the clear.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for. API keys and tokens only go to `https://` servers; plain `http://` is accepted for servers on this machine only (a local LLM, say). A WebDAV server may be plain `http://` too, for a home network or VPN; its password then goes in the clear.
 
 ## Keys and commands
 
@@ -239,6 +239,8 @@ dav = { url = "https://dav.example.com/yeda/", user = "me" }
 Each device also has its own config, which may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop, the app's settings on Android.
 
 All passwords and API keys are kept in the system secret store.
+
+`yeda.toml` is trusted like code: whoever can write to the library's git remote or Syncthing folder decides which servers get LLM requests, which proxies the fetch window logs in to, and which WebDAV servers hold the PDFs. What they cannot get is a secret: each is stored with its server's address, so a changed address finds none and yeda asks for one, naming the server; read that name before answering. The status line also names the server of every LLM request and the proxies before the fetch window opens, and the log keeps those lines.
 
 ## Building
 

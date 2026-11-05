@@ -376,7 +376,7 @@ fn delete_search(app: AppHandle, state: State<Shared>, name: String) -> Res<()> 
 
 #[tauri::command]
 fn delete_ref(app: AppHandle, state: State<Shared>, key: String) -> Res<()> {
-    state.change(&app, |b| b.apply(b.lib.delete(&key)))
+    state.change(&app, |b| b.apply(b.lib.delete(&key)?))
 }
 
 /// Writes the reference file as typed, once it parses.
@@ -391,6 +391,8 @@ fn save_raw(app: AppHandle, state: State<Shared>, key: String, text: String) -> 
 #[tauri::command]
 fn save_note(app: AppHandle, state: State<Shared>, key: String, text: String) -> Res<()> {
     state.with(&app, |b| {
+        // The key names a file: only a reference's own key may.
+        b.get(&key)?;
         let path = library::note_path(&key);
         b.apply(vec![if text.trim().is_empty() { Effect::remove(path) } else { Effect::write(path, text) }])
     })
