@@ -1,0 +1,5 @@
+[advisories]
+# quick-xml 0.38 through hayagriva's citationberg, which has no release on a fixed quick-xml yet.
+# It only parses the .csl file the user passes to :cite, so the denial of service needs the
+# user's own file. Drop these once hayagriva updates.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]

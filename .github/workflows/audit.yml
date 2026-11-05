@@ -1,0 +1,35 @@
+name: Audit
+
+# Known vulnerabilities in the dependencies, from the RustSec and npm advisory databases. Runs on
+# its own schedule too, since advisories appear between pushes.
+on:
+  pull_request:
+    paths: ["Cargo.lock", "package-lock.json", ".github/workflows/audit.yml"]
+  push:
+    branches: [main]
+    paths: ["Cargo.lock", "package-lock.json", ".github/workflows/audit.yml"]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high
