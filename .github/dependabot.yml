@@ -9,6 +9,10 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
+    ignore:
+      # Kept on the major version zbus-secret-service-keyring-store uses.
+      - dependency-name: zbus
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /
     schedule:
