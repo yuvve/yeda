@@ -13,6 +13,9 @@ updates:
       # Kept on the major version zbus-secret-service-keyring-store uses.
       - dependency-name: zbus
         update-types: ["version-update:semver-major"]
+      # Must match the version openssl implements ForeignType from.
+      - dependency-name: foreign-types
+        versions: [">= 0.4"]
   - package-ecosystem: npm
     directory: /
     schedule:
