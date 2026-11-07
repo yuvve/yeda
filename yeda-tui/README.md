@@ -149,7 +149,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for. API keys and tokens only go to `https://` servers; plain `http://` is accepted for servers on this machine and for dotless names such as Tailscale's MagicDNS names (`http://desktop:11434`), which public DNS never resolves. A WebDAV server may be plain `http://` too, for a home network or VPN; its password then goes in the clear.
 
 ## Keys and commands
 
@@ -162,4 +162,17 @@ Every key runs a command, and every action is a command (`:annotations` is the s
 "F" = "cite ieee"
 "x" = ""                         # unbinds x
 ```
+
+## Scripting
+
+yeda is used through its TUI, but most commands can also run without it, for scripts and agents. Each subcommand takes references by key (or `-` to read keys from stdin), and prints keys or tab-separated lines (`--json` gives more):
+
+```sh
+yeda search tag:review --sort -year               # key, year, authors, title
+yeda search coll:thesis | yeda cite - --format apa
+yeda add 10.1038/nature14539 --to thesis
+yeda graph lecun2015 > graph.json
+```
+
+`yeda help` lists them all. They use the library's settings and the secrets saved from the TUI.
 <!-- /embed -->

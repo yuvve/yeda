@@ -20,6 +20,8 @@ pub struct Request {
     pub settings: Settings,
     pub downloads: PathBuf,
     pub openalex_key: Option<String>,
+    /// Open the fetch window for papers no direct download found.
+    pub window: bool,
 }
 
 pub enum Msg {
@@ -86,6 +88,12 @@ fn run(req: Request, tx: &Sender<Msg>) {
     if browser.is_empty() {
         return;
     }
+    if !req.window {
+        for item in browser {
+            send(Msg::Failed { key: item.key.clone(), reason: "no direct download found; it needs the fetch window".into() });
+        }
+        return;
+    }
     // The proxies are named, since a shared yeda.toml decides where the window logs in.
     let through = match req.settings.proxies.iter().map(|p| fulltext::proxy_host(p).unwrap_or_else(|| p.clone())).collect::<Vec<_>>() {
         hosts if hosts.is_empty() => String::new(),
@@ -104,7 +112,7 @@ fn run(req: Request, tx: &Sender<Msg>) {
     }
 }
 
-/// Runs `yeda fetch` with the papers and relays what it reports.
+/// Runs `yeda fetch-window` with the papers and relays what it reports.
 fn in_browser(req: &Request, items: &[&Item], pending: &mut HashSet<String>, send: &dyn Fn(Msg)) -> anyhow::Result<()> {
     let papers: Vec<_> = items
         .iter()
@@ -112,7 +120,7 @@ fn in_browser(req: &Request, items: &[&Item], pending: &mut HashSet<String>, sen
         .collect();
     let job = serde_json::json!({ "downloads": req.downloads, "settings": req.settings, "papers": papers });
     let mut child = Command::new(std::env::current_exe()?)
-        .arg("fetch")
+        .arg("fetch-window")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
