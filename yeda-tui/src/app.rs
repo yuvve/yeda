@@ -1,4 +1,4 @@
-use crate::{citations, fetch, pdftext, poppler, undo};
+use crate::{citations, fetch, ops, pdftext, undo};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use crate::keys::{self, Keymap, Lookup};
@@ -16,7 +16,6 @@ use yeda_core::annotations::{self, Annotation};
 use yeda_core::ids;
 use yeda_core::browse::{self, Filter, Sort, SortField};
 use yeda_core::library::{self, Library, Pdf, Ref, config_section};
-use yeda_core::{cite, fulltext};
 use yeda_core::graph::{self, Graph};
 use yeda_core::search::{self, FILTER_FIELDS, Searcher};
 use crate::cluster::ClusterView;
@@ -25,7 +24,6 @@ use crate::discover::Candidate;
 use crate::setup::{self, SetupForm};
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
-use yeda_net::llm::{self, Paper, Prompt as LlmPrompt};
 use yeda_net::wand;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1861,8 +1859,7 @@ impl App {
         if r.pdfs.len() < 2 {
             return Some(r.pdfs.first().cloned());
         }
-        let mut pdfs: Vec<(Pdf, usize)> = r.pdfs.iter().map(|p| (p.clone(), self.load_annotations(&r.key, p).len())).collect();
-        pdfs.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        let pdfs = ops::pdfs_by_annotations(&self.dir, r);
         self.pdf_pick = Some(PdfPick { key: r.key.clone(), pdfs, retry });
         self.pdf_sel = 0;
         self.mode = Mode::PdfPick;
@@ -2332,17 +2329,6 @@ impl App {
         self.refilter();
     }
 
-    fn table_name(&self, arg: Option<&str>) -> anyhow::Result<String> {
-        let names: Vec<&String> = self.lib.tables.keys().collect();
-        match arg {
-            Some(n) if self.lib.tables.contains_key(n) => Ok(n.to_string()),
-            Some(n) => anyhow::bail!("no table named '{n}' (tables: {})", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
-            None if names.len() == 1 => Ok(names[0].clone()),
-            None if names.is_empty() => anyhow::bail!("no tables defined: add [tables.<name>] to yeda.toml or run import-table"),
-            None => anyhow::bail!("several tables; name one: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
-        }
-    }
-
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
     /// `command` is the whole command line, run again once a missing key is entered.
     /// The API key or OAuth token stored for the profile `name`, else a prompt naming it, after which
@@ -2521,8 +2507,7 @@ impl App {
 
     /// Whether the suggestion is in the library already, by DOI or title.
     pub fn found_in_library(&self, c: &Candidate) -> bool {
-        let doi = c.work.as_ref().and_then(|w| w.doi.clone()).or(c.found.doi.clone());
-        doi.is_some_and(|d| self.lib.find_doi(&d).is_some()) || self.lib.refs.iter().any(|r| graph::same_title(&r.title, c.title()))
+        c.in_library(&self.lib).is_some()
     }
 
     fn found_key(&mut self, k: KeyEvent) {
@@ -2579,7 +2564,7 @@ impl App {
             anyhow::bail!("a summarization is already running (:cancel stops it)");
         }
         let mut words = args.split_whitespace();
-        let table_name = self.table_name(words.next())?;
+        let table_name = ops::table_name(&self.lib, words.next())?;
         if words.next().is_some() {
             anyhow::bail!("usage: :summarize[!] [table] [--llm <profile>]");
         }
@@ -2615,15 +2600,9 @@ impl App {
                     break;
                 }
                 let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name} at {server}…", job.key, i + 1)));
-                let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
-                let path = job.pdf.clone().unwrap_or_default();
-                let text = || poppler::pdf_text(&path);
-                let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
-                let prompt = LlmPrompt { system: job.system, text: job.text, paper, schema: job.schema };
-                let result = llm::complete(&profile, &prompt, key.as_deref())
-                    .and_then(|reply| Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note)))
-                    .map_err(|e| format!("{e:#}"));
-                let _ = tx.send(WorkerMsg::Finished { key: job.key, result });
+                let paper = job.key.clone();
+                let result = ops::summarize(&profile, job, key.as_deref()).map_err(|e| format!("{e:#}"));
+                let _ = tx.send(WorkerMsg::Finished { key: paper, result });
             }
         });
         self.summarizer = Some(Summarizer {
@@ -2699,11 +2678,7 @@ impl App {
             self.status = "usage: :export <table> <file.csv>".into();
             return;
         };
-        let path = path.trim();
-        let path = match (path.strip_prefix("~/"), dirs::home_dir()) {
-            (Some(rest), Some(home)) => home.join(rest),
-            _ => PathBuf::from(path),
-        };
+        let path = ops::expand_home(path.trim());
         let written = tables::export_csv(&self.lib, table)
             .and_then(|(csv, n)| fs::write(&path, csv).map(|()| n).map_err(|e| anyhow::anyhow!("{}: {e}", path.display())));
         self.status = match written {
@@ -2828,7 +2803,7 @@ impl App {
     fn download(&mut self, pdf: &Pdf, password: &str) {
         let (Some(remote), Ok(path)) = (self.lib.remote_pdf(pdf), self.lib.pdf_path(pdf)) else { return };
         let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-        match sync_pdf(remote.dav, password, &remote.path, &path) {
+        match ops::sync_pdf(remote.dav, password, &remote.path, &path) {
             Ok(()) => self.launch_reader(&path, pdf),
             Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
                 self.reject(&account);
@@ -2867,7 +2842,7 @@ impl App {
         std::thread::spawn(move || {
             for (dav, remote, path) in pdfs {
                 let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-                let result = sync_pdf(&dav, &passwords[&account], &remote, &path);
+                let result = ops::sync_pdf(&dav, &passwords[&account], &remote, &path);
                 let rejected = result.as_ref().is_err_and(yeda_net::webdav::is_unauthorized);
                 if tx.send((account, remote, result)).is_err() || rejected {
                     break;
@@ -2972,21 +2947,8 @@ impl App {
         }
     }
 
-    /// Copies `file` to a local location, or uploads it to a WebDAV one keeping a cached copy;
-    /// returns reference `i` pointing at it, not yet saved.
     fn attach_file(&self, i: usize, file: &std::path::Path, location: &str, password: Option<&str>) -> anyhow::Result<Ref> {
-        let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
-        let mut r = self.lib.refs[i].clone();
-        let pdf = self.lib.attach(&r, location, &file.to_string_lossy())?;
-        let path = self.lib.pdf_path(&pdf)?;
-        yeda_fs::write_atomic(&path, &bytes)?;
-        if let (Some(remote), Some(password)) = (self.lib.remote_pdf(&pdf), password) {
-            yeda_net::webdav::upload(remote.dav, password, &remote.path, &bytes)?;
-            let version = yeda_net::webdav::current_version(remote.dav, password, &remote.path)?;
-            yeda_fs::set_cached_version(&path, version.as_deref())?;
-        }
-        r.pdfs.push(pdf);
-        Ok(r)
+        ops::attach_file(&self.lib, &self.lib.refs[i], file, location, password)
     }
 
     fn finish_attach(&mut self, file: &std::path::Path, location: &str, password: Option<&str>) {
@@ -3034,28 +2996,11 @@ impl App {
 
     /// Extracts the annotations of every PDF of reference `i`.
     fn extract_from(&mut self, i: usize) -> anyhow::Result<usize> {
-        let r = &self.lib.refs[i];
-        anyhow::ensure!(!r.pdfs.is_empty(), "no pdf");
-        let mut total = 0;
-        for p in &r.pdfs {
-            let pdf = self.lib.pdf_path(p)?;
-            let bytes = fs::read(&pdf).map_err(|e| anyhow::anyhow!("{}: {e}", pdf.display()))?;
-            let words = poppler::word_boxes(&pdf)?;
-            let dir = library::pdf_annotations_dir(&r.key, p);
-            total += yeda_fs::locked(&self.path(&dir), || {
-                let existing = yeda_fs::read_optional(&self.path(&annotations::file_path(&r.key, p)))?;
-                let mut render = |page, height, rect| poppler::render_region(&pdf, page, height, rect).ok();
-                let (n, effects) = annotations::sync_from_pdf(&dir, existing.as_deref(), &bytes, Some(&words), &mut render)?;
-                self.write(&self.step, effects)?;
-                Ok(n)
-            })?;
-        }
-        Ok(total)
+        ops::extract_annotations(&self.lib, &self.dir, &self.lib.refs[i], &mut |effects| self.write(&self.step, effects))
     }
 
     fn load_annotations(&self, key: &str, pdf: &Pdf) -> Vec<Annotation> {
-        let text = yeda_fs::read_optional(&self.path(&annotations::file_path(key, pdf))).ok().flatten();
-        text.and_then(|t| annotations::parse(&t).ok()).unwrap_or_default()
+        ops::load_annotations(&self.dir, key, pdf)
     }
 
     /// Loads the selected ref's annotations and the selected annotation's image, if they changed.
@@ -3222,7 +3167,7 @@ impl App {
         if args.is_empty() {
             return self.pick_table("table", "");
         }
-        let name = match self.table_name(Some(args)) {
+        let name = match ops::table_name(&self.lib, Some(args)) {
             Ok(n) => n,
             Err(e) => return self.status = format!("{e:#}"),
         };
@@ -3514,39 +3459,21 @@ impl App {
                 return;
             }
         };
-        let mut effects = Vec::new();
-        for (key, id) in &f.matched {
-            if let Some(i) = self.lib.refs.iter().position(|r| &r.key == key) {
-                graph::set_work_id(&mut self.lib.refs[i], id);
-                effects.push(self.lib.save(&self.lib.refs[i]));
-            }
-        }
-        self.apply(effects.into_iter().collect());
         let unknown = match f.unknown.len() {
             0 => String::new(),
             n => format!(" · {n} not in OpenAlex (no DOI, or an unknown one)"),
         };
-        if f.graph.nodes.is_empty() {
+        let empty = f.graph.nodes.is_empty();
+        let (mut graph, effects) = ops::finish_graph(&mut self.lib, f);
+        self.apply(effects.into_iter().collect());
+        if empty {
             self.status = format!("graph: nothing to show{unknown}");
             return;
         }
-        let mut graph = f.graph;
         let (tab, by_year, ego) = self.graph.as_ref().map_or((GraphTab::Cites, false, false), |g| (g.tab, g.by_year, g.ego));
         // A rebuild after opening a paper keeps the exploration; a new :graph starts over.
         let old = self.graph.take().filter(|_| job.focus.is_some());
         let (opened, explored, back) = old.as_ref().map_or_else(Default::default, |g| (g.opened.clone(), g.explored.clone(), g.back.clone()));
-        let keys = self.lib.refs.iter().filter_map(|r| Some((graph::work_id(r)?.to_string(), r.key.clone()))).collect();
-        for (id, lists) in &f.lists {
-            if let Some(i) = graph.find(id) {
-                graph.extend(i, &lists.cites, &lists.cited_by, &keys);
-            }
-        }
-        for (id, list) in &f.cocited {
-            if let Some(i) = graph.find(id) {
-                graph.add_cocited(i, list, &keys);
-            }
-        }
-        graph.relayout();
         self.status = format!("graph of {scope}: {} papers, {} citations{unknown}", graph.nodes.iter().filter(|n| !n.hidden).count(), graph.edges.len());
         for n in graph.nodes.iter_mut() {
             n.explored = explored.contains(&n.id);
@@ -3642,19 +3569,10 @@ impl App {
         if refs.is_empty() {
             return self.status = "no reference selected".into();
         }
-        let clusters = match column {
-            None => yeda_core::clusters::Clusters::build(refs, |r| r.tags.clone()),
-            Some(column) => {
-                let Some(table) = self.lib.tables.iter().find(|(_, t)| t.columns.iter().any(|c| c == column)).map(|(n, _)| n.clone()) else {
-                    let all: Vec<&str> = self.lib.tables.values().flat_map(|t| t.columns.iter().map(String::as_str)).collect();
-                    return self.status = format!("no table has a column '{column}' (columns: {})", all.join(", "));
-                };
-                yeda_core::clusters::Clusters::build(refs, |r| r.tables.get(&table).and_then(|row| row.get(column)).cloned().into_iter().collect())
-            }
+        let clusters = match ops::clusters(&self.lib, refs, column) {
+            Ok(c) => c,
+            Err(e) => return self.status = format!("{e:#}"),
         };
-        if clusters.nodes.is_empty() {
-            return self.status = format!("none of these references has {}", column.map_or("tags".to_string(), |c| format!("a value for '{c}'")));
-        }
         self.cluster = Some(ClusterView::new(clusters, column.unwrap_or("tags").to_string()));
         self.right = RightView::Clusters;
         self.pane = Pane::Right;
@@ -3757,23 +3675,12 @@ impl App {
         if !self.confirm_many("fetch PDFs for", targets.iter().filter(|&&i| self.lib.refs[i].pdfs.is_empty()).count(), command) {
             return;
         }
-        let items: Vec<fetch::Item> = targets
-            .iter()
-            .map(|&i| &self.lib.refs[i])
-            .filter(|r| r.pdfs.is_empty())
-            .map(|r| fetch::Item { key: r.key.clone(), doi: graph::lookup_doi(r), openalex: graph::work_id(r).map(String::from), file: fulltext::file_name(r) })
-            .collect();
-        if items.is_empty() {
+        let openalex_key = self.openalex_key();
+        let request = ops::fetch_request(&self.lib, targets.iter().map(|&i| &self.lib.refs[i]), true, openalex_key);
+        if request.items.is_empty() {
             self.status = if targets.is_empty() { "no reference selected" } else { "they already have PDFs" }.into();
             return;
         }
-        let downloads = match (&self.lib.fulltext.downloads, dirs::home_dir()) {
-            (Some(d), Some(home)) if d.starts_with("~") => home.join(d.strip_prefix("~").unwrap()),
-            (Some(d), _) => d.clone(),
-            (None, _) => dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("yeda/downloads"),
-        };
-        let openalex_key = self.openalex_key();
-        let request = fetch::Request { items, settings: self.lib.fulltext.clone(), downloads, openalex_key };
         self.status = "fetch: starting…".into();
         self.fetch_job = Some(FetchJob { rx: fetch::spawn(request), step: self.step.clone(), location, password, added: vec![], failed: vec![] });
     }
@@ -3802,19 +3709,7 @@ impl App {
     fn attach_fetched(&mut self, key: &str, file: &std::path::Path, verify: bool, job: &FetchJob) -> anyhow::Result<()> {
         let i = self.lib.refs.iter().position(|r| r.key == key).ok_or_else(|| anyhow::anyhow!("reference deleted meanwhile"))?;
         if verify {
-            let text = poppler::pdf_text(file).unwrap_or_default();
-            anyhow::ensure!(
-                fulltext::looks_like(&text, &self.lib.refs[i]),
-                "the downloaded PDF doesn't look like this paper (no DOI or title match); it's in {}",
-                file.display()
-            );
-            if let (Some(max), Ok(pages)) = (fulltext::max_pages(&self.lib.refs[i]), poppler::page_count(file)) {
-                anyhow::ensure!(
-                    pages <= max,
-                    "the downloaded PDF has {pages} pages, more than this paper should (a whole issue?); if it's right, :attach {}",
-                    file.display()
-                );
-            }
+            ops::check_download(&self.lib.refs[i], file)?;
         }
         let r = self.attach_file(i, file, &job.location, job.password.as_deref())?;
         self.write(&job.step, [self.lib.save(&r)?])?;
@@ -3848,15 +3743,7 @@ impl App {
             self.status = "no reference selected".into();
             return;
         }
-        let format = if format.is_empty() { self.lib.cite.format.clone().unwrap_or_else(|| "bibtex".into()) } else { format.to_string() };
-        let read = |path: &str| {
-            let path = match (path.strip_prefix("~/"), dirs::home_dir()) {
-                (Some(rest), Some(home)) => home.join(rest),
-                _ => self.dir.join(path),
-            };
-            fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
-        };
-        let text = match cite::export(&refs, &format, read) {
+        let (text, format) = match ops::cite_text(&self.lib, &self.dir, &refs, format) {
             Ok(t) => t,
             Err(e) => {
                 self.status = format!("{e:#}");
@@ -3883,13 +3770,6 @@ fn unreadable(lib: &Library) -> String {
 }
 
 /// Waits for `child` in the background, so it doesn't stay a zombie until yeda exits.
-/// Downloads WebDAV file `remote` to `cached` unless the copy there is the server's current one.
-fn sync_pdf(dav: &library::Dav, password: &str, remote: &str, cached: &std::path::Path) -> anyhow::Result<()> {
-    yeda_fs::sync_cached(cached, |version| {
-        yeda_net::webdav::current_version(dav, password, remote).map(|v| v.is_some() && v.as_deref() == version)
-    }, || yeda_net::webdav::download(dav, password, remote))
-}
-
 fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || child.wait());
 }

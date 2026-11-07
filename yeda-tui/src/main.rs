@@ -1,11 +1,13 @@
 mod app;
 mod citations;
+mod cli;
 mod cluster;
 mod complete;
 mod discover;
 mod fetch;
 mod keys;
 mod log;
+mod ops;
 mod pdftext;
 mod poppler;
 mod setup;
@@ -213,10 +215,17 @@ fn main() -> Result<()> {
         yeda_reader_lib::run_with(args.into_iter().skip(1));
         return Ok(());
     }
-    if args.first().map(String::as_str) == Some("fetch") {
-        let job: yeda_reader_lib::fetch::Job = serde_json::from_reader(std::io::stdin()).context("fetch: a job as JSON on stdin")?;
+    if args.first().map(String::as_str) == Some("fetch-window") {
+        let job: yeda_reader_lib::fetch::Job = serde_json::from_reader(std::io::stdin()).context("fetch-window: a job as JSON on stdin")?;
         yeda_reader_lib::fetch::run(job);
         return Ok(());
+    }
+    if matches!(args.first().map(String::as_str), Some("help" | "--help" | "-h")) {
+        println!("{USAGE}\n{}", cli::USAGE);
+        return Ok(());
+    }
+    if let Some(result) = cli::run(&args) {
+        return result;
     }
     if let Some(command @ ("import" | "init")) = args.first().map(String::as_str) {
         return wizard(command == "import");

@@ -163,6 +163,19 @@ Every key runs a command, and every action is a command (`:annotations` is the s
 "F" = "cite ieee"
 "x" = ""                         # unbinds x
 ```
+
+## Scripting
+
+yeda is used through its TUI, but most commands can also run without it, for scripts and agents. Each subcommand takes references by key (or `-` to read keys from stdin), and prints keys or tab-separated lines (`--json` gives more):
+
+```sh
+yeda search tag:review --sort -year               # key, year, authors, title
+yeda search coll:thesis | yeda cite - --format apa
+yeda add 10.1038/nature14539 --to thesis
+yeda graph lecun2015 > graph.json
+```
+
+`yeda help` lists them all. They use the library's settings and the secrets saved from the TUI.
 <!-- /yeda-tui -->
 
 ## Android app

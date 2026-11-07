@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::mpsc::{self, Receiver};
 use yeda_core::discover::{self, Found};
 use yeda_core::graph::{self, Work};
-use yeda_core::library::Ref;
+use yeda_core::library::{Library, Ref};
 use yeda_core::llm::Profile;
 
 /// A suggested paper, with the work OpenAlex has for it (by DOI, else by title) if any.
@@ -19,6 +19,12 @@ impl Candidate {
 
     pub fn title(&self) -> &str {
         self.work.as_ref().map_or(&self.found.title, |w| &w.title)
+    }
+
+    /// The library's reference for it, by DOI, else by title.
+    pub fn in_library<'a>(&self, lib: &'a Library) -> Option<&'a Ref> {
+        let doi = self.work.as_ref().and_then(|w| w.doi.clone()).or(self.found.doi.clone());
+        doi.and_then(|d| lib.find_doi(&d)).or_else(|| lib.refs.iter().find(|r| graph::same_title(&r.title, self.title())))
     }
 
     /// OpenAlex's first author, else what the LLM wrote.
