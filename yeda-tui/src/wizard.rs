@@ -144,9 +144,10 @@ impl Form {
         let dav = match dest {
             Dest::Webdav => {
                 let (url, user, password) = (self.get(F::Url), self.get(F::User), self.values[F::Password as usize].clone());
-                if !(url.starts_with("https://") || url.starts_with("http://")) || user.is_empty() || password.is_empty() {
+                if user.is_empty() || password.is_empty() {
                     return Err("give the WebDAV URL (https://…), user and password".into());
                 }
+                yeda_core::require_https(url).map_err(|e| format!("{e:#}"))?;
                 let dav = Dav { url: url.into(), user: user.into() };
                 yeda_net::webdav::login(&dav, &password).map_err(|e| format!("{e:#}"))?;
                 Some((dav, password))

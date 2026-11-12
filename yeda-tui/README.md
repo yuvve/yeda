@@ -149,7 +149,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for. API keys and tokens only go to `https://` servers; plain `http://` is accepted for servers on this machine and for dotless names such as Tailscale's MagicDNS names (`http://desktop:11434`), which public DNS never resolves. A WebDAV server may be plain `http://` too, for a home network or VPN; its password then goes in the clear.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations and library proxies with a plain `http://` address are refused.
 
 ## Keys and commands
 

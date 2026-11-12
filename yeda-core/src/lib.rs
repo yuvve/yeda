@@ -35,30 +35,12 @@ impl Effect {
     }
 }
 
-/// Refuses a server that would get a password or key in the clear: anything but `https://`,
-/// except plain `http://` to this machine or to a host without a dot, which only a local search
-/// domain such as Tailscale's MagicDNS resolves.
+/// Refuses a server that would get a password or key in the clear: anything but `https://`.
 pub fn require_https(url: &str) -> anyhow::Result<()> {
     if url.starts_with("https://") {
         return Ok(());
     }
-    if let Some(rest) = url.strip_prefix("http://") {
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-        if let Some(v6) = host.strip_prefix('[') {
-            if v6.split(']').next() == Some("::1") {
-                return Ok(());
-            }
-        } else {
-            let host = host.split(':').next().unwrap_or_default();
-            // A leading letter keeps out dotless numbers like 2130706433, which URL parsers read as IPv4.
-            let dotless = host.starts_with(|c: char| c.is_ascii_alphabetic()) && !host.contains('.');
-            if dotless || host.starts_with("127.") {
-                return Ok(());
-            }
-        }
-    }
-    anyhow::bail!("{url}: passwords and keys only go over https:// (plain http:// only to localhost or a dotless name)")
+    anyhow::bail!("{url}: passwords and keys only go over https://")
 }
 
 #[cfg(test)]
@@ -66,11 +48,11 @@ mod tests {
     use super::require_https;
 
     #[test]
-    fn only_https_or_local_http_carries_secrets() {
-        for ok in ["https://dav.example.com/pdfs", "http://localhost:11434/v1", "http://127.0.0.1/", "http://[::1]:8080/v1", "http://me:pw@localhost/x", "http://desktop:11434/v1"] {
+    fn only_https_carries_secrets() {
+        for ok in ["https://dav.example.com/pdfs", "https://localhost:11434/v1", "https://desktop:11434/v1"] {
             assert!(require_https(ok).is_ok(), "{ok}");
         }
-        for bad in ["http://dav.example.com/pdfs", "http://localhost.evil.com/", "http://me@evil.com:80/", "http://[2001:db8::1]/", "ftp://x", "dav.example.com", "", "http:///", "http://2130706433/", "http://0x7f000001/", "http://[fe80::1]/"] {
+        for bad in ["http://dav.example.com/pdfs", "http://localhost:11434/v1", "http://127.0.0.1/", "http://[::1]:8080/v1", "http://me:pw@localhost/x", "http://desktop:11434/v1", "HTTPS://dav.example.com/", "http://localhost.evil.com/", "http://me@evil.com:80/", "http://[2001:db8::1]/", "ftp://x", "dav.example.com", "", "http:///", "http://2130706433/", "http://0x7f000001/", "http://[fe80::1]/"] {
             assert!(require_https(bad).is_err(), "{bad}");
         }
     }
