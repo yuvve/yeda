@@ -255,6 +255,8 @@ All passwords and API keys are kept in the system secret store.
 
 `yeda.toml` is trusted like code: whoever can write to the library's git remote or Syncthing folder decides which servers get LLM requests, which proxies the fetch window logs in to, and which WebDAV servers hold the PDFs. What they cannot get is a secret: each is stored with its server's address, so a changed address finds none and yeda asks for one, naming the server; read that name before answering. The status line also names the server of every LLM request and the proxies before the fetch window opens, and the log keeps those lines.
 
+The PDF URLs in `[fulltext.patterns]` come from `yeda.toml` too, and the open-access ones from OpenAlex. A direct download goes only over `https://` (a plain `http://` URL is tried as `https://`) and only to a public host, after each of at most 5 redirects as well: `localhost`, dotless names, `.local` names and private, loopback and link-local addresses are refused. A name whose DNS points at a private address is not caught. A download stops at 100 MB.
+
 ## Building
 
 ```sh
