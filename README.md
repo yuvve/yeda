@@ -118,11 +118,13 @@ Both features below use an LLM profile from the library's `yeda.toml`; `:setup l
 default_llm = "claude"
 
 [llm.claude]
-provider = "anthropic"           # or "mistral", "openrouter", or "openai" for any OpenAI-compatible server
+provider = "anthropic"           # or "mistral", "openrouter", "opencode-go", or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
 An Anthropic profile takes an API key or an OAuth token; yeda tells them apart by themselves. An OAuth token uses your Claude subscription instead of API credits: run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints. Anthropic may restrict subscription use outside Claude Code.
+
+An `opencode-go` profile uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 

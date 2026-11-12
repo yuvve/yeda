@@ -8,6 +8,9 @@ pub enum Provider {
     Openai,
     Mistral,
     Openrouter,
+    /// The OpenCode Go subscription, through its OpenAI-compatible endpoint.
+    #[serde(rename = "opencode-go")]
+    OpencodeGo,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +42,7 @@ impl Profile {
             Provider::Openai => "https://api.openai.com/v1",
             Provider::Mistral => "https://api.mistral.ai/v1",
             Provider::Openrouter => "https://openrouter.ai/api/v1",
+            Provider::OpencodeGo => "https://opencode.ai/inference/go/openai/v1",
         };
         self.base_url.as_deref().unwrap_or(default).trim_end_matches('/')
     }
