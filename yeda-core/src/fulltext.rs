@@ -3,6 +3,7 @@
 use crate::library::Ref;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 /// `[fulltext]` in yeda.toml.
@@ -132,6 +133,84 @@ pub fn sciencedirect_pdf(page: &str) -> Option<String> {
     Some(format!("{scheme}://{host}/science/article/pii/{pii}/pdfft"))
 }
 
+/// `url` as a direct download may fetch it: over `https://` (a plain `http://` one is upgraded),
+/// to a public host. The URLs come from OpenAlex and the shared `[fulltext]`, so whoever writes
+/// either mustn't make a collaborator's machine request `localhost` or the LAN.
+// ponytail: a name that resolves to a private address still gets through; only literals are refused.
+pub fn direct_url(url: &str) -> anyhow::Result<String> {
+    let refuse = |why: &str| anyhow::anyhow!("{url}: {why}");
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| refuse("not a URL"))?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "https" | "http") {
+        return Err(refuse("only https:// downloads"));
+    }
+    if url.contains(|c: char| c == '\\' || c.is_whitespace() || c.is_control()) {
+        return Err(refuse("not a plain URL"));
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err(refuse("a user name in the URL"));
+    }
+    if !public_host(authority) {
+        return Err(refuse("not a public host"));
+    }
+    Ok(format!("https://{rest}"))
+}
+
+/// Whether `authority` (a host and maybe a port) names a host on the internet.
+fn public_host(authority: &str) -> bool {
+    if let Some(v6) = authority.strip_prefix('[') {
+        let Some((ip, port)) = v6.split_once(']') else { return false };
+        return (port.is_empty() || port.starts_with(':')) && ip.parse::<Ipv6Addr>().is_ok_and(public_v6);
+    }
+    let host = authority.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    let host = host.strip_suffix('.').unwrap_or(&host);
+    let last = host.rsplit('.').next().unwrap_or_default();
+    // Resolvers read 2130706433, 127.1 and 0x7f.0.0.1 as IPv4 too, and no top-level domain is a number.
+    if last.bytes().all(|b| b.is_ascii_digit()) || last.starts_with("0x") {
+        return host.parse::<Ipv4Addr>().is_ok_and(public_v4);
+    }
+    // Only a local search domain resolves a dotless name.
+    let local = [".localhost", ".local", ".internal", ".home.arpa"].iter().any(|s| format!(".{host}").ends_with(s));
+    host.contains('.') && !local
+}
+
+fn public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    // 100.64/10 is carrier-grade NAT and Tailscale; 192.0.0/24, 198.18/15 and 240/4 are reserved.
+    let reserved = a == 0 || (a == 100 && b & 0xc0 == 64) || (a, b, c) == (192, 0, 0) || (a == 198 && b & 0xfe == 18) || a >= 240;
+    !(reserved || ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_documentation() || ip.is_multicast())
+}
+
+fn public_v6(ip: Ipv6Addr) -> bool {
+    let s = ip.segments();
+    // An IPv4 address inside IPv6: mapped, compatible or NAT64.
+    if let Some(v4) = ip.to_ipv4().or_else(|| (s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| Ipv4Addr::from(ip.to_bits() as u32))) {
+        return public_v4(v4) && !ip.is_loopback() && !ip.is_unspecified();
+    }
+    // fc00::/7 unique local, fe80::/10 link-local, fec0::/10 site-local, 2001:db8::/32 documentation.
+    let local = s[0] & 0xfe00 == 0xfc00 || s[0] & 0xffc0 == 0xfe80 || s[0] & 0xffc0 == 0xfec0 || s[..2] == [0x2001, 0xdb8];
+    !(local || ip.is_multicast())
+}
+
+/// Where a redirect from `url` to `location` goes; `None` for one that isn't a URL.
+pub fn redirect(url: &str, location: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (origin, path) = (&url[..scheme.len() + 3 + split], &rest[split..]);
+    if location.split_once("://").is_some_and(|(s, _)| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))) {
+        return Some(location.to_string());
+    }
+    Some(match location {
+        "" => return None,
+        l if l.starts_with("//") => format!("{scheme}:{l}"),
+        l if l.starts_with('/') => format!("{origin}{l}"),
+        l => {
+            let path = path.split(['?', '#']).next().unwrap_or_default();
+            format!("{origin}{}/{l}", &path[..path.rfind('/').unwrap_or(0)])
+        }
+    })
+}
+
 pub fn is_pdf(bytes: &[u8]) -> bool {
     bytes.trim_ascii_start().starts_with(b"%PDF-")
 }
@@ -219,6 +298,38 @@ mod tests {
         assert_eq!(ieee("https://ieeexplore-ieee-org.proxy.lib.ltu.se/stamp/stamp.jsp?tp=&arnumber=10015635"), pdf);
         assert_eq!(ieee("https://ieeexplore.ieee.org/search/x"), None);
         assert_eq!(ieee("https://link.springer.com/document/123"), None);
+    }
+
+    #[test]
+    fn downloads_only_from_public_hosts() {
+        assert_eq!(direct_url("https://arxiv.org/pdf/1706.03762").unwrap(), "https://arxiv.org/pdf/1706.03762");
+        assert_eq!(direct_url("http://eprints.example.ac.uk/1/a.pdf").unwrap(), "https://eprints.example.ac.uk/1/a.pdf");
+        for ok in ["HTTPS://Link.Springer.com/x", "https://8.8.8.8/x.pdf", "https://[2606:4700::1111]:443/x", "https://example.com.:8443/x?y=1", "https://cafe.example.cafe/"] {
+            assert!(direct_url(ok).is_ok(), "{ok}");
+        }
+        let bad = [
+            "ftp://example.com/x.pdf", "file:///etc/passwd", "example.com/x.pdf", "", "https:///x", "https://me:pw@example.com/x", "https://example.com\\@evil/",
+            "http://localhost/x", "https://LOCALHOST./x", "https://a.localhost/x", "https://printer.local/x", "https://desktop:11434/x", "https://metadata.google.internal/",
+            "http://127.0.0.1/x", "https://127.1/", "https://2130706433/", "https://0x7f000001/", "https://0x7f.0.0.1/", "https://017700000001/", "https://010.0.0.1/",
+            "https://10.0.0.1/", "https://192.168.1.1:8080/", "https://172.16.0.1/", "https://169.254.169.254/latest/meta-data/", "https://100.96.3.100/", "https://0.0.0.0/",
+            "https://[::1]/", "https://[::]/", "https://[fe80::1]/", "https://[fd00::1]/", "https://[::ffff:127.0.0.1]/", "https://[::ffff:10.0.0.1]/", "https://[64:ff9b::a00:1]/",
+            "https://[::1", "https://[::1]x/",
+        ];
+        for bad in bad {
+            assert!(direct_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn follows_redirects() {
+        let from = "https://a.org/doi/pdf/10.1/x?y=1";
+        assert_eq!(redirect(from, "https://b.org/x.pdf").as_deref(), Some("https://b.org/x.pdf"));
+        assert_eq!(redirect(from, "//b.org/x.pdf").as_deref(), Some("https://b.org/x.pdf"));
+        assert_eq!(redirect(from, "/x.pdf").as_deref(), Some("https://a.org/x.pdf"));
+        assert_eq!(redirect(from, "x.pdf").as_deref(), Some("https://a.org/doi/pdf/10.1/x.pdf"));
+        assert_eq!(redirect("https://a.org?y=/z", "x.pdf").as_deref(), Some("https://a.org/x.pdf"));
+        assert_eq!(redirect(from, "http://127.0.0.1/").as_deref(), Some("http://127.0.0.1/"));
+        assert_eq!(redirect(from, ""), None);
     }
 
     #[test]
