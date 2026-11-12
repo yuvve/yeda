@@ -251,15 +251,25 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
 
 /// A plain answer to `text`, searching the web where the provider can: Anthropic's, Mistral's and
 /// OpenRouter's web search tools, or an OpenAI-compatible server that searches by itself.
-pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
+/// Says so when `p` answers a search from what the model knows instead of from the web.
+/// Generic OpenAI-compatible servers aren't asked to search, and OpenCode Go ignores search tools.
+pub fn search_note(p: &Profile) -> Option<&'static str> {
+    match p.provider {
+        Provider::Openai | Provider::OpencodeGo => Some("answered without web search, from what the model knows"),
+        Provider::Anthropic | Provider::Mistral | Provider::Openrouter => None,
+    }
+}
+
+/// Answers `text`, searching the web where the provider can; the note says when it didn't.
+pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<Reply> {
     let key = clean(key);
     let key = key.as_deref();
     if key.is_none() && p.needs_key() {
         bail!("no API key or OAuth token for {}", p.url());
     }
-    match p.provider {
-        Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default()),
-        Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default()),
+    let text = match p.provider {
+        Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default())?,
+        Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default())?,
         Provider::Openai | Provider::Openrouter | Provider::OpencodeGo => {
             let base = p.url();
             let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
@@ -267,9 +277,10 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
                 body["tools"] = json!([{"type": "openrouter:web_search"}]);
             }
             let v = post(&format!("{base}/chat/completions"), &openai_headers(p, key), &body)?;
-            Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
+            v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string()
         }
-    }
+    };
+    Ok(Reply { text, note: search_note(p).map(String::from) })
 }
 
 fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
@@ -423,6 +434,21 @@ mod tests {
         assert!(err.contains("only go over https://"), "{err}");
         assert!(search(&p, "s", "t", Some("oc-key")).is_err());
         assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn says_when_a_search_skipped_the_web() {
+        for (provider, searches) in [
+            (Provider::OpencodeGo, false),
+            (Provider::Openai, false),
+            (Provider::Anthropic, true),
+            (Provider::Mistral, true),
+            (Provider::Openrouter, true),
+        ] {
+            let note = search_note(&Profile { provider, ..profile(None) });
+            assert_eq!(note.is_none(), searches, "{provider:?}");
+        }
+        assert!(search_note(&opencode_go()).unwrap().contains("without web search"));
     }
 
     #[test]

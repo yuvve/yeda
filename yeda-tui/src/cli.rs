@@ -552,7 +552,10 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
     let key = llm_key(&name, &profile)?;
     let from: Vec<&Ref> = like.iter().filter_map(|k| lib.get(k)).collect();
     eprintln!("asking {name} at {}…", profile.url());
-    let found = discover::spawn(profile, key, &prompt, &from, None).recv()??;
+    let (found, note) = discover::spawn(profile, key, &prompt, &from, None).recv()??;
+    if let Some(note) = note {
+        eprintln!("note: {note}");
+    }
     if a.flag("json") {
         let found: Vec<Value> = found
             .iter()

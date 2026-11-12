@@ -646,7 +646,9 @@ pub struct App {
     confirming: Option<(String, String)>,
     /// The next `action` call was confirmed already.
     confirmed: bool,
-    discover_job: Option<Receiver<anyhow::Result<Vec<Candidate>>>>,
+    discover_job: Option<Receiver<crate::discover::Suggestions>>,
+    /// How the last :discover answered, if the user should know (no web search).
+    pub found_note: Option<String>,
     pub found: Vec<Candidate>,
     pub found_sel: usize,
     pub found_marked: BTreeSet<usize>,
@@ -770,6 +772,7 @@ impl App {
             confirming: None,
             confirmed: false,
             discover_job: None,
+            found_note: None,
             found: Vec::new(),
             found_sel: 0,
             found_marked: BTreeSet::new(),
@@ -2489,9 +2492,12 @@ impl App {
         };
         self.discover_job = None;
         match result {
-            Ok(found) if found.is_empty() => self.status = "discover: no papers found".into(),
-            Ok(found) => {
-                self.status = format!("discover: {} papers, {} found in OpenAlex", found.len(), found.iter().filter(|c| c.work.is_some()).count());
+            Ok((found, note)) => {
+                self.status = discover_status(&found, note.as_deref());
+                if found.is_empty() {
+                    return;
+                }
+                self.found_note = note;
                 self.found = found;
                 // The LLM only knows the papers it was given, so it suggests others the library has.
                 let mut found = std::mem::take(&mut self.found);
@@ -3797,8 +3803,30 @@ fn options<'a>(args: &'a str, known: &[&str]) -> anyhow::Result<(HashMap<&'a str
     Ok((opts, rest.join(" ")))
 }
 
+/// The status line after :discover, with the search note.
+fn discover_status(found: &[Candidate], note: Option<&str>) -> String {
+    let status = match found.len() {
+        0 => "discover: no papers found".to_string(),
+        n => format!("discover: {n} papers, {} found in OpenAlex", found.iter().filter(|c| c.work.is_some()).count()),
+    };
+    match note {
+        Some(note) => format!("{status} ({note})"),
+        None => status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discover_status_says_when_the_web_was_not_searched() {
+        let found = yeda_core::discover::Found { title: "Swarms".into(), authors: "Doe".into(), year: None, doi: None, url: None, why: String::new() };
+        let found = [super::Candidate { found, work: None }];
+        let note = "answered without web search, from what the model knows";
+        assert_eq!(super::discover_status(&found, Some(note)), format!("discover: 1 papers, 0 found in OpenAlex ({note})"));
+        assert_eq!(super::discover_status(&found, None), "discover: 1 papers, 0 found in OpenAlex");
+        assert_eq!(super::discover_status(&[], Some(note)), format!("discover: no papers found ({note})"));
+    }
+
     #[test]
     fn splits_options_from_text() {
         let (opts, rest) = super::options("swarm --llm claude robots", &["llm"]).unwrap();
