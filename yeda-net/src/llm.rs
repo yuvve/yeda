@@ -167,6 +167,17 @@ fn refusal_category(v: &Value) -> &str {
     v["stop_details"]["category"].as_str().unwrap_or("no category")
 }
 
+/// The headers for an OpenAI-compatible request. OpenRouter also gets its app attribution headers,
+/// so the traffic shows as yeda rather than "Unknown app"; other servers never see them.
+fn openai_headers(p: &Profile, key: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
+    if p.provider == Provider::Openrouter {
+        headers.push(("http-referer", "https://github.com/yuvve/yeda".into()));
+        headers.push(("x-openrouter-title", "yeda".into()));
+    }
+    headers
+}
+
 fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let base = p.url();
     let mut note = None;
@@ -205,7 +216,7 @@ fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     if let Some(m) = p.max_tokens {
         body["max_tokens"] = json!(m);
     }
-    let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
+    let headers = openai_headers(p, key);
     let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
     if matches!(v["choices"][0]["finish_reason"].as_str(), Some("length" | "model_length")) {
         bail!("output was cut off at the token limit; raise max_tokens in the llm profile");
@@ -240,7 +251,7 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
             if p.provider == Provider::Openrouter {
                 body["tools"] = json!([{"type": "openrouter:web_search"}]);
             }
-            let headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
+            let headers = openai_headers(p, key);
             let v = post(&format!("{base}/chat/completions"), &headers, &body)?;
             Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
         }
@@ -320,6 +331,21 @@ mod tests {
 
     fn header<'a>(h: &'a [(&str, String)], name: &str) -> Option<&'a str> {
         h.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn only_openrouter_gets_attribution_headers() {
+        for provider in [Provider::Openai, Provider::Mistral, Provider::Anthropic] {
+            let h = openai_headers(&Profile { provider, ..profile(None) }, Some("k"));
+            assert_eq!(header(&h, "authorization"), Some("Bearer k"));
+            assert_eq!(header(&h, "http-referer"), None);
+            assert_eq!(header(&h, "x-openrouter-title"), None);
+        }
+        let h = openai_headers(&Profile { provider: Provider::Openrouter, ..profile(None) }, Some("k"));
+        assert_eq!(header(&h, "authorization"), Some("Bearer k"));
+        assert_eq!(header(&h, "http-referer"), Some("https://github.com/yuvve/yeda"));
+        assert_eq!(header(&h, "x-openrouter-title"), Some("yeda"));
+        assert_eq!(header(&h, "x-openrouter-app-visibility"), None);
     }
 
     #[test]
