@@ -262,9 +262,9 @@ FINDING PAPERS  ( :discover [--llm <profile>] [what] )
   :discover asks the default LLM profile, or the one --llm names, for
   papers like the selected or marked references; with a description (:discover swarm exploration
   under comms loss) it looks for that, with the marked references as
-  context. Anthropic, Mistral and OpenRouter profiles search the web; an
-  OpenAI-compatible one only if the server does (Perplexity, OpenAI's
-  search models). Every suggestion is looked up in OpenAlex: ✓ found,
+  context. Anthropic, Mistral and OpenRouter profiles search the web.
+  OpenCode Go and other OpenAI-compatible profiles answer from what the
+  model knows, and the status line and the list say so. Every suggestion is looked up in OpenAlex: ✓ found,
   ? not found (it may not exist), ◎ already in the library. v marks papers, and a adds the marked
   ones (else the selected one) by DOI or URL; o opens a paper, q closes
   the list, and :found opens it again.

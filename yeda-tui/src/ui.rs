@@ -506,10 +506,14 @@ fn draw_found(f: &mut Frame, app: &App, main: Rect) {
         0 => String::new(),
         n => format!("{n} marked · "),
     };
+    let mut frame = block(format!(" Found · {marked}✓ in OpenAlex · ? not found · ◎ in library · v mark · a add · o open · q close "), true);
+    if let Some(note) = &app.found_note {
+        frame = frame.title_bottom(Line::styled(format!(" {note} "), Style::new().fg(Color::Yellow)));
+    }
     f.render_widget(Clear, area);
     f.render_stateful_widget(
         List::new(items)
-            .block(block(format!(" Found · {marked}✓ in OpenAlex · ? not found · ◎ in library · v mark · a add · o open · q close "), true))
+            .block(frame)
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.found_sel)),

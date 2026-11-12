@@ -34,15 +34,19 @@ impl Candidate {
     }
 }
 
+/// The suggestions, and a note when the LLM answered without searching the web.
+pub type Suggestions = Result<(Vec<Candidate>, Option<String>)>;
+
 /// Asks the LLM in the background, then looks each suggestion up in OpenAlex.
-pub fn spawn(profile: Profile, key: Option<String>, prompt: &str, from: &[&Ref], openalex_key: Option<String>) -> Receiver<Result<Vec<Candidate>>> {
+pub fn spawn(profile: Profile, key: Option<String>, prompt: &str, from: &[&Ref], openalex_key: Option<String>) -> Receiver<Suggestions> {
     let text = discover::request(prompt, from);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let found = yeda_net::llm::search(&profile, discover::SYSTEM, &text, key.as_deref()).and_then(|answer| discover::parse(&answer));
-        let _ = tx.send(found.map(|found| {
+        let found = yeda_net::llm::search(&profile, discover::SYSTEM, &text, key.as_deref())
+            .and_then(|reply| Ok((discover::parse(&reply.text)?, reply.note)));
+        let _ = tx.send(found.map(|(found, note)| {
             let client = yeda_net::openalex::Client::new(openalex_key);
-            found.into_iter().map(|f| Candidate { work: look_up(&client, &f), found: f }).collect()
+            (found.into_iter().map(|f| Candidate { work: look_up(&client, &f), found: f }).collect(), note)
         }));
     });
     rx

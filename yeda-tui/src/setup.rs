@@ -37,12 +37,13 @@ pub struct SetupForm {
 }
 
 /// Providers the form knows: name, API and base URL.
-pub const PRESETS: [(&str, Provider, &str); 5] = [
+pub const PRESETS: [(&str, Provider, &str); 6] = [
     ("anthropic", Provider::Anthropic, "https://api.anthropic.com"),
     ("openai", Provider::Openai, "https://api.openai.com/v1"),
     ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai"),
     ("mistral", Provider::Mistral, "https://api.mistral.ai/v1"),
     ("openrouter", Provider::Openrouter, "https://openrouter.ai/api/v1"),
+    ("opencode-go", Provider::OpencodeGo, "https://opencode.ai/inference/go/openai/v1"),
 ];
 
 fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str)> {
@@ -178,8 +179,8 @@ impl SetupForm {
             Kind::Proxy => &[("Proxies", "tried in order, separated by spaces; {url} is where the paper's address goes")],
             Kind::Llm => &[
                 ("Name", "used as --llm <name>"),
-                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter"),
-                ("Model", "e.g. claude-opus-5-5"),
+                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter, opencode-go"),
+                ("Model", "e.g. claude-opus-5-5, or glm-5.3-flash with opencode-go"),
                 ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
                 ("Key / token", "API key, or for anthropic an OAuth token (claude setup-token)"),
             ],
@@ -247,6 +248,7 @@ impl SetupForm {
                     Some((_, Provider::Anthropic, ..)) => "anthropic".to_string(),
                     Some((_, Provider::Mistral, ..)) => "mistral".to_string(),
                     Some((_, Provider::Openrouter, ..)) => "openrouter".to_string(),
+                    Some((_, Provider::OpencodeGo, ..)) => "opencode-go".to_string(),
                     Some(_) => "openai".to_string(),
                     None => v[1].to_lowercase(),
                 };
@@ -268,6 +270,7 @@ impl SetupForm {
                         Provider::Anthropic => "Anthropic needs an API key or an OAuth token (from `claude setup-token`)",
                         Provider::Mistral => "Mistral needs an API key",
                         Provider::Openrouter => "OpenRouter needs an API key",
+                        Provider::OpencodeGo => "OpenCode Go needs an API key",
                         Provider::Openai => "OpenAI needs an API key",
                     });
                 }
@@ -449,10 +452,21 @@ mod tests {
         let (t, _) = g.section().unwrap();
         assert_eq!(t["provider"].as_str(), Some("openrouter"));
         assert!(!t.contains_key("base_url"));
-        g.cycle_provider(true);
-        g.cycle_provider(true);
-        g.cycle_provider(true);
-        g.cycle_provider(true);
+        g.cycle_provider(false);
+        g.values[2] = "glm-5.3-flash".into();
+        let (t, s) = g.section().unwrap();
+        assert_eq!(t.to_string(), "provider = \"opencode-go\"\nmodel = \"glm-5.3-flash\"\n");
+        assert_eq!(account(&s), "llm:https://opencode.ai/inference/go/openai/v1");
+        let saved = Library::parse(Some(&format!("[llm.go]\n{t}")), None, [], None).unwrap();
+        let (_, p) = saved.llm_profile(Some("go")).unwrap();
+        assert_eq!((p.provider, p.url(), p.needs_key()), (Provider::OpencodeGo, "https://opencode.ai/inference/go/openai/v1", true));
+        assert_eq!(SetupForm::new(Kind::Llm, "go", &saved).values[1], "opencode-go");
+        g.values[4].clear();
+        assert!(g.section().unwrap_err().to_string().contains("OpenCode Go needs an API key"));
+        g.values[4] = "k".into();
+        for _ in 0..5 {
+            g.cycle_provider(true);
+        }
         assert!(!g.section().unwrap().0.contains_key("base_url"));
         let (t, _) = f.section().unwrap();
         assert_eq!(t.get("base_url").and_then(|v| v.as_str()), Some("https://localhost:8080/v1"));
