@@ -10,7 +10,9 @@ updates:
       cargo:
         patterns: ["*"]
     ignore:
-      # Kept on the major version zbus-secret-service-keyring-store uses.
+      # Kept on the major version zbus-secret-service-keyring-store uses. Its move to zbus 6
+      # (open-source-cooperative/zbus-secret-service-keyring-store#39) waits on secret-service
+      # 6.0.0; then bump both in yeda-secrets/Cargo.toml and drop this.
       - dependency-name: zbus
         update-types: ["version-update:semver-major"]
       # Must match the version openssl implements ForeignType from.

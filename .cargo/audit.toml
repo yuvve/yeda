@@ -1,5 +1,11 @@
 [advisories]
-# quick-xml 0.38 through hayagriva's citationberg, which has no release on a fixed quick-xml yet.
-# It only parses the .csl file the user passes to :cite, so the denial of service needs the
+# quick-xml 0.38 through hayagriva's citationberg: citationberg's main branch is on 0.41
+# (typst/citationberg#44) but unreleased (typst/citationberg#49), and hayagriva needs a release on
+# that. It only parses the .csl file the user passes to :cite, so the denial of service needs the
 # user's own file. Drop these once hayagriva updates.
 ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+
+# The unmaintained and unsound warnings stay warnings: none has a fix yeda can take yet. glib 0.18
+# and proc-macro-error come with Tauri's GTK3 stack, paste with hayagriva and image, unsafe-libyaml
+# with hayagriva, and zvariant, zvariant_derive and zbus_names with zbus 5 (see
+# .github/dependabot.yml).
