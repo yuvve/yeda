@@ -9,20 +9,21 @@ on:
     paths: [".github/workflows/builds.yml"]
   workflow_dispatch:
 
+# Read-only by default; only the jobs that publish a release get a write token.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apk:
     runs-on: ubuntu-latest
-    env:
-      APK: yeda.apk
+    outputs:
+      apk: ${{ steps.version.outputs.apk || 'yeda.apk' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -30,16 +31,17 @@ jobs:
             package-lock.json
             yeda-reader/reader/package-lock.json
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - run: npm ci
       - run: npm run build:reader -w yeda-reader
@@ -58,6 +60,7 @@ jobs:
       # and releases alike; the offset keeps it above the codes of earlier APKs, the last from android.yml's run 54.
       # v0.1.3 builds yeda-0.1.3.apk, android-v2026.10.21.3 yeda-2026.10.21-3.apk (Tauri wants semver).
       - name: Version from the tag
+        id: version
         if: github.ref_type == 'tag'
         run: |
           name=${GITHUB_REF_NAME#v}
@@ -67,11 +70,33 @@ jobs:
           fi
           code=$((2031000000 + GITHUB_RUN_NUMBER))
           echo "VERSION_CONFIG={\"version\":\"$name\",\"bundle\":{\"android\":{\"versionCode\":$code}}}" >> "$GITHUB_ENV"
-          echo "APK=yeda-$name.apk" >> "$GITHUB_ENV"
+          echo "apk=yeda-$name.apk" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         working-directory: yeda-android
         run: npx tauri android build --apk --target aarch64 --ci ${VERSION_CONFIG:+--config "$VERSION_CONFIG"}
+
+      # Signing happens in the sign job, so the keystore never shares a runner with the third-party actions above.
+      - name: Collect the unsigned APK
+        run: |
+          unsigned=$(find yeda-android/src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)
+          cp "$unsigned" unsigned.apk
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: yeda-apk-unsigned
+          path: unsigned.apk
+
+  # Only first-party actions and the runner's own SDK tools run next to the keystore.
+  sign:
+    needs: apk
+    runs-on: ubuntu-latest
+    env:
+      APK: ${{ needs.apk.outputs.apk }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: yeda-apk-unsigned
 
       # Without a keystore secret, a throwaway key signs the APK of a pull request or manual run; installing a later build
       # then needs an uninstall first. A tag build fails instead, so no release is ever signed with a throwaway key.
@@ -90,20 +115,31 @@ jobs:
             keytool -genkeypair -keystore release.jks -storepass "$KEYSTORE_PASSWORD" -alias release \
               -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=yeda"
           fi
-          unsigned=$(find yeda-android/src-tauri/gen/android/app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
-          "$apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --out "$APK" "$unsigned"
+          "$apksigner" sign --ks release.jks --ks-pass "pass:$KEYSTORE_PASSWORD" --out "$APK" unsigned.apk
+          rm -f release.jks
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: yeda-apk
           path: ${{ env.APK }}
 
+  beta:
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: yeda-apk
+
       - name: Publish the APK as a beta
-        if: startsWith(github.ref, 'refs/tags/android-v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$APK" --prerelease --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" yeda-*.apk --prerelease --title "$GITHUB_REF_NAME" --notes "yeda-android built from $GITHUB_SHA."
 
   linux:
     if: "!startsWith(github.ref, 'refs/tags/android-v')"
@@ -113,11 +149,11 @@ jobs:
         runner: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -125,9 +161,11 @@ jobs:
             package-lock.json
             yeda-reader/reader/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: System libraries for Tauri and git2
         run: |
@@ -144,22 +182,31 @@ jobs:
           [ "$GITHUB_REF_TYPE" = tag ] || name=dev
           tar -czf "yeda-$name-$(uname -m)-linux.tar.gz" -C target/release yeda
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: yeda-linux-${{ matrix.runner }}
           path: yeda-*-linux.tar.gz
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [apk, linux]
+    needs: [sign, linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      # Not the unsigned APK: fetch the signed one and the Linux binaries by name.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
+          name: yeda-apk
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: yeda-linux-*
           path: dist
           merge-multiple: true
 
