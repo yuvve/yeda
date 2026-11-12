@@ -274,9 +274,8 @@ impl SetupForm {
                 Setup::Llm(v[0].to_string(), p)
             }
             Kind::Webdav => {
-                if !v[1].starts_with("https://") && !v[1].starts_with("http://") {
-                    bail!("the URL starts with https:// or http://");
-                }
+                // The password goes with every request.
+                yeda_core::require_https(v[1])?;
                 if v[2].is_empty() || self.secret().is_none() {
                     bail!("give the user name and password");
                 }
@@ -425,9 +424,9 @@ mod tests {
 
     #[test]
     fn builds_and_checks_sections() {
-        let lib = Library::parse(Some("[llm.local]\nprovider = \"openai\"\nmodel = \"qwen\"\nbase_url = \"http://localhost:8080/v1\"\n"), None, [], None).unwrap();
+        let lib = Library::parse(Some("[llm.local]\nprovider = \"openai\"\nmodel = \"qwen\"\nbase_url = \"https://localhost:8080/v1\"\n"), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "local", &lib);
-        assert_eq!(f.values, ["local", "openai", "qwen", "http://localhost:8080/v1", ""]);
+        assert_eq!(f.values, ["local", "openai", "qwen", "https://localhost:8080/v1", ""]);
         let old = Library::parse(Some("[llm.or]\nprovider = \"openai\"\nmodel = \"m\"\nbase_url = \"https://openrouter.ai/api/v1/\"\n"), None, [], None).unwrap();
         assert_eq!(SetupForm::new(Kind::Llm, "or", &old).values[1], "openrouter");
         let mut g = SetupForm::new(Kind::Llm, "new", &lib);
@@ -456,7 +455,10 @@ mod tests {
         g.cycle_provider(true);
         assert!(!g.section().unwrap().0.contains_key("base_url"));
         let (t, _) = f.section().unwrap();
-        assert_eq!(t.get("base_url").and_then(|v| v.as_str()), Some("http://localhost:8080/v1"));
+        assert_eq!(t.get("base_url").and_then(|v| v.as_str()), Some("https://localhost:8080/v1"));
+        let mut h = SetupForm::new(Kind::Llm, "local", &lib);
+        h.values[3] = "http://localhost:8080/v1".into();
+        assert!(h.section().unwrap_err().to_string().contains("only go over https://"));
 
         let mut f = SetupForm::new(Kind::Llm, "claude", &lib);
         f.values[2] = "claude-opus-5-5".into();
@@ -468,6 +470,8 @@ mod tests {
         f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "pw".into()]);
         let (t, s) = f.section().unwrap();
         assert!(!t.contains_key("password"));
+        f.values[1] = "http://nas.local/pdfs".into();
+        assert!(f.section().unwrap_err().to_string().contains("only go over https://"));
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");
 
         let lib = Library::parse(Some("[searches]\nnew = { query = \"tag:x\", sort = \"author\", descending = true }\n"), None, [], None).unwrap();

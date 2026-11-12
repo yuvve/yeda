@@ -45,11 +45,12 @@ pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply
 }
 
 fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
-    // The key goes in a header, so only to https servers (or a local one).
+    // The key goes in a header, so only to https servers.
     yeda_core::require_https(url)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15 * 60)))
         .http_status_as_error(false)
+        .https_only(true)
         .build()
         .into();
     let mut req = agent.post(url).header("content-type", "application/json");
@@ -319,6 +320,17 @@ mod tests {
 
     fn header<'a>(h: &'a [(&str, String)], name: &str) -> Option<&'a str> {
         h.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn refuses_a_local_plain_http_server() {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        server.set_nonblocking(true).unwrap();
+        let p = Profile { provider: Provider::Openai, base_url: Some(format!("http://{}/v1", server.local_addr().unwrap())), ..profile(None) };
+        let err = ping(&p, Some("key")).unwrap_err().to_string();
+        assert!(err.contains("only go over https://"), "{err}");
+        assert!(search(&p, "s", "t", None).is_err());
+        assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
