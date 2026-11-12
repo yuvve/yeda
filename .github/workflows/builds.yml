@@ -73,7 +73,8 @@ jobs:
         working-directory: yeda-android
         run: npx tauri android build --apk --target aarch64 --ci ${VERSION_CONFIG:+--config "$VERSION_CONFIG"}
 
-      # Without a keystore secret, a throwaway key signs the APK; installing a later build then needs an uninstall first.
+      # Without a keystore secret, a throwaway key signs the APK of a pull request or manual run; installing a later build
+      # then needs an uninstall first. A tag build fails instead, so no release is ever signed with a throwaway key.
       - name: Sign APK
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -81,6 +82,9 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is empty; refusing to sign a release with a throwaway key"
+            exit 1
           else
             KEYSTORE_PASSWORD=throwaway
             keytool -genkeypair -keystore release.jks -storepass "$KEYSTORE_PASSWORD" -alias release \
