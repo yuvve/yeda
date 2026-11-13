@@ -7689,7 +7689,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "yeda"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "arboard",
@@ -7711,7 +7711,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-android"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "foreign-types 0.3.2",
@@ -7732,7 +7732,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "csv",
@@ -7747,7 +7747,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-fs"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "yeda-core",
@@ -7755,7 +7755,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-net"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -7768,7 +7768,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-reader"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "serde",
@@ -7783,7 +7783,7 @@ dependencies = [
 
 [[package]]
 name = "yeda-secrets"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "android-native-keyring-store",
  "anyhow",
