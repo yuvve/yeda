@@ -85,13 +85,25 @@ mod tests {
             refresh_token: Some("r".into()),
             client_id: Some("app_x".into()),
             account_id: Some("acc".into()),
+            host_id: Some("urn:uuid:1".into()),
+            id_token: Some("id.jwt".into()),
             expires_at: Some(1_000),
         };
         assert!(cred.needs_refresh(600, 900));
         assert!(!cred.needs_refresh(600, 100));
-        let json = serde_json::json!({"tokens": {"access_token": "a2", "refresh_token": "r2", "oauth_provenance": {"client_id": "app_x"}, "account_id": "acc"}});
+        let json = serde_json::json!({
+            "client_id": "app_x",
+            "ext_agent_host_id": "urn:uuid:1",
+            "id_token": "id.jwt",
+            "tokens": {"access_token": "a2", "refresh_token": "r2", "oauth_provenance": {"client_id": "app_x"}, "account_id": "acc"},
+        });
         assert_eq!(cred.refreshed("a2", Some("r2")), json.to_string());
-        let bare = CodexCredential { refresh_token: None, client_id: None, ..cred };
+        // A refresh round-trip keeps the identity, so the next sign-in reauthorizes the same one.
+        let again = CodexCredential::parse(&json.to_string()).unwrap();
+        assert_eq!(again.host_id.as_deref(), Some("urn:uuid:1"));
+        assert_eq!(again.id_token.as_deref(), Some("id.jwt"));
+        assert_eq!(again.client_id.as_deref(), Some("app_x"));
+        let bare = CodexCredential { refresh_token: None, client_id: None, host_id: None, id_token: None, ..cred };
         assert_eq!(bare.refreshed("a3", None), "\"a3\"");
     }
 }
@@ -104,6 +116,9 @@ pub struct CodexCredential {
     pub refresh_token: Option<String>,
     pub client_id: Option<String>,
     pub account_id: Option<String>,
+    /// The stable host id yeda signed in with, and the id token for its next sign-in.
+    pub host_id: Option<String>,
+    pub id_token: Option<String>,
     /// Seconds since the epoch when the access token stops working.
     pub expires_at: Option<i64>,
 }
@@ -125,6 +140,8 @@ impl CodexCredential {
                 refresh_token: tokens["refresh_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 client_id: tokens["oauth_provenance"]["client_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 account_id: tokens["account_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
+                host_id: v["ext_agent_host_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
+                id_token: v["id_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 expires_at: jwt_expires_at(access),
             })
         } else {
@@ -133,7 +150,7 @@ impl CodexCredential {
                 anyhow::bail!("no Codex OAuth token");
             }
             let expires_at = jwt_expires_at(&access);
-            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, expires_at })
+            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, host_id: None, id_token: None, expires_at })
         }
     }
 
@@ -146,7 +163,12 @@ impl CodexCredential {
                 "oauth_provenance": self.client_id.as_ref().map(|c| json!({"client_id": c})),
                 "account_id": self.account_id,
             });
-            json!({"tokens": tokens})
+            json!({
+                "client_id": self.client_id,
+                "ext_agent_host_id": self.host_id,
+                "id_token": self.id_token,
+                "tokens": tokens,
+            })
         } else {
             Value::String(access_token.into())
         };
@@ -162,7 +184,7 @@ impl CodexCredential {
         if self.refresh_token.is_some() {
             "the Codex access token has expired; run `codex login` again and re-run the command"
         } else {
-            "the Codex access token has expired; store the compacted `~/.codex/auth.json` (jq -c .) so yeda can refresh it"
+            "the Codex access token has expired; open its profile in :setup llm and press Enter to sign in again"
         }
     }
 }

@@ -1579,15 +1579,22 @@ impl App {
 
     fn setup_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        let Some(form) = &mut self.setup else { return };
-        if form.testing {
-            // Waiting for the browser or a slow test: Esc cancels, the thread's result is dropped.
+        // Waiting for the browser or a slow test: c copies the sign-in link, Esc cancels and
+        // drops the thread's result. Both end here, before the form is borrowed for editing.
+        if self.setup.as_ref().is_some_and(|form| form.testing) {
+            let link = self.setup.as_ref().and_then(|form| form.sign_in_url.clone());
             if k.code == KeyCode::Esc {
                 self.setup_job = None;
                 self.close_setup();
+            } else if link.is_some() && k.code == KeyCode::Char('c') {
+                self.status = match self.copy(link.as_ref().unwrap()) {
+                    Ok(()) => "sign-in link copied to the clipboard".into(),
+                    Err(e) => format!("clipboard: {e}"),
+                };
             }
             return;
         }
+        let Some(form) = &mut self.setup else { return };
         let n = form.values.len();
         match k.code {
             KeyCode::Esc => self.close_setup(),
@@ -1636,12 +1643,16 @@ impl App {
                     let (probe, test_secret) = (setup.clone(), secret.clone());
                     let account = setup::account(&setup);
                     // An empty field asks a Codex profile to sign in instead: stored credentials
-                    // are used as they are, and only a missing one starts the browser flow.
-                    let stored = secret.is_none()
-                        && matches!(&setup, setup::Setup::Llm(_, p) if p.provider == yeda_core::llm::Provider::Codex)
-                        && yeda_secrets::get(&account).ok().flatten().is_none();
-                    if stored {
-                        let Ok(sign_in) = yeda_net::codex::start(None, None) else {
+                    // reauthorize with their own client and host id, a missing one registers anew.
+                    let codex_empty = secret.is_none()
+                        && matches!(&setup, setup::Setup::Llm(_, p) if p.provider == yeda_core::llm::Provider::Codex);
+                    if codex_empty {
+                        let (issued, host, hint) = yeda_secrets::get(&account)
+                            .ok()
+                            .flatten()
+                            .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
+                            .map_or((None, None, None), |c| (c.client_id, c.host_id, c.id_token));
+                        let Ok(sign_in) = yeda_net::codex::start(issued.as_deref(), host.as_deref(), hint.as_deref()) else {
                             self.status = "could not start the sign-in listener".into();
                             return;
                         };

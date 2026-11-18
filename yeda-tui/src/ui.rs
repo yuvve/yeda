@@ -486,7 +486,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     }
     if let Some(url) = &form.sign_in_url {
         lines.push(Line::raw(""));
-        for hint in wrapped("yeda opened the sign-in link in your browser; open it yourself or copy this one, and finish signing in with ChatGPT:", chars_per_line) {
+        for hint in wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line) {
             lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
         }
         for line in wrapped(url, chars_per_line) {
@@ -509,7 +509,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     };
     let mut height = fields.len() as u16 + 3 + hint_lines.len() as u16;
     if let Some(url) = &form.sign_in_url {
-        height += 2 + wrapped("yeda opened the sign-in link in your browser; open it yourself or copy this one, and finish signing in with ChatGPT:", chars_per_line).len() as u16
+        height += 2 + wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line).len() as u16
             + wrapped(url, chars_per_line).len() as u16;
     }
     let area = popup(main, 76, height.max(5));
