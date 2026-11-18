@@ -13,6 +13,7 @@ pub mod library;
 pub mod llm;
 pub mod search;
 pub mod tables;
+pub mod web_search;
 #[cfg(feature = "zotero")]
 pub mod zotero;
 

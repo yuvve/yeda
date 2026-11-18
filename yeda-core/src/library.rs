@@ -124,6 +124,7 @@ struct Config {
     graph: Option<crate::graph::Settings>,
     fulltext: Option<crate::fulltext::Settings>,
     cite: Option<CiteSettings>,
+    web_search: Option<toml::Table>,
 }
 
 /// `[cite]` in yeda.toml.
@@ -158,7 +159,11 @@ pub struct Library {
     pub graph: crate::graph::Settings,
     /// `[fulltext]`, for fetching PDFs.
     pub fulltext: crate::fulltext::Settings,
+    /// `[web_search]`, for `:discover`.
+    pub web_search: crate::web_search::Settings,
     pub cite: CiteSettings,
+    /// Config the user should know about but that does not stop the load.
+    pub warnings: Vec<String>,
     pub refs: Vec<Ref>,
     /// References left out because a file of theirs doesn't parse, with the error. Their keys stay
     /// taken, so nothing overwrites those files.
@@ -262,6 +267,11 @@ impl Library {
             }
             if let Some(c) = cfg.cite {
                 lib.cite = c;
+            }
+            if let Some(t) = cfg.web_search {
+                let (settings, warnings) = crate::web_search::Settings::parse(Some(&t)).context(CONFIG)?;
+                lib.web_search = settings;
+                lib.warnings = warnings;
             }
         }
         for (key, text) in refs {
