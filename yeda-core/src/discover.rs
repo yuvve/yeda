@@ -238,6 +238,26 @@ pub fn candidate_id(n: usize) -> String {
     format!("c{n}")
 }
 
+/// The links and DOIs in a provider's own answer text, as hits. The text itself never reaches the model.
+pub fn links_in_answer(text: &str) -> Vec<Hit> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for word in text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | ')' | ']')) {
+        let word = word.trim_matches(|c: char| matches!(c, '(' | '[' | ',' | '.' | ';' | ':'));
+        let (url, doi) = match (word.strip_prefix("https://").or_else(|| word.strip_prefix("http://")), word.strip_prefix("doi:").or_else(|| word.strip_prefix("https://doi.org/"))) {
+            (Some(_), _) => (Some(word.to_string()), normalize_doi(word)),
+            (None, Some(_)) => (None, normalize_doi(word)),
+            (None, None) => continue,
+        };
+        let key = url.clone().or_else(|| doi.clone()).unwrap_or_default();
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(Hit { title: String::new(), url, doi, arxiv: None, text: None });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +285,9 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(arxiv_query(&["robot swarms".into(), "sparse coding".into()]), "(all:robot AND all:swarms) OR (all:sparse AND all:coding)");
         assert_eq!(normalize_doi("https://doi.org/10.1/ABC"), Some("10.1/abc".into()));
+        let links = links_in_answer("See https://a.org/x and doi:10.2/XYZ, also (https://b.org/y).");
+        assert_eq!(links.len(), 3);
+        assert_eq!((links[1].url.as_deref(), links[1].doi.as_deref()), (None, Some("10.2/xyz")));
     }
 
     #[test]

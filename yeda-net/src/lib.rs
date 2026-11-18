@@ -3,6 +3,7 @@
 
 pub mod llm;
 pub mod wand;
+pub mod web_search;
 pub mod webdav;
 pub mod openalex;
 pub mod fulltext;
