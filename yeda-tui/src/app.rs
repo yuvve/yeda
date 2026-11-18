@@ -1665,9 +1665,9 @@ impl App {
             self.setup_from_web_search = false;
             if let Some(form) = &mut self.web_search {
                 form.refresh();
+                self.mode = Mode::WebSearch;
+                return;
             }
-            self.mode = Mode::WebSearch;
-            return;
         }
         self.mode = Mode::Normal;
         if !self.setup_menu.is_empty() {
@@ -1682,7 +1682,10 @@ impl App {
     }
 
     fn websearch_key(&mut self, k: KeyEvent) {
-        let Some(form) = &mut self.web_search else { return };
+        let Some(form) = &mut self.web_search else {
+            self.mode = Mode::Normal;
+            return;
+        };
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let mut warn = false;
         match k.code {
@@ -1725,12 +1728,21 @@ impl App {
                     return;
                 }
                 let section = form.section();
-                let result = self.lib.update_config(|t| {
+                let applied = match self.lib.update_config(|t| {
                     let web = config_section(t, "web_search")?;
                     web.extend(section.clone());
                     Ok(())
-                });
-                self.after_config_change(result);
+                }) {
+                    Ok(effect) => self.apply(Ok(vec![effect])),
+                    Err(e) => {
+                        self.status = format!("{e:#}");
+                        false
+                    }
+                };
+                if !applied {
+                    return;
+                }
+                self.reload();
                 self.web_search = None;
                 self.mode = Mode::Normal;
                 self.status = "saved [web_search] to yeda.toml".into();
@@ -1809,25 +1821,34 @@ impl App {
             if let Some(form) = &mut self.web_search {
                 form.refresh();
             }
-            self.mode = Mode::WebSearch;
+            self.mode = if self.web_search.is_some() { Mode::WebSearch } else { Mode::Normal };
             self.status = format!("saved the {} key to the secret store{stored}", provider.name());
             return;
         }
         if let setup::Setup::Searxng(url) = &job.setup {
             let url = url.clone();
             let warning = if url.contains('?') || url.contains('#') { "; the query string is stored in yeda.toml, which syncs through git; a token does not belong there" } else { "" };
-            let result = self.lib.update_config(|t| {
+            let applied = match self.lib.update_config(|t| {
                 config_section(t, "web_search")?.insert("searxng_url".into(), url.into());
                 Ok(())
-            });
-            self.after_config_change(result);
+            }) {
+                Ok(effect) => self.apply(Ok(vec![effect])),
+                Err(e) => {
+                    self.status = format!("{e:#}");
+                    false
+                }
+            };
+            if !applied {
+                return;
+            }
+            self.reload();
             crate::discover::clear_down(yeda_core::web_search::Provider::Searxng);
             self.setup = None;
             self.setup_from_web_search = false;
             if let Some(form) = &mut self.web_search {
                 form.refresh();
             }
-            self.mode = Mode::WebSearch;
+            self.mode = if self.web_search.is_some() { Mode::WebSearch } else { Mode::Normal };
             self.status = format!("searxng URL saved; enable it here{warning}");
             return;
         }
@@ -2303,10 +2324,24 @@ impl App {
                 ("setup", rest) => {
                     let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
                     if kind == "web-search" {
-                        if name.trim().is_empty() {
-                            self.open_web_search();
-                        } else {
-                            self.status = "usage: :setup web-search [keenable|exa|parallel|firecrawl|searxng]".into();
+                        match name.trim() {
+                            "" => self.open_web_search(),
+                            provider => {
+                                let kind = match provider {
+                                    "keenable" => setup::Kind::Keenable,
+                                    "exa" => setup::Kind::Exa,
+                                    "parallel" => setup::Kind::Parallel,
+                                    "firecrawl" => setup::Kind::Firecrawl,
+                                    "searxng" => setup::Kind::Searxng,
+                                    _ => {
+                                        self.status = "usage: :setup web-search [keenable|exa|parallel|firecrawl|searxng]".into();
+                                        return;
+                                    }
+                                };
+                                self.setup_from_web_search = false;
+                                self.setup = Some(SetupForm::new(kind, "", &self.lib));
+                                self.mode = Mode::Setup;
+                            }
                         }
                         return;
                     }
@@ -2326,7 +2361,7 @@ impl App {
                             return;
                         }
                     };
-                    self.setup_from_web_search = matches!(kind, setup::Kind::Keenable | setup::Kind::Exa | setup::Kind::Parallel | setup::Kind::Firecrawl | setup::Kind::Searxng);
+                    self.setup_from_web_search = false;
                     self.setup = Some(SetupForm::new(kind, name.trim(), &self.lib));
                     self.mode = Mode::Setup;
                 }

@@ -250,9 +250,9 @@ struct Outcome {
     done: bool,
 }
 
-fn cache_key(provider: Provider, keyed: bool, searxng: Option<&str>, query: &str, limit: usize) -> String {
+fn cache_key(provider: Provider, keyed: bool, searxng: Option<&str>, query: &str, limit: usize, extra: &str) -> String {
     let searxng = searxng.and_then(yeda_core::web_search::searxng_host).unwrap_or_default();
-    format!("{}|{keyed}|{searxng}|{limit}|{query}", provider.name())
+    format!("{}|{keyed}|{searxng}|{limit}|{extra}|{query}", provider.name())
 }
 
 fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: Instant, states: &States) -> Vec<Outcome> {
@@ -273,7 +273,8 @@ fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: In
             let key = input.keys.get(&provider).cloned();
             let searxng = input.settings.searxng_url.clone();
             let limit = input.settings.discover_results;
-            let cache_key = cache_key(provider, key.is_some(), searxng.as_deref(), query, limit);
+            let extra = if provider == Provider::ModelProviderWebSearch { format!("{}|{}", input.profile.url(), input.profile.model) } else { String::new() };
+            let cache_key = cache_key(provider, key.is_some(), searxng.as_deref(), query, limit, &extra);
             if !input.fresh
                 && let Some(body) = yeda_fs::discover::get(input.cache.as_deref(), "search", &cache_key)
                 && let Ok(hits) = serde_json::from_str::<Vec<Hit>>(&body)
@@ -328,9 +329,13 @@ fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: In
                 if outcomes[index].reason.is_none() {
                     outcomes[index].reason = Some(failure.reason.clone());
                 }
+                let setting = matches!(failure.kind, yeda_net::web_search::Kind::Setting);
                 states.failure(provider, &failure);
                 if matches!(failure.kind, yeda_net::web_search::Kind::Down) {
                     outcomes[index].down = true;
+                }
+                if setting {
+                    outcomes[index].done = true;
                 }
             }
         }
@@ -563,6 +568,6 @@ mod tests {
         let mut cached = outcome(Provider::Keenable, 2, 2, None, false);
         cached.cached = 2;
         assert_eq!(search_note(&[cached], None).unwrap(), "web search: keenable (cached)");
-        assert!(cache_key(Provider::Exa, false, None, "q", 15) != cache_key(Provider::Exa, true, None, "q", 15));
+        assert!(cache_key(Provider::Exa, false, None, "q", 15, "") != cache_key(Provider::Exa, true, None, "q", 15, ""));
     }
 }

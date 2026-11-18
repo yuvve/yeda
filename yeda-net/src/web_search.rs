@@ -207,6 +207,9 @@ fn http_date(value: &str) -> Option<SystemTime> {
     let year: u64 = year.parse().ok()?;
     let mut clock = time.split(':');
     let (h, m, s): (u64, u64, u64) = (clock.next()?.parse().ok()?, clock.next()?.parse().ok()?, clock.next()?.parse().ok()?);
+    if !(1..=31).contains(&day) || year == 0 || h > 23 || m > 59 || s > 60 {
+        return None;
+    }
     let y = if month <= 2 { year - 1 } else { year };
     let era = y / 400;
     let yoe = y - era * 400;
@@ -291,7 +294,14 @@ fn hit(title: String, url: &str, text: Option<String>) -> Hit {
         .split("arxiv.org/abs/")
         .nth(1)
         .or_else(|| url.split("arxiv.org/pdf/").nth(1))
-        .map(|id| id.split(['?', '#', '/']).next().unwrap_or(id).trim_end_matches(".pdf").to_string());
+        .map(|id| {
+            let id = id.split(['?', '#', '/']).next().unwrap_or(id).trim_end_matches(".pdf");
+            // The version names the same paper in OpenAlex, whose DOI has none.
+            match id.rsplit_once('v').filter(|(_, v)| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit())) {
+                Some((base, _)) => base.to_string(),
+                None => id.to_string(),
+            }
+        });
     Hit { title, url: Some(url.to_string()), doi, arxiv, text }
 }
 
@@ -343,8 +353,25 @@ fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
     let Some(base) = s.searxng_url else { return Err(Failure::setting("no URL")) };
     let Some(host) = searxng_host(base) else { return Err(Failure::setting("no URL")) };
     let ctx = Ctx { provider: s.provider, keyed: false, key: None };
-    let url = format!("{}/search", base.trim_end_matches('/'));
-    let reply = get(&url, &host, &ctx, &[("q", s.query.to_string()), ("format", "json".to_string())])?;
+    // A token in the instance URL's query string is kept, in front of the search parameters.
+    let without_fragment = base.split('#').next().unwrap_or(base);
+    let (path, extra) = match without_fragment.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (without_fragment, None),
+    };
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(extra) = extra {
+        for pair in extra.split('&').filter(|p| !p.is_empty()) {
+            match pair.split_once('=') {
+                Some((k, v)) => params.push((k, v.to_string())),
+                None => params.push((pair, String::new())),
+            }
+        }
+    }
+    params.push(("q", s.query.to_string()));
+    params.push(("format", "json".to_string()));
+    let url = format!("{}/search", path.trim_end_matches('/'));
+    let reply = get(&url, &host, &ctx, &params)?;
     let body = json_reply(&reply)?;
     if body["results"].as_array().is_none() {
         return Err(Failure::down("bad response"));
@@ -435,6 +462,8 @@ mod tests {
         let exa = json!({"results": [{"title": "B", "url": "https://arxiv.org/abs/2401.01234", "highlights": ["one", "two"]}]});
         assert_eq!(hits(&exa)[0].text.as_deref(), Some("one\ntwo"));
         assert_eq!(hits(&exa)[0].arxiv.as_deref(), Some("2401.01234"));
+        let versioned = json!({"results": [{"title": "V", "url": "https://arxiv.org/abs/2401.01234v2"}]});
+        assert_eq!(hits(&versioned)[0].arxiv.as_deref(), Some("2401.01234"));
         let fire = json!({"success": true, "data": {"web": [{"title": "C", "url": "https://c.org", "description": "d"}]}});
         assert_eq!(hits(&fire)[0].title, "C");
     }
@@ -461,6 +490,7 @@ mod tests {
         let keyed = Ctx { provider: Provider::Exa, keyed: true, key: Some("k") };
         assert_eq!(status_failure(401, None, None, &keyed).reason, "key rejected");
         assert!(parse_retry_after("Sun, 06 Nov 2094 08:49:37 GMT").is_some());
+        assert_eq!(parse_retry_after("Sun, 0 Mar 1994 00:00:00 GMT"), None);
         assert_eq!(parse_retry_after("120"), Some(Duration::from_secs(120)));
     }
 }

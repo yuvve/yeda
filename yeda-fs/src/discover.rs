@@ -1,6 +1,6 @@
 //! The `:discover` cache: search results and OpenAlex lookups, per device and outside the library.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -37,7 +37,8 @@ pub fn spaced<T>(dir: Option<&Path>, gap: Duration, f: impl FnOnce() -> T) -> Re
             }
         }
         let out = f();
-        crate::write_atomic(&dir.join("last"), millis().to_string().as_bytes()).context("writing the arXiv request time")?;
+        // A failed stamp only costs the next call its gap; the answer is already good.
+        let _ = crate::write_atomic(&dir.join("last"), millis().to_string().as_bytes());
         Ok(out)
     })
 }
