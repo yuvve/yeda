@@ -13,6 +13,7 @@ fn path(cache: Option<&Path>, kind: &str, key: &str) -> Option<PathBuf> {
 }
 
 pub fn get(cache: Option<&Path>, kind: &str, key: &str) -> Option<String> {
+    // shortcut: entries never expire; :discover! bypasses them.
     fs::read_to_string(path(cache, kind, key)?).ok()
 }
 

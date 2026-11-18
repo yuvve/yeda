@@ -331,9 +331,6 @@ impl SetupForm {
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => Setup::ApiKey(self.kind.web_search_provider().unwrap()),
             Kind::Searxng => {
                 yeda_core::web_search::check_searxng_url(v[0])?;
-                if v[0].contains('?') || v[0].contains('#') {
-                    bail!("a query string is stored in yeda.toml, which syncs through git; a token does not belong there");
-                }
                 t.insert("searxng_url".into(), v[0].trim_end_matches('/').into());
                 Setup::Searxng(v[0].trim_end_matches('/').to_string())
             }

@@ -19,6 +19,8 @@ const MAX_MATCHED: usize = 60;
 pub struct Candidate {
     pub found: Found,
     pub work: Option<Work>,
+    /// The provider's snippet or abstract, for the ranking call.
+    pub text: Option<String>,
 }
 
 impl Candidate {
@@ -151,9 +153,14 @@ pub fn down(provider: Provider) -> Option<String> {
     states().down(provider)
 }
 
-/// Forgets a provider's cool-down and down state; a key or URL change makes it a different service.
+/// Forgets a provider's cool-down and down state; a key change makes it a different service.
 pub fn clear_state(provider: Provider) {
     states().clear(provider);
+}
+
+/// Forgets only a provider's down state; a SearXNG URL change keeps its cool-down.
+pub fn clear_down(provider: Provider) {
+    states().clear_down(provider);
 }
 
 #[derive(Default)]
@@ -184,6 +191,13 @@ impl States {
 
     fn down(&self, provider: Provider) -> Option<String> {
         self.0.lock().unwrap().get(&provider).and_then(|s| s.down.clone())
+    }
+
+    /// Saving a SearXNG URL clears the down state, but keeps the cool-down and its count.
+    fn clear_down(&self, provider: Provider) {
+        if let Some(state) = self.0.lock().unwrap().get_mut(&provider) {
+            state.down = None;
+        }
     }
 
     fn success(&self, provider: Provider, reset_in: Option<Duration>) {
@@ -414,7 +428,7 @@ fn match_hits(client: &yeda_net::openalex::Client, hits: &[Hit], input: &Input) 
                     url: hit.url.clone(),
                     why: String::new(),
                 };
-                found.push(Candidate { found: found_hit, work: Some(work) });
+                found.push(Candidate { found: found_hit, work: Some(work), text: hit.text.clone() });
             }
             Ok(_) => dropped += 1,
             Err(e) => {
@@ -476,7 +490,7 @@ fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
             venue: c.work.as_ref().and_then(|w| w.venue.clone()),
             doi: c.found.doi.clone(),
             url: c.found.url.clone(),
-            abstract_text: None,
+            abstract_text: c.text.as_ref().map(|t| t.chars().take(1200).collect()),
         })
         .collect();
     let picks = yeda_net::llm::text(&input.profile, discover::RANK_SYSTEM, &discover::ranking_request(&input.prompt, &candidates, input.settings.discover_results), input.key.as_deref())
@@ -531,6 +545,9 @@ mod tests {
         assert_eq!(states.blocked(p), Some(("timeout".into(), true)));
         states.failure(Provider::Searxng, &Failure::setting("no URL"));
         assert_eq!(states.blocked(Provider::Searxng), None);
+        states.failure(p, &Failure::rate_limited(None));
+        states.clear_down(p);
+        assert_eq!(states.blocked(p), Some(("rate limited".into(), false)), "a URL change keeps the cool-down");
     }
 
     #[test]

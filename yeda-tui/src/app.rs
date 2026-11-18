@@ -1692,8 +1692,8 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => form.move_cursor(true),
             KeyCode::Char('k') | KeyCode::Up => form.move_cursor(false),
-            KeyCode::Char('g') | KeyCode::Home => form.sel = 0,
-            KeyCode::Char('G') | KeyCode::End => form.sel = form.rows().len().saturating_sub(1),
+            KeyCode::Char('g') | KeyCode::Home => form.select_edge(false),
+            KeyCode::Char('G') | KeyCode::End => form.select_edge(true),
             KeyCode::Char('a') => warn = form.set_group(0),
             KeyCode::Char('f') => warn = form.set_group(1),
             KeyCode::Char('d') if !ctrl => warn = form.set_group(2),
@@ -1815,19 +1815,20 @@ impl App {
         }
         if let setup::Setup::Searxng(url) = &job.setup {
             let url = url.clone();
+            let warning = if url.contains('?') || url.contains('#') { "; the query string is stored in yeda.toml, which syncs through git; a token does not belong there" } else { "" };
             let result = self.lib.update_config(|t| {
                 config_section(t, "web_search")?.insert("searxng_url".into(), url.into());
                 Ok(())
             });
             self.after_config_change(result);
-            crate::discover::clear_state(yeda_core::web_search::Provider::Searxng);
+            crate::discover::clear_down(yeda_core::web_search::Provider::Searxng);
             self.setup = None;
             self.setup_from_web_search = false;
             if let Some(form) = &mut self.web_search {
                 form.refresh();
             }
             self.mode = Mode::WebSearch;
-            self.status = "searxng URL saved; enable it here".into();
+            self.status = format!("searxng URL saved; enable it here{warning}");
             return;
         }
         self.save_setup(job.section, &stored);
@@ -3986,8 +3987,8 @@ mod tests {
     #[test]
     fn discover_status_says_when_the_web_was_not_searched() {
         let found = yeda_core::discover::Found { title: "Swarms".into(), authors: "Doe".into(), year: None, doi: None, url: None, why: String::new() };
-        let found = [super::Candidate { found, work: None }];
-        let note = "answered without web search, from what the model knows";
+        let found = [super::Candidate { found, work: None, text: None }];
+        let note = "web search: keenable (exa: rate limited)";
         assert_eq!(super::discover_status(&found, Some(note)), format!("discover: 1 papers, 0 found in OpenAlex ({note})"));
         assert_eq!(super::discover_status(&found, None), "discover: 1 papers, 0 found in OpenAlex");
         assert_eq!(super::discover_status(&[], Some(note)), format!("discover: no papers found ({note})"));

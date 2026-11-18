@@ -55,7 +55,16 @@ impl WebSearchForm {
     }
 
     fn first_selectable(&self) -> usize {
-        self.rows().iter().position(|r| *r != Row::Header("") && !matches!(r, Row::Header(_))).unwrap_or(0)
+        self.rows().iter().position(|r| !matches!(r, Row::Header(_))).unwrap_or(0)
+    }
+
+    /// `g`/`G`: the first or last row that can be selected.
+    pub fn select_edge(&mut self, last: bool) {
+        let rows = self.rows();
+        let found = if last { rows.iter().rposition(|r| !matches!(r, Row::Header(_))) } else { rows.iter().position(|r| !matches!(r, Row::Header(_))) };
+        if let Some(i) = found {
+            self.sel = i;
+        }
     }
 
     pub fn selected(&self) -> Option<Row> {
