@@ -646,7 +646,7 @@ pub struct App {
     confirming: Option<(String, String)>,
     /// The next `action` call was confirmed already.
     confirmed: bool,
-    discover_job: Option<Receiver<crate::discover::Suggestions>>,
+    discover_job: Option<Receiver<crate::discover::Msg>>,
     /// How the last :discover answered, if the user should know (no web search).
     pub found_note: Option<String>,
     pub found: Vec<Candidate>,
@@ -2170,8 +2170,9 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
-                ("discover", args) => {
-                    if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text)) {
+                (cmd @ ("discover" | "discover!"), args) => {
+                    let fresh = cmd.ends_with('!');
+                    if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text, fresh)) {
                         self.status = format!("{e:#}");
                     }
                 }
@@ -2347,7 +2348,7 @@ impl App {
     }
 
     /// `:discover [what]`: asks the LLM profile `llm`, else the default one, for papers like the selected or marked ones, or as described.
-    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str) -> anyhow::Result<()> {
+    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str, _fresh: bool) -> anyhow::Result<()> {
         if self.discover_job.is_some() {
             anyhow::bail!("already searching");
         }
@@ -2358,11 +2359,23 @@ impl App {
         }
         let (name, profile) = self.lib.llm_profile(llm)?;
         let Some(key) = self.llm_key(&name, &profile, command) else { return Ok(()) };
-        let from: Vec<&Ref> = targets.iter().map(|&i| &self.lib.refs[i]).collect();
-        let openalex = self.secrets.get(OPENALEX_ACCOUNT).cloned();
+        let from: Vec<Ref> = targets.iter().map(|&i| self.lib.refs[i].clone()).collect();
+        let openalex = self.openalex_key();
+        let settings = self.lib.web_search.clone();
+        let mut keys = HashMap::new();
+        for (provider, account) in [
+            (yeda_core::web_search::Provider::Keenable, yeda_secrets::KEENABLE),
+            (yeda_core::web_search::Provider::Exa, yeda_secrets::EXA),
+            (yeda_core::web_search::Provider::Parallel, yeda_secrets::PARALLEL),
+            (yeda_core::web_search::Provider::Firecrawl, yeda_secrets::FIRECRAWL),
+        ] {
+            if let Ok(Some(k)) = yeda_secrets::get(account) {
+                keys.insert(provider, k);
+            }
+        }
         // The server is named, since a shared yeda.toml decides where the text goes.
         let server = profile.url().to_string();
-        self.discover_job = Some(crate::discover::spawn(profile, key, prompt, &from, openalex));
+        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt: prompt.into(), from: from.clone(), openalex_key: openalex, settings, keys }));
         self.status = format!("asking {name} at {server} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
         Ok(())
     }
@@ -2485,29 +2498,37 @@ impl App {
 
     pub fn poll_discover(&mut self) {
         let Some(rx) = &self.discover_job else { return };
-        let result = match rx.try_recv() {
-            Ok(r) => r,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!("the search stopped")),
-        };
-        self.discover_job = None;
-        match result {
-            Ok((found, note)) => {
-                self.status = discover_status(&found, note.as_deref());
-                if found.is_empty() {
+        loop {
+            match rx.try_recv() {
+                Ok(crate::discover::Msg::Progress(line)) => self.status = line,
+                Ok(crate::discover::Msg::Done(result)) => {
+                    self.discover_job = None;
+                    match result {
+                        Ok((found, note)) => {
+                            self.status = discover_status(&found, note.as_deref());
+                            if found.is_empty() {
+                                return;
+                            }
+                            self.found_note = note;
+                            self.found = found;
+                            let mut found = std::mem::take(&mut self.found);
+                            found.sort_by_key(|c| self.found_in_library(c));
+                            self.found = found;
+                            self.found_sel = 0;
+                            self.found_marked.clear();
+                            self.mode = Mode::Found;
+                        }
+                        Err(e) => self.status = format!("discover: {e:#}"),
+                    }
                     return;
                 }
-                self.found_note = note;
-                self.found = found;
-                // The LLM only knows the papers it was given, so it suggests others the library has.
-                let mut found = std::mem::take(&mut self.found);
-                found.sort_by_key(|c| self.found_in_library(c));
-                self.found = found;
-                self.found_sel = 0;
-                self.found_marked.clear();
-                self.mode = Mode::Found;
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.discover_job = None;
+                    self.status = "discover: the search stopped".into();
+                    return;
+                }
             }
-            Err(e) => self.status = format!("discover: {e:#}"),
         }
     }
 
