@@ -2348,7 +2348,7 @@ impl App {
     }
 
     /// `:discover [what]`: asks the LLM profile `llm`, else the default one, for papers like the selected or marked ones, or as described.
-    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str, _fresh: bool) -> anyhow::Result<()> {
+    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str, fresh: bool) -> anyhow::Result<()> {
         if self.discover_job.is_some() {
             anyhow::bail!("already searching");
         }
@@ -2375,7 +2375,7 @@ impl App {
         }
         // The server is named, since a shared yeda.toml decides where the text goes.
         let server = profile.url().to_string();
-        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt: prompt.into(), from: from.clone(), openalex_key: openalex, settings, keys }));
+        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt: prompt.into(), from: from.clone(), openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
         self.status = format!("asking {name} at {server} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
         Ok(())
     }

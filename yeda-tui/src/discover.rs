@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -59,6 +60,10 @@ pub struct Input {
     pub openalex_key: Option<String>,
     pub settings: Settings,
     pub keys: HashMap<Provider, String>,
+    /// The device cache folder (`$XDG_CACHE_HOME/yeda`), if there is one.
+    pub cache: Option<PathBuf>,
+    /// `:discover!`: read no cached results, but keep writing them.
+    pub fresh: bool,
 }
 
 /// Runs the pipeline in the background, reporting the queries while it searches.
@@ -83,10 +88,10 @@ pub fn run(input: &Input, progress: &dyn Fn(String)) -> Suggestions {
     let states = states();
     let arxiv_max = input.settings.discover_results * queries.len();
     let (mut outcomes, mut arxiv_rx, mut arxiv_deadline) = if input.settings.always.is_empty() {
-        (Vec::new(), Some(start_arxiv(&queries, arxiv_max)), Instant::now() + PHASE)
+        (Vec::new(), Some(start_arxiv(&queries, arxiv_max, input)), Instant::now() + PHASE)
     } else {
         let deadline = Instant::now() + PHASE;
-        (phase(&input.settings.always, &queries, input, deadline, states), Some(start_arxiv(&queries, arxiv_max)), deadline)
+        (phase(&input.settings.always, &queries, input, deadline, states), Some(start_arxiv(&queries, arxiv_max, input)), deadline)
     };
 
     let fallback_ran = outcomes.iter().all(|o| o.answered == 0) && !input.settings.fallback.is_empty();
@@ -117,7 +122,7 @@ pub fn run(input: &Input, progress: &dyn Fn(String)) -> Suggestions {
     let hits = discover::dedupe_hits(hits);
     let client = yeda_net::openalex::Client::new(input.openalex_key.clone());
     let mut notes: Vec<String> = note.into_iter().collect();
-    let (mut found, dropped, openalex_failure) = match_hits(&client, &hits);
+    let (mut found, dropped, openalex_failure) = match_hits(&client, &hits, input);
     if let Some(reason) = openalex_failure {
         notes.push(format!("OpenAlex: {reason}"));
     }
@@ -204,6 +209,8 @@ struct Outcome {
     provider: Provider,
     expected: usize,
     answered: usize,
+    /// How many of the answers came from the cache.
+    cached: usize,
     hits: Vec<Hit>,
     /// The first failure's reason.
     reason: Option<String>,
@@ -211,12 +218,17 @@ struct Outcome {
     done: bool,
 }
 
+fn cache_key(provider: Provider, keyed: bool, searxng: Option<&str>, query: &str, limit: usize) -> String {
+    let searxng = searxng.and_then(yeda_core::web_search::searxng_host).unwrap_or_default();
+    format!("{}|{keyed}|{searxng}|{limit}|{query}", provider.name())
+}
+
 fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: Instant, states: &States) -> Vec<Outcome> {
     let (tx, rx) = mpsc::channel::<(Provider, Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure>)>();
     let mut outcomes: Vec<Outcome> = Vec::new();
     let mut pending: Vec<usize> = Vec::new();
     for &provider in providers {
-        let outcome = Outcome { provider, expected: queries.len(), answered: 0, hits: Vec::new(), reason: None, down: false, done: false };
+        let outcome = Outcome { provider, expected: queries.len(), answered: 0, cached: 0, hits: Vec::new(), reason: None, down: false, done: false };
         let index = outcomes.len();
         outcomes.push(outcome);
         if let Some((reason, down)) = states.blocked(provider) {
@@ -226,22 +238,41 @@ fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: In
             continue;
         }
         for query in queries {
-            let tx = tx.clone();
-            let query = query.clone();
             let key = input.keys.get(&provider).cloned();
             let searxng = input.settings.searxng_url.clone();
+            let limit = input.settings.discover_results;
+            let cache_key = cache_key(provider, key.is_some(), searxng.as_deref(), query, limit);
+            if !input.fresh
+                && let Some(body) = yeda_fs::discover::get(input.cache.as_deref(), "search", &cache_key)
+                && let Ok(hits) = serde_json::from_str::<Vec<Hit>>(&body)
+            {
+                outcomes[index].answered += 1;
+                outcomes[index].cached += 1;
+                outcomes[index].hits.extend(hits);
+                continue;
+            }
+            let tx = tx.clone();
+            let query = query.clone();
             let profile = input.profile.clone();
             let llm_key = input.key.clone();
-            let limit = input.settings.discover_results;
+            let cache = input.cache.clone();
             std::thread::spawn(move || {
                 let result = if provider == Provider::ModelProviderWebSearch {
                     native(&profile, llm_key.as_deref(), &query, limit)
                 } else {
                     yeda_net::web_search::search(&yeda_net::web_search::Search { provider, query: &query, limit, key: key.as_deref(), searxng_url: searxng.as_deref() })
                 };
+                if let Ok(answer) = &result
+                    && let Ok(body) = serde_json::to_string(&answer.hits)
+                {
+                    yeda_fs::discover::put(cache.as_deref(), "search", &cache_key, &body);
+                }
                 let _ = tx.send((provider, result));
             });
             pending.push(index);
+        }
+        if outcomes[index].answered >= outcomes[index].expected {
+            outcomes[index].done = true;
         }
     }
     drop(tx);
@@ -292,11 +323,16 @@ fn native(profile: &Profile, key: Option<&str>, query: &str, limit: usize) -> st
     Ok(yeda_net::web_search::Answer { hits: discover::links_in_answer(&text.text), reset_in: None })
 }
 
-fn start_arxiv(queries: &[String], max: usize) -> Receiver<std::result::Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure>> {
+fn start_arxiv(queries: &[String], max: usize, input: &Input) -> Receiver<std::result::Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure>> {
     let (tx, rx) = mpsc::channel();
     let query = discover::arxiv_query(queries);
+    let dir = input.cache.as_ref().map(|c| c.join("discover/arxiv"));
     std::thread::spawn(move || {
-        let _ = tx.send(yeda_net::web_search::arxiv(&query, max));
+        let result = match yeda_fs::discover::spaced(dir.as_deref(), Duration::from_secs(3), || yeda_net::web_search::arxiv(&query, max)) {
+            Ok(result) => result,
+            Err(e) => Err(yeda_net::web_search::Failure::down(format!("{e:#}"))),
+        };
+        let _ = tx.send(result);
     });
     rx
 }
@@ -307,8 +343,9 @@ fn search_note(outcomes: &[Outcome], arxiv_failure: Option<&str>) -> Option<Stri
         .filter(|o| o.answered > 0)
         .map(|o| {
             let failed = o.expected.saturating_sub(o.answered);
+            let cached = if o.cached == o.answered && o.cached > 0 { " (cached)" } else { "" };
             if failed == 0 {
-                o.provider.name().to_string()
+                format!("{}{cached}", o.provider.name())
             } else {
                 format!("{} ({failed} of {} failed: {})", o.provider.name(), o.expected, reason_text(o))
             }
@@ -343,13 +380,13 @@ fn reason_text(o: &Outcome) -> String {
 }
 
 /// Matches hits to OpenAlex works, deduplicated by work; hits without a confident match are dropped.
-fn match_hits(client: &yeda_net::openalex::Client, hits: &[Hit]) -> (Vec<Candidate>, usize, Option<String>) {
+fn match_hits(client: &yeda_net::openalex::Client, hits: &[Hit], input: &Input) -> (Vec<Candidate>, usize, Option<String>) {
     let mut found: Vec<Candidate> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut dropped = 0;
     let mut error = None;
     for hit in hits.iter().take(MAX_MATCHED) {
-        match match_hit(client, hit) {
+        match match_hit(client, hit, input.cache.as_deref(), input.fresh) {
             Ok(Some(work)) if seen.insert(work.id.clone()) => {
                 let found_hit = Found {
                     title: work.title.clone(),
@@ -371,17 +408,41 @@ fn match_hits(client: &yeda_net::openalex::Client, hits: &[Hit]) -> (Vec<Candida
     (found, dropped, error)
 }
 
-fn match_hit(client: &yeda_net::openalex::Client, hit: &Hit) -> Result<Option<Work>> {
+fn match_hit(client: &yeda_net::openalex::Client, hit: &Hit, cache: Option<&Path>, fresh: bool) -> Result<Option<Work>> {
+    let read = (!fresh).then_some(cache).flatten();
     let doi = hit.doi.clone().or_else(|| hit.arxiv.as_ref().map(|a| format!("10.48550/arxiv.{a}")));
-    if let Some(doi) = doi
-        && let Some(work) = client.one_by_doi(&doi)?
-    {
-        return Ok(Some(work));
+    if let Some(doi) = doi {
+        let key = format!("doi:{doi}");
+        if let Some(cached) = cached_work(read, &key) {
+            return Ok(cached);
+        }
+        let work = client.one_by_doi(&doi)?;
+        put_work(cache, &key, &work);
+        if work.is_some() {
+            return Ok(work);
+        }
     }
     if hit.title.trim().is_empty() {
         return Ok(None);
     }
-    Ok(client.by_title(&hit.title, None)?.into_iter().find(|w| graph::same_title(&w.title, &hit.title)))
+    let key = format!("title:{}", hit.title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase());
+    if let Some(cached) = cached_work(read, &key) {
+        return Ok(cached);
+    }
+    let work = client.by_title(&hit.title, None)?.into_iter().find(|w| graph::same_title(&w.title, &hit.title));
+    put_work(cache, &key, &work);
+    Ok(work)
+}
+
+fn cached_work(read: Option<&Path>, key: &str) -> Option<Option<Work>> {
+    let body = yeda_fs::discover::get(read, "openalex", key)?;
+    serde_json::from_str(&body).ok()
+}
+
+fn put_work(cache: Option<&Path>, key: &str, work: &Option<Work>) {
+    if let Ok(body) = serde_json::to_string(work) {
+        yeda_fs::discover::put(cache, "openalex", key, &body);
+    }
 }
 
 fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
@@ -426,7 +487,7 @@ mod tests {
     use yeda_net::web_search::Failure;
 
     fn outcome(provider: Provider, expected: usize, answered: usize, reason: Option<&str>, down: bool) -> Outcome {
-        Outcome { provider, expected, answered, hits: Vec::new(), reason: reason.map(String::from), down, done: true }
+        Outcome { provider, expected, answered, cached: 0, hits: Vec::new(), reason: reason.map(String::from), down, done: true }
     }
 
     #[test]
@@ -464,5 +525,9 @@ mod tests {
         assert_eq!(note, "web search is off; arXiv only");
         let note = search_note(&[outcome(Provider::Keenable, 3, 0, Some("rate limited"), false)], None).unwrap();
         assert_eq!(note, "web search failed (keenable: rate limited); continuing with arXiv only");
+        let mut cached = outcome(Provider::Keenable, 2, 2, None, false);
+        cached.cached = 2;
+        assert_eq!(search_note(&[cached], None).unwrap(), "web search: keenable (cached)");
+        assert!(cache_key(Provider::Exa, false, None, "q", 15) != cache_key(Provider::Exa, true, None, "q", 15));
     }
 }

@@ -63,7 +63,7 @@ pub fn parse(answer: &str) -> Result<Vec<Found>> {
 }
 
 /// One search result, before it is matched to a work.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hit {
     pub title: String,
     pub url: Option<String>,

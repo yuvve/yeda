@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use yeda_core::Effect;
 use yeda_core::library::{self, Library};
 
+pub mod discover;
+
 /// The file's contents, or `None` if it doesn't exist.
 pub fn read_optional(path: &Path) -> Result<Option<String>> {
     match fs::read_to_string(path) {

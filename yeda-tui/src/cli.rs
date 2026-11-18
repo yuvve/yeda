@@ -571,6 +571,8 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
         openalex_key: yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten(),
         settings: lib.web_search.clone(),
         keys,
+        cache: lib.cache.clone(),
+        fresh: false,
     };
     let (found, note) = discover::run(&input, &|line| eprintln!("{line}"))?;
     if let Some(note) = note {
