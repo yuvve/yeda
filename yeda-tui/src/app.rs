@@ -1,8 +1,9 @@
 use crate::{citations, fetch, ops, pdftext, undo};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
+use ratatui::style::Color;
 use crate::keys::{self, Keymap, Lookup};
-use ratatui_image::picker::Picker;
+use ratatui_image::picker::{Capability, Picker};
 use ratatui_image::protocol::StatefulProtocol;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -616,6 +617,8 @@ pub struct App {
     pub diff: Option<DiffView>,
     pub job: Option<Job>,
     picker: Picker,
+    /// The background of alternate rows, once the terminal reports its own.
+    pub stripe: Option<Color>,
     summarizer: Option<Summarizer>,
     pub chooser: Option<Chooser>,
     /// Identifiers to add once their collection is picked, and the mode to go back to.
@@ -708,6 +711,10 @@ const HISTORY_LEN: usize = 200;
 impl App {
     pub fn new(dir: PathBuf, lib: Library, picker: Picker, keymap: Keymap) -> Self {
         let history = lib.cache.as_ref().and_then(|c| fs::read_to_string(c.join("history")).ok()).unwrap_or_default();
+        let stripe = picker.capabilities().iter().find_map(|c| match c {
+            Capability::Background(r, g, b) => Some(crate::ui::alternate((*r, *g, *b))),
+            _ => None,
+        });
         let status = unreadable(&lib);
         let mut app = Self {
             history: history.lines().map(String::from).collect(),
@@ -753,6 +760,7 @@ impl App {
             diff: None,
             job: None,
             picker,
+            stripe,
             summarizer: None,
             chooser: None,
             pending_add: None,

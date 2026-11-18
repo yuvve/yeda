@@ -92,6 +92,7 @@ const STYLE = `
 .yeda .status:empty { display: none; }
 .yeda ul { list-style: none; margin: 0; padding: 0; }
 .yeda li { padding: 12px 4px; border-bottom: 1px solid #000; }
+.yeda .references li:nth-child(even) { background: #dcdcdc; }
 .yeda .meta { font-size: 14px; margin-top: 4px; }
 .yeda .chip { display: inline-block; border: 1px solid #000; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 14px; }
 .yeda .chip button { border: none; padding: 0 0 0 8px; background: none; color: inherit; }
@@ -228,7 +229,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 	async function showList() {
 		const rows = await invoke<Row[]>('list', { filter, query: search.value, sort });
 		localStorage.setItem(VIEW_KEY, JSON.stringify({ filter, sort, query: search.value }));
-		const list = h('ul', {}, ...rows.map(r => h('li', { onclick: () => run(() => showDetails(r.key)) },
+		const list = h('ul', { className: 'references' }, ...rows.map(r => h('li', { onclick: () => run(() => showDetails(r.key)) },
 			h('div', {}, `${GLYPHS[r.status] ?? '?'} `, r.title || r.key),
 			h('div', { className: 'meta' }, [r.authors[0]?.split(',')[0], r.year].filter(Boolean).join(' · '),
 				r.has_pdf ? '' : ' · no PDF'),

@@ -56,6 +56,21 @@ pub fn status_glyph(status: &str) -> &'static str {
     }
 }
 
+/// The colour of alternate rows: the terminal's own background, a little lighter, so the stripes
+/// read as texture rather than as a second colour.
+pub fn alternate((r, g, b): (u8, u8, u8)) -> Color {
+    let lighten = |c: u8| (c as f32 * 0.88 + 128.0 * 0.12).round() as u8;
+    Color::Rgb(lighten(r), lighten(g), lighten(b))
+}
+
+/// Shades every other row, so a line is easy to follow across a wide list.
+fn stripe(bg: Option<Color>, i: usize) -> Style {
+    match bg {
+        Some(bg) if !i.is_multiple_of(2) => Style::new().bg(bg),
+        _ => Style::new(),
+    }
+}
+
 fn row(r: &Ref, lib: &Library, marked: bool) -> Line<'static> {
     let year = r.year.map(|y| y.to_string()).unwrap_or_default();
     let author = r.authors.first().and_then(|a| a.split(',').next()).unwrap_or("");
@@ -233,7 +248,9 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let shown = &vis[t.left..right];
     let header = Row::new(shown.iter().map(|&c| Cell::from(columns[c].clone()))).style(Style::new().fg(Color::Cyan).bold());
-    let body = rows.iter().map(|r| Row::new(shown.iter().map(|&c| Cell::from(r[c].lines().next().unwrap_or_default().to_string()))));
+    let body = rows.iter().enumerate().map(|(i, r)| {
+        Row::new(shown.iter().map(|&c| Cell::from(r[c].lines().next().unwrap_or_default().to_string()))).style(stripe(app.stripe, i))
+    });
     let widget = Table::new(body, shown.iter().map(|&c| Constraint::Length(widths[c])))
         .header(header)
         .block(block(title, focused))
@@ -293,7 +310,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let items: Vec<ListItem> = app
         .visible
         .iter()
-        .map(|&i| ListItem::new(row(&app.lib.refs[i], &app.lib, app.marked.contains(&app.lib.refs[i].key))))
+        .enumerate()
+        .map(|(n, &i)| ListItem::new(row(&app.lib.refs[i], &app.lib, app.marked.contains(&app.lib.refs[i].key))).style(stripe(app.stripe, n)))
         .collect();
     let order = if app.sort.descending { "▼" } else { "▲" };
     let mut title = format!("References ({}) {order} {}", app.visible.len(), app.sort.field.name());
@@ -1191,5 +1209,21 @@ mod tests {
         let mut widths = [40, 40];
         super::widen(&mut widths, &[100, 100], 11);
         assert_eq!(widths, [46, 45]);
+    }
+
+    #[test]
+    fn shades_alternate_rows() {
+        let bg = Some(super::alternate((30, 30, 46)));
+        assert_eq!(super::stripe(bg, 0), super::stripe(bg, 2));
+        assert_ne!(super::stripe(bg, 0), super::stripe(bg, 1));
+        assert_eq!(super::stripe(bg, 1).bg, bg);
+        assert_eq!(super::stripe(None, 1), ratatui::style::Style::new());
+    }
+
+    #[test]
+    fn lightens_the_background_a_little() {
+        assert_eq!(super::alternate((30, 30, 46)), ratatui::style::Color::Rgb(42, 42, 56));
+        assert_eq!(super::alternate((255, 255, 255)), ratatui::style::Color::Rgb(240, 240, 240));
+        assert_eq!(super::alternate((0, 0, 0)), ratatui::style::Color::Rgb(15, 15, 15));
     }
 }

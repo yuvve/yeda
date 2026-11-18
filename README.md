@@ -73,6 +73,8 @@ yeda            # open it
 
 `h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
 
+Every other row of the reference list and of a literature table is shaded a little lighter than the terminal's own background, so a line is easy to follow across the window. A terminal that does not report its background gets plain rows.
+
 ## Reading and annotating
 
 `o` opens the selected paper's PDF in yeda's reader, which you control with vim keys. There you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
@@ -146,6 +148,8 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 `:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values.
 
+![Literature table](yeda-tui/screenshots/table.png)
+
 ### Finding papers
 
 `:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). The model writes several queries; yeda searches the enabled web providers and arXiv in parallel, matches the hits to OpenAlex works, drops what is not a paper, and has the model rank the rest. `:setup web-search` chooses the providers (`keenable`, `exa`, `parallel`, `firecrawl`, `searxng`, or the LLM provider's own search) and their optional keys; arXiv is always searched. `:discover!` skips cached results. Marked papers are kept and sorted last, `v` marks, and `a` adds.
@@ -217,6 +221,8 @@ On first start, pick the library folder with the system folder picker and allow 
 - **Search**: the same search as the terminal app, such as `author:smith tag:ml`; a search can be saved.
 - **Filter**: a form for searching by field. **▲ key** sorts.
 - **⟳**: git sync. **⚙**: settings.
+
+Every other row of the list is shaded, so a line is easy to follow across the screen.
 
 Tap a paper to open it. There you open its PDFs or add one, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
 
