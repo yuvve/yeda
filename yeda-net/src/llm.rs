@@ -3,7 +3,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::time::Duration;
-use yeda_core::llm::{Profile, Provider};
+use yeda_core::llm::{CodexCredential, Profile, Provider};
 
 /// The paper's PDF; `text` extracts its plain text, called only for providers that need it.
 pub struct Paper<'a> {
@@ -40,6 +40,7 @@ pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply
     }
     match p.provider {
         Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
+        Provider::Codex => codex(p, prompt, key.unwrap_or_default()),
         Provider::Openai | Provider::Mistral | Provider::Openrouter | Provider::OpencodeGo => openai(p, prompt, key),
     }
 }
@@ -240,6 +241,122 @@ fn openai_body(p: &Profile, prompt: &Prompt) -> Result<(Value, Option<String>)> 
     Ok((body, note))
 }
 
+/// The request for `prompt` against the Responses API, which the Codex token is accepted by.
+fn codex_body(p: &Profile, prompt: &Prompt, schema: Option<&Value>) -> Result<(Value, Option<String>)> {
+    let mut note = None;
+    let user = match &prompt.paper {
+        Some(paper) => {
+            let mut paper = (paper.text)()?;
+            if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
+                note = Some(format!("paper text truncated from {} to {max} characters", paper.chars().count()));
+                paper = paper.chars().take(max).collect();
+            }
+            json!([{"type": "input_text", "text": format!("{}\n\nPaper text:\n{paper}", prompt.text)}])
+        }
+        None => {
+            note = Some("no PDF; summarized from metadata and notes only".into());
+            json!([{"type": "input_text", "text": prompt.text}])
+        }
+    };
+    let mut body = json!({
+        "model": p.model,
+        "instructions": prompt.system,
+        "input": [{"role": "user", "content": user}],
+        "store": false,
+        "stream": true,
+    });
+    if let Some(schema) = schema.filter(|_| p.json_schema.unwrap_or(true)) {
+        body["text"] = json!({"format": {"type": "json_schema", "name": "table_row", "strict": true, "schema": schema}});
+    }
+    // max_output_tokens is rejected on this route, so the profile's limit cannot be sent.
+    if p.max_tokens.is_some() {
+        note = Some("max_tokens has no effect on Codex; the server decides the length".into());
+    }
+    Ok((body, note))
+}
+
+fn codex(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
+    let (body, note) = codex_body(p, prompt, Some(&prompt.schema))?;
+    let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, Some(key)), &body)?;
+    let text = response_text(&response)?;
+    Ok(Reply { text, note })
+}
+
+/// Reads Responses events out of the SSE `lines`, returning the `response` object of
+/// `response.completed`; the deltas are joined when the completed event carries no text.
+fn sse_response(lines: impl Iterator<Item = std::io::Result<String>>) -> Result<Value> {
+    let mut text = String::new();
+    let mut completed = None;
+    for line in lines {
+        let line = line?;
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        let Ok(mut event) = serde_json::from_str::<Value>(data) else { continue };
+        match event["type"].as_str() {
+            Some("response.output_text.delta") => text.push_str(event["delta"].as_str().unwrap_or_default()),
+            Some("response.completed") => {
+                let mut response = event["response"].take();
+                if response_text(&response).is_err() {
+                    response["output"] = json!([{"type": "message", "content": [{"type": "output_text", "text": text}]}]);
+                }
+                completed = Some(response);
+                break;
+            }
+            Some("response.failed" | "response.incomplete") | None if event["error"].is_object() => {
+                bail!("{}: {}", event["type"].as_str().unwrap_or("error"), event["error"]["message"].as_str().unwrap_or("no message"))
+            }
+            _ => {}
+        }
+    }
+    completed.context("the Responses stream ended without a completed event")
+}
+
+/// Reads an SSE stream of Responses events, returning the `response` object of `response.completed`.
+fn stream(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
+    use std::io::{BufRead, BufReader};
+    yeda_core::require_https(url)?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15 * 60)))
+        .http_status_as_error(false)
+        .https_only(true)
+        .build()
+        .into();
+    let mut req = agent.post(url).header("content-type", "application/json").header("accept", "text/event-stream");
+    for (k, v) in headers {
+        req = req.header(*k, v);
+    }
+    let mut resp = req.send(serde_json::to_string(body)?).with_context(|| url.to_string())?;
+    if resp.status() != 200 {
+        let text = resp.body_mut().read_to_string()?;
+        bail!("{url}: HTTP {}: {}", resp.status(), text.chars().take(500).collect::<String>());
+    }
+    sse_response(BufReader::new(resp.body_mut().as_reader()).lines())
+}
+
+/// The answer text from a `response.completed` object: the deltas when any, else the output.
+fn response_text(response: &Value) -> Result<String> {
+    let text = response["output"].as_array().into_iter().flatten()
+        .filter(|item| item["type"] == "message")
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .filter_map(|part| part["text"].as_str())
+        .collect::<String>();
+    if text.is_empty() {
+        bail!("the response carries no text")
+    }
+    Ok(text)
+}
+
+/// Turns stored Codex credentials into a fresh access token, keeping the account identity.
+/// Returns the new credential to store, or an error asking for fresh `codex login` credentials.
+pub fn codex_refresh(key: &str) -> Result<String> {
+    let cred = CodexCredential::parse(key)?;
+    let refresh = cred.refresh_token.as_ref().context(cred.expired_message())?;
+    let client_id = cred.client_id.as_ref().context("the stored Codex credentials have no client_id; paste the compacted `~/.codex/auth.json` again")?;
+    let body = json!({"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client_id});
+    let v = post("https://auth.openai.com/oauth/token", &[], &body)?;
+    let access = v["access_token"].as_str().context("the token refresh returned no access_token")?;
+    Ok(cred.refreshed(access, Some(v["refresh_token"].as_str().unwrap_or(refresh))))
+}
+
 /// A minimal request, to test the profile and key.
 pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
     let mut p = p.clone();
@@ -255,7 +372,7 @@ pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
 /// Generic OpenAI-compatible servers aren't asked to search, and OpenCode Go ignores search tools.
 pub fn search_note(p: &Profile) -> Option<&'static str> {
     match p.provider {
-        Provider::Openai | Provider::OpencodeGo => Some("answered without web search, from what the model knows"),
+        Provider::Openai | Provider::OpencodeGo | Provider::Codex => Some("answered without web search, from what the model knows"),
         Provider::Anthropic | Provider::Mistral | Provider::Openrouter => None,
     }
 }
@@ -285,6 +402,12 @@ pub fn text(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<
             }
             Ok(v["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect())
         }
+        Provider::Codex => {
+            let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
+            let (body, _) = codex_body(p, &prompt, None)?;
+            let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, key), &body)?;
+            response_text(&response)
+        }
         _ => {
             let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
             if let Some(m) = p.max_tokens {
@@ -306,6 +429,12 @@ pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Resul
     let text = match p.provider {
         Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default())?,
         Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default())?,
+        Provider::Codex => {
+            let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
+            let (body, _) = codex_body(p, &prompt, None)?;
+            let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, key), &body)?;
+            response_text(&response)?
+        }
         Provider::Openai | Provider::Openrouter | Provider::OpencodeGo => {
             let base = p.url();
             let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
@@ -392,6 +521,62 @@ mod tests {
 
     fn header<'a>(h: &'a [(&str, String)], name: &str) -> Option<&'a str> {
         h.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn codex_sends_responses_with_stream_and_schema() {
+        let schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": false});
+        let prompt = Prompt { system: "s".into(), text: "t".into(), paper: None, schema: schema.clone() };
+        let p = Profile { provider: Provider::Codex, model: "gpt-5.1".into(), ..profile(None) };
+        assert!(p.needs_key());
+        assert_eq!(p.url(), "https://api.openai.com/v1");
+        let (body, _) = codex_body(&p, &prompt, Some(&prompt.schema)).unwrap();
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["instructions"], "s");
+        assert_eq!(body["model"], "gpt-5.1");
+        assert_eq!(body["input"], json!([{"role": "user", "content": [{"type": "input_text", "text": "t"}]}]));
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert_eq!(body["text"]["format"]["schema"], schema);
+        assert!(body.get("response_format").is_none());
+        assert!(body.get("max_tokens").is_none());
+
+        let (body, note) = codex_body(&Profile { max_tokens: Some(1000), ..profile(None) }, &prompt, None).unwrap();
+        assert!(body.get("text").is_none());
+        assert!(note.unwrap().contains("max_tokens"));
+    }
+
+    #[test]
+    fn codex_sse_joins_deltas_and_reports_failures() {
+        let lines = [
+            "event: x",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}",
+            "",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[]}]}}",
+            "data: after the end",
+        ]
+        .into_iter()
+        .map(|l| Ok::<_, std::io::Error>(l.to_string()));
+        let v = sse_response(lines.into_iter()).unwrap();
+        assert_eq!(response_text(&v).unwrap(), "Hello");
+
+        let failed = sse_response(["data: {\"type\":\"response.failed\",\"error\":{\"message\":\"no credit\"}}"].into_iter().map(|l| Ok::<_, std::io::Error>(l.to_string()))).unwrap_err();
+        assert!(failed.to_string().contains("no credit"), "{failed}");
+
+        let empty = sse_response(["data: not json"].into_iter().map(|l| Ok::<_, std::io::Error>(l.to_string()))).unwrap_err();
+        assert!(empty.to_string().contains("ended without a completed event"), "{empty}");
+    }
+
+    #[test]
+    fn codex_profile_is_not_a_chat_completions_server() {
+        let p = Profile { provider: Provider::Codex, model: "gpt-5.1".into(), ..profile(None) };
+        assert_eq!(search_note(&p).unwrap(), search_note(&Profile { provider: Provider::Openai, ..profile(None) }).unwrap());
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        server.set_nonblocking(true).unwrap();
+        let http = Profile { base_url: Some(format!("http://{}/v1", server.local_addr().unwrap())), ..p };
+        let err = ping(&http, Some("k")).unwrap_err().to_string();
+        assert!(err.contains("only go over https://"), "{err}");
     }
 
     #[test]

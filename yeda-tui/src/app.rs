@@ -2511,11 +2511,42 @@ impl App {
     /// `command` runs again. `None` while prompting.
     fn llm_key(&mut self, name: &str, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
         let account = crate::setup::llm_account(name, profile);
-        if profile.needs_key() {
-            let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token (from `claude setup-token`)" } else { "API key" };
+        let got = if profile.needs_key() {
+            let what = match profile.provider {
+                yeda_core::llm::Provider::Anthropic => "API key or OAuth token (from `claude setup-token`)",
+                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
+                _ => "API key",
+            };
             self.secret(&account, &format!("{what} for {name}, sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
         } else {
             Some(yeda_secrets::get(&account).ok().flatten())
+        };
+        got.map(|key| self.renewed_codex(profile, account, key))
+    }
+
+    /// Replaces Codex credentials that are about to expire; a failed renewal keeps the old ones,
+    /// whose expiry the request reports.
+    fn renewed_codex(&mut self, profile: &yeda_core::llm::Profile, account: String, key: Option<String>) -> Option<String> {
+        if profile.provider != yeda_core::llm::Provider::Codex {
+            return key;
+        }
+        if !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+            return key;
+        }
+        let key = key.unwrap();
+        match yeda_net::llm::codex_refresh(&key) {
+            Ok(renewed) => {
+                if let Err(e) = yeda_secrets::set(&account, &renewed) {
+                    self.status = format!("kept for this session only, not saved: {e:#}");
+                }
+                self.secrets.insert(account.clone(), renewed.clone());
+                self.rejected.remove(&account);
+                Some(renewed)
+            }
+            Err(e) => {
+                self.status = format!("{e:#}; ");
+                Some(key)
+            }
         }
     }
 
@@ -2940,6 +2971,7 @@ impl App {
         for (name, profile) in &self.lib.llm {
             let what = match profile.provider {
                 yeda_core::llm::Provider::Anthropic => "API key or OAuth token",
+                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
                 _ if profile.needs_key() => "API key",
                 _ => "API key, optional",
             };

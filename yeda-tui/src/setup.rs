@@ -59,13 +59,14 @@ pub struct SetupForm {
 }
 
 /// Providers the form knows: name, API and base URL.
-pub const PRESETS: [(&str, Provider, &str); 6] = [
+pub const PRESETS: [(&str, Provider, &str); 7] = [
     ("anthropic", Provider::Anthropic, "https://api.anthropic.com"),
     ("openai", Provider::Openai, "https://api.openai.com/v1"),
     ("gemini", Provider::Openai, "https://generativelanguage.googleapis.com/v1beta/openai"),
     ("mistral", Provider::Mistral, "https://api.mistral.ai/v1"),
     ("openrouter", Provider::Openrouter, "https://openrouter.ai/api/v1"),
     ("opencode-go", Provider::OpencodeGo, "https://opencode.ai/inference/go/openai/v1"),
+    ("codex", Provider::Codex, "https://api.openai.com/v1"),
 ];
 
 fn preset(name: &str) -> Option<&'static (&'static str, Provider, &'static str)> {
@@ -97,8 +98,14 @@ impl SetupForm {
         let values = match kind {
             Kind::Llm => match lib.llm.get(name) {
                 Some(p) => {
-                    let builtin = PRESETS.iter().find(|q| q.1 == p.provider).unwrap_or(&PRESETS[1]);
-                    let provider = PRESETS.iter().find(|q| q.2 == p.url()).unwrap_or(builtin).0;
+                    // OpenAI-compatible providers share one enum; among them the URL picks the
+                    // preset, while codex's URL is openai's own, so the provider decides.
+                    let builtin = if p.provider == Provider::Openai {
+                        PRESETS.iter().find(|q| q.2 == p.url()).unwrap_or(&PRESETS[1])
+                    } else {
+                        PRESETS.iter().find(|q| q.1 == p.provider).unwrap_or(&PRESETS[1])
+                    };
+                    let provider = PRESETS.iter().find(|q| q.1 == p.provider && q.2 == p.url()).unwrap_or(builtin).0;
                     vec![name.into(), provider.into(), p.model.clone(), p.url().into(), String::new()]
                 }
                 None => vec![name.into(), "anthropic".into(), String::new(), PRESETS[0].2.into(), String::new()],
@@ -208,10 +215,10 @@ impl SetupForm {
             Kind::Proxy => &[("Proxies", "tried in order, separated by spaces; {url} is where the paper's address goes")],
             Kind::Llm => &[
                 ("Name", "used as --llm <name>"),
-                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter, opencode-go"),
-                ("Model", "e.g. claude-opus-5-5, or glm-5.3-flash with opencode-go"),
+                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter, opencode-go, codex"),
+                ("Model", "e.g. claude-opus-5-5, glm-5.3-flash with opencode-go, gpt-5.1 with codex"),
                 ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
-                ("Key / token", "API key, or for anthropic an OAuth token (claude setup-token)"),
+                ("Key / token", "API key, an OAuth token from `claude setup-token`, or for codex the compacted `~/.codex/auth.json` (jq -c .)"),
             ],
             Kind::Webdav => &[
                 ("Name", "used as pdf.location and in :attach"),
@@ -288,6 +295,7 @@ impl SetupForm {
                     Some((_, Provider::Mistral, ..)) => "mistral".to_string(),
                     Some((_, Provider::Openrouter, ..)) => "openrouter".to_string(),
                     Some((_, Provider::OpencodeGo, ..)) => "opencode-go".to_string(),
+                    Some((_, Provider::Codex, ..)) => "codex".to_string(),
                     Some(_) => "openai".to_string(),
                     None => v[1].to_lowercase(),
                 };
@@ -311,6 +319,7 @@ impl SetupForm {
                         Provider::Openrouter => "OpenRouter needs an API key",
                         Provider::OpencodeGo => "OpenCode Go needs an API key",
                         Provider::Openai => "OpenAI needs an API key",
+                        Provider::Codex => "Codex needs an OAuth token: run `codex login`, then paste the compacted `~/.codex/auth.json` (jq -c .)",
                     });
                 }
                 Setup::Llm(v[0].to_string(), p)
@@ -463,10 +472,17 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
     }
 }
 
-/// Profiles on one server share its key, except Anthropic's: there each profile can hold either an
-/// API key or an OAuth token.
+/// Profiles on one server share its key, except Anthropic's and Codex's: there each profile keeps
+/// its own API key or OAuth credentials.
 pub fn llm_account(name: &str, p: &Profile) -> String {
-    yeda_secrets::llm_account((p.provider == Provider::Anthropic).then_some(name), p.url())
+    let own = matches!(p.provider, Provider::Anthropic | Provider::Codex).then_some(name);
+    yeda_secrets::llm_account(own, p.url())
+}
+
+/// True when stored Codex OAuth credentials expire soon enough to be worth renewing now.
+pub fn codex_refresh_due(key: &str) -> bool {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_secs() as i64).unwrap_or_default();
+    yeda_core::llm::CodexCredential::parse(key).is_ok_and(|c| c.needs_refresh(10 * 60, now))
 }
 
 /// The secret-store account the secret is kept under.
@@ -568,6 +584,12 @@ mod tests {
         assert!(f.section().unwrap_err().to_string().contains("API key"));
         f.values[1] = "cohere".into();
         assert!(f.section().is_err());
+
+        // codex and openai share one URL, so the profile's provider decides, not the URL.
+        let codex = Library::parse(Some("[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n"), None, [], None).unwrap();
+        assert_eq!(SetupForm::new(Kind::Llm, "cx", &codex).values[1], "codex");
+        let gemini = Library::parse(Some("[llm.g]\nprovider = \"openai\"\nmodel = \"m\"\nbase_url = \"https://generativelanguage.googleapis.com/v1beta/openai\"\n"), None, [], None).unwrap();
+        assert_eq!(SetupForm::new(Kind::Llm, "g", &gemini).values[1], "gemini");
 
         let mut f = SetupForm::new(Kind::Webdav, "dav", &lib);
         f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "pw".into()]);
