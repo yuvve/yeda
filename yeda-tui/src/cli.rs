@@ -117,6 +117,9 @@ fn dispatch(command: &str, a: Args) -> Result<()> {
     for (_, e) in &lib.unreadable {
         eprintln!("left out: {e}");
     }
+    for warning in &lib.warnings {
+        eprintln!("warning: {warning}");
+    }
     match command {
         "search" => search(&lib, &a),
         "annotations" => show_annotations(&lib, &dir, &a),
@@ -550,9 +553,31 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
     anyhow::ensure!(!prompt.trim().is_empty() || !like.is_empty(), "describe what to look for, or name references with --like");
     let (name, profile) = lib.llm_profile(a.opt("llm"))?;
     let key = llm_key(&name, &profile)?;
-    let from: Vec<&Ref> = like.iter().filter_map(|k| lib.get(k)).collect();
+    let from: Vec<Ref> = like.iter().filter_map(|k| lib.get(k)).cloned().collect();
+    let mut keys = std::collections::HashMap::new();
+    for (provider, account) in [
+        (yeda_core::web_search::Provider::Keenable, yeda_secrets::KEENABLE),
+        (yeda_core::web_search::Provider::Exa, yeda_secrets::EXA),
+        (yeda_core::web_search::Provider::Parallel, yeda_secrets::PARALLEL),
+        (yeda_core::web_search::Provider::Firecrawl, yeda_secrets::FIRECRAWL),
+    ] {
+        if let Some(k) = yeda_secrets::get(account).ok().flatten() {
+            keys.insert(provider, k);
+        }
+    }
     eprintln!("asking {name} at {}…", profile.url());
-    let (found, note) = discover::spawn(profile, key, &prompt, &from, None).recv()??;
+    let input = discover::Input {
+        profile,
+        key,
+        prompt,
+        from,
+        openalex_key: yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten(),
+        settings: lib.web_search.clone(),
+        keys,
+        cache: lib.cache.clone(),
+        fresh: false,
+    };
+    let (found, note) = discover::run(&input, &|line| eprintln!("{line}"))?;
     if let Some(note) = note {
         eprintln!("note: {note}");
     }

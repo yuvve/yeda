@@ -94,7 +94,7 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
-`:setup` lists what it sets (LLM profiles, WebDAV locations, the OpenAlex key, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
+`:setup` lists what it sets (LLM profiles, WebDAV locations, the OpenAlex key, web search, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
 
 ## Graphs
 
@@ -147,11 +147,23 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). Anthropic, Mistral and OpenRouter profiles search the web for them. OpenCode Go and other OpenAI-compatible profiles answer from what the model knows, and the list of suggestions says so. Each suggestion is looked up in OpenAlex, so you can see which ones exist and which are already in the library; `v` marks papers and `a` adds them.
+`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). The model writes several queries; yeda searches the enabled web providers and arXiv in parallel, matches the hits to OpenAlex works, drops what is not a paper, and has the model rank the rest. `:setup web-search` chooses the providers (`keenable`, `exa`, `parallel`, `firecrawl`, `searxng`, or the LLM provider's own search) and their optional keys; arXiv is always searched. `:discover!` skips cached results. Marked papers are kept and sorted last, `v` marks, and `a` adds.
+
+```toml
+[web_search]
+always_search_providers   = ["keenable"]
+fallback_search_providers = ["exa", "parallel", "firecrawl"]
+disabled_search_providers = ["model_provider_web_search", "searxng"]
+discover_queries          = 3        # queries the model writes per :discover
+discover_results          = 15       # papers shown
+# searxng_url             = "https://searx.example.org"
+```
+
+Fallbacks run only if every "always" provider fails. Without an API key a provider uses its shared free tier; keyed and keyless calls may use different endpoints. Results are cached in `$XDG_CACHE_HOME/yeda`. `yeda.toml` is trusted like code, so a changed `searxng_url` sends queries elsewhere.
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations and library proxies with a plain `http://` address are refused.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
 ## Keys and commands
 
@@ -174,6 +186,7 @@ yeda search tag:review --sort -year               # key, year, authors, title
 yeda search coll:thesis | yeda cite - --format apa
 yeda add 10.1038/nature14539 --to thesis
 yeda graph lecun2015 > graph.json
+yeda discover "swarm exploration under comms loss" --json   # queries and notes go to stderr
 ```
 
 `yeda help` lists them all. They use the library's settings and the secrets saved from the TUI.

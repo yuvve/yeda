@@ -5,6 +5,7 @@ use serde::Deserialize;
 use yeda_core::browse::SortField;
 use yeda_core::library::{Dav, Library, Ref, SavedSearch};
 use yeda_core::llm::{Profile, Provider};
+use yeda_core::web_search::Provider as WebProvider;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -20,6 +21,27 @@ pub enum Kind {
     Proxy,
     /// A literature table: its name, columns, then one description per column.
     Table,
+    /// The optional API key of a web search provider.
+    Keenable,
+    Exa,
+    Parallel,
+    Firecrawl,
+    /// The URL of a SearXNG instance.
+    Searxng,
+}
+
+impl Kind {
+    /// The web search provider this form sets up.
+    pub fn web_search_provider(self) -> Option<WebProvider> {
+        match self {
+            Kind::Keenable => Some(WebProvider::Keenable),
+            Kind::Exa => Some(WebProvider::Exa),
+            Kind::Parallel => Some(WebProvider::Parallel),
+            Kind::Firecrawl => Some(WebProvider::Firecrawl),
+            Kind::Searxng => Some(WebProvider::Searxng),
+            _ => None,
+        }
+    }
 }
 
 /// The `:setup` form for one LLM profile or WebDAV location, whose last field is the secret; a saved search being edited; or a new reference.
@@ -61,6 +83,10 @@ pub enum Setup {
     Search(SavedSearch),
     Openalex,
     Reference(Ref),
+    /// A web search provider's key, tested with one real search, which spends quota.
+    ApiKey(WebProvider),
+    /// A SearXNG instance URL, tested with one JSON search.
+    Searxng(String),
     /// Saved as it is, with nothing to test.
     Untested,
 }
@@ -87,6 +113,8 @@ impl SetupForm {
                 vec![name.into(), s.map(|s| s.query.clone()).unwrap_or_default(), sort.unwrap_or_default()]
             }
             Kind::Openalex => vec![String::new()],
+            Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => vec![String::new()],
+            Kind::Searxng => vec![lib.web_search.searxng_url.clone().unwrap_or_default()],
             Kind::Proxy => vec![lib.fulltext.proxies.join(" ")],
             Kind::Table => vec![name.into(), lib.tables.get(name).map(|t| t.columns.join(", ")).unwrap_or_default()],
             Kind::Reference => {
@@ -107,7 +135,8 @@ impl SetupForm {
         };
         let sel = match kind {
             Kind::Reference => 1,
-            Kind::Openalex | Kind::Proxy => 0,
+            Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
+            Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => 0,
             _ if name.is_empty() => 0,
             _ => 1,
         };
@@ -191,6 +220,11 @@ impl SetupForm {
                 ("Password", "kept in the secret store"),
             ],
             Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
+            Kind::Keenable => &[("API key", "optional; without one, search uses the shared public tier (1,000 requests/hour per IP); the test runs one real search and uses quota")],
+            Kind::Exa => &[("API key", "optional; without one, search uses the shared free tier, which needs a direct IPv4 connection; the test runs one real search and uses quota")],
+            Kind::Parallel => &[("API key", "optional; without one, search uses the shared free tier; keyed use is billed by Parallel; the test runs one real search and uses quota")],
+            Kind::Firecrawl => &[("API key", "optional; without one, search uses the shared free tier with lower limits; the test runs one real search and uses quota")],
+            Kind::Searxng => &[("Instance URL", "example URL; https only, no user name or password; the instance must have JSON output enabled (search.formats in settings.yml)")],
             Kind::Reference => &[
                 ("Type", "article, inproceedings, incollection, book, preprint, or another, such as report or thesis"),
                 ("Title", ""),
@@ -215,12 +249,17 @@ impl SetupForm {
         match self.kind {
             Kind::Openalex => "openalex",
             Kind::Proxy => "proxy",
+            Kind::Keenable => "keenable",
+            Kind::Exa => "exa",
+            Kind::Parallel => "parallel",
+            Kind::Firecrawl => "firecrawl",
+            Kind::Searxng => "searxng",
             _ => self.values[0].trim(),
         }
     }
 
     fn has_secret(&self) -> bool {
-        matches!(self.kind, Kind::Llm | Kind::Webdav | Kind::Openalex)
+        matches!(self.kind, Kind::Llm | Kind::Webdav | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
     }
 
     pub fn secret(&self) -> Option<String> {
@@ -288,6 +327,13 @@ impl SetupForm {
             }
             Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
             Kind::Openalex => Setup::Openalex,
+            Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl if self.secret().is_none() => bail!("paste the API key"),
+            Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => Setup::ApiKey(self.kind.web_search_provider().unwrap()),
+            Kind::Searxng => {
+                yeda_core::web_search::check_searxng_url(v[0])?;
+                t.insert("searxng_url".into(), v[0].trim_end_matches('/').into());
+                Setup::Searxng(v[0].trim_end_matches('/').to_string())
+            }
             Kind::Reference => unreachable!(),
             Kind::Proxy => {
                 let proxies: Vec<&str> = v[0].split_whitespace().collect();
@@ -375,6 +421,9 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
     }
     rows.push(row("New WebDAV location".into(), String::new(), "setup webdav".into()));
     rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
+    let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
+    let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
+    rows.push(row("Web search".into(), web, "setup web-search".into()));
     let proxies = if lib.fulltext.proxies.is_empty() { "none".into() } else { lib.fulltext.proxies.join(" ") };
     rows.push(row("Library proxies".into(), proxies, "setup proxy".into()));
     for (name, t) in &lib.tables {
@@ -393,6 +442,24 @@ pub fn test(setup: &Setup, secret: Option<&str>) -> Result<()> {
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
+        Setup::ApiKey(provider) => yeda_net::web_search::search(&yeda_net::web_search::Search {
+            provider: *provider,
+            query: "yeda api key test",
+            limit: 3,
+            key: Some(secret.unwrap_or_default()),
+            searxng_url: None,
+        })
+        .map(drop)
+        .map_err(|e| anyhow::anyhow!(e)),
+        Setup::Searxng(url) => yeda_net::web_search::search(&yeda_net::web_search::Search {
+            provider: WebProvider::Searxng,
+            query: "yeda searxng test",
+            limit: 3,
+            key: None,
+            searxng_url: Some(url),
+        })
+        .map(drop)
+        .map_err(|e| anyhow::anyhow!(e)),
     }
 }
 
@@ -409,6 +476,8 @@ pub fn account(setup: &Setup) -> String {
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
+        Setup::ApiKey(provider) => crate::websearch::account(*provider).into(),
+        Setup::Searxng(_) => String::new(),
     }
 }
 
@@ -424,6 +493,26 @@ fn sort_name(f: SortField) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_provider_keys_and_searxng() {
+        let lib = Library::parse(None, None, [], None).unwrap();
+        let mut key = SetupForm::new(Kind::Exa, "", &lib);
+        assert!(key.section().unwrap_err().to_string().contains("paste the API key"));
+        key.values[0] = "k".into();
+        let (t, setup) = key.section().unwrap();
+        assert!(t.is_empty());
+        assert!(matches!(setup, Setup::ApiKey(WebProvider::Exa)));
+        assert_eq!(account(&setup), yeda_secrets::EXA);
+
+        let mut searx = SetupForm::new(Kind::Searxng, "", &lib);
+        searx.values[0] = "http://searx.example.org".into();
+        assert!(searx.section().unwrap_err().to_string().contains("https://"));
+        searx.values[0] = "https://searx.example.org/".into();
+        let (t, setup) = searx.section().unwrap();
+        assert_eq!(t["searxng_url"].as_str(), Some("https://searx.example.org"));
+        assert!(matches!(setup, Setup::Searxng(ref url) if url == "https://searx.example.org"));
+    }
 
     #[test]
     fn builds_and_checks_sections() {

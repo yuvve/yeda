@@ -260,6 +260,42 @@ pub fn search_note(p: &Profile) -> Option<&'static str> {
     }
 }
 
+/// Answers `text` in plain text, without tools or a JSON schema: queries and ranking for `:discover`.
+pub fn text(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
+    let key = clean(key);
+    let key = key.as_deref();
+    if key.is_none() && p.needs_key() {
+        bail!("no API key or OAuth token for {}", p.url());
+    }
+    match p.provider {
+        Provider::Anthropic => {
+            let mut body = json!({
+                "model": p.model,
+                "max_tokens": p.max_tokens.unwrap_or(8000),
+                "system": system,
+                "output_config": {"effort": p.effort.as_deref().unwrap_or("low")},
+                "messages": [{"role": "user", "content": text}],
+            });
+            let headers = authorize(p, key.unwrap_or_default(), &mut body)?;
+            let v = post(&format!("{}/v1/messages", p.url()), &headers, &body)?;
+            match v["stop_reason"].as_str() {
+                Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
+                Some("max_tokens") => bail!("output hit max_tokens; raise it in the llm profile"),
+                _ => {}
+            }
+            Ok(v["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect())
+        }
+        _ => {
+            let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            if let Some(m) = p.max_tokens {
+                body["max_tokens"] = json!(m);
+            }
+            let v = post(&format!("{}/chat/completions", p.url()), &openai_headers(p, key), &body)?;
+            Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
+        }
+    }
+}
+
 /// Answers `text`, searching the web where the provider can; the note says when it didn't.
 pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<Reply> {
     let key = clean(key);

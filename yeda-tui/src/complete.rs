@@ -49,7 +49,8 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
         ("graph", 1) if args[0] == "col" => lib.tables.values().flat_map(|t| t.columns.clone()).collect(),
         ("fetch", 0) | ("attach", 1) => locations(),
-        ("setup", 0) => ["llm", "openalex", "proxy", "table", "webdav"].map(String::from).to_vec(),
+        ("setup", 0) => ["exa", "firecrawl", "keenable", "llm", "openalex", "parallel", "proxy", "searxng", "table", "web-search", "webdav"].map(String::from).to_vec(),
+        ("setup", 1) if args[0] == "web-search" => ["exa", "firecrawl", "keenable", "parallel", "searxng"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "table" => tables(),
         ("config", 0) => ["device", "library"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "llm" => lib.llm.keys().cloned().collect(),
@@ -91,6 +92,8 @@ mod tests {
         assert!(Completion::new(&lib, "cite ie").unwrap().candidates.contains(&"ieee".to_string()));
         assert_eq!(Completion::new(&lib, "graph c").unwrap().candidates, ["citations", "close", "col"]);
         assert_eq!(Completion::new(&lib, "setup llm ").unwrap().candidates, ["claude"]);
+        assert!(Completion::new(&lib, "setup web-search k").unwrap().candidates.contains(&"keenable".to_string()));
+        assert!(Completion::new(&lib, "setup w").unwrap().candidates.contains(&"web-search".to_string()));
         assert!(Completion::new(&lib, "zzz").is_none());
         assert!(Completion::new(&lib, "save x").is_none());
     }
