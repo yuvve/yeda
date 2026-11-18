@@ -125,7 +125,7 @@ An Anthropic profile takes an API key or an OAuth token; yeda tells them apart b
 
 An `opencode-go` profile uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
 
-A `codex` profile uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup llm` asks for the compacted contents of `~/.codex/auth.json` (`jq -c . ~/.codex/auth.json`), which yeda stores in the secret store and renews on its own; a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search, and the profile's `max_tokens` has no effect.
+A `codex` profile uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup llm` signs you in itself: it generates a ChatGPT link, opens it in your browser, and keeps the tokens it returns in the secret store, renewing them on their own. Pasting a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search, and the profile's `max_tokens` has no effect.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 

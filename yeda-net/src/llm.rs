@@ -346,15 +346,40 @@ fn response_text(response: &Value) -> Result<String> {
 }
 
 /// Turns stored Codex credentials into a fresh access token, keeping the account identity.
-/// Returns the new credential to store, or an error asking for fresh `codex login` credentials.
+/// Returns the new credential to store, or an error asking for a fresh sign-in.
 pub fn codex_refresh(key: &str) -> Result<String> {
     let cred = CodexCredential::parse(key)?;
     let refresh = cred.refresh_token.as_ref().context(cred.expired_message())?;
-    let client_id = cred.client_id.as_ref().context("the stored Codex credentials have no client_id; paste the compacted `~/.codex/auth.json` again")?;
-    let body = json!({"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client_id});
-    let v = post("https://auth.openai.com/oauth/token", &[], &body)?;
+    let Some(client_id) = cred.client_id.as_ref() else {
+        bail!("the stored Codex credentials have no client_id; sign in again");
+    };
+    // Credentials yeda signed in are refreshed at OpenAI's open-source-app endpoint, form-encoded
+    // and with the resource; Codex CLI's own (`app_…`) refresh at its endpoint, JSON-encoded.
+    if client_id.starts_with("app_") {
+        let body = json!({"grant_type": "refresh_token", "refresh_token": refresh, "client_id": client_id});
+        let v = post("https://auth.openai.com/oauth/token", &[], &body)?;
+        let access = v["access_token"].as_str().context("the token refresh returned no access_token")?;
+        return Ok(cred.refreshed(access, Some(v["refresh_token"].as_str().unwrap_or(refresh))));
+    }
+    let form = [("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", client_id), ("resource", "https://api.openai.com/v1")]
+        .map(|(k, v)| format!("{k}={}", crate::codex::encode(v)))
+        .join("&");
+    let v = post_form("https://auth.openai.com/api/accounts/oauth/token", &form)?;
     let access = v["access_token"].as_str().context("the token refresh returned no access_token")?;
     Ok(cred.refreshed(access, Some(v["refresh_token"].as_str().unwrap_or(refresh))))
+}
+
+/// A form-encoded POST, for the token endpoint that only accepts one.
+fn post_form(url: &str, form: &str) -> Result<Value> {
+    yeda_core::require_https(url)?;
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(60))).https_only(true).build().into();
+    let mut resp = agent.post(url).header("content-type", "application/x-www-form-urlencoded").send(form).with_context(|| url.to_string())?;
+    let status = resp.status();
+    let text = resp.body_mut().read_to_string()?;
+    if !status.is_success() {
+        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
+    }
+    serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
 }
 
 /// A minimal request, to test the profile and key.

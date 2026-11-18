@@ -53,6 +53,8 @@ pub struct SetupForm {
     pub testing: bool,
     /// The saved search's name before editing, or the key of the reference being duplicated.
     pub old: Option<String>,
+    /// A Codex sign-in waiting for the browser: the link the user was given.
+    pub sign_in_url: Option<String>,
     /// A table's columns that have description fields now, and every description typed, by column.
     shown: Vec<String>,
     described: BTreeMap<String, String>,
@@ -153,7 +155,7 @@ impl SetupForm {
             _ => None,
         };
         let described = if kind == Kind::Table { lib.tables.get(name).map(|t| t.describe.clone()).unwrap_or_default() } else { BTreeMap::new() };
-        let mut form = SetupForm { kind, values, sel, testing: false, old, shown: Vec::new(), described };
+        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, shown: Vec::new(), described };
         form.sync_columns();
         form
     }
@@ -213,13 +215,27 @@ impl SetupForm {
                 return head.into_iter().chain(describe).collect();
             }
             Kind::Proxy => &[("Proxies", "tried in order, separated by spaces; {url} is where the paper's address goes")],
-            Kind::Llm => &[
-                ("Name", "used as --llm <name>"),
-                ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter, opencode-go, codex"),
-                ("Model", "e.g. claude-opus-5-5, glm-5.3-flash with opencode-go, gpt-5.1 with codex"),
-                ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
-                ("Key / token", "API key, an OAuth token from `claude setup-token`, or for codex the compacted `~/.codex/auth.json` (jq -c .)"),
-            ],
+            Kind::Llm => {
+                let provider = preset(&self.values[1]).map_or(Provider::Anthropic, |p| p.1);
+                let model = match provider {
+                    Provider::Anthropic => "e.g. claude-opus-5-5",
+                    Provider::Codex => "e.g. gpt-5.1",
+                    Provider::OpencodeGo => "e.g. glm-5.3-flash",
+                    _ => "the model's name at the server",
+                };
+                let token = match provider {
+                    Provider::Codex => "signs in itself: press Enter and open the link yeda shows",
+                    Provider::Anthropic => "API key, or an OAuth token from `claude setup-token`",
+                    _ => "API key",
+                };
+                &[
+                    ("Name", "used as --llm <name>"),
+                    ("Provider", "←/→: anthropic, openai, gemini, mistral, openrouter, opencode-go, codex"),
+                    ("Model", model),
+                    ("Base URL", "filled in by the provider; with openai, any OpenAI-compatible server"),
+                    ("Key / token", token),
+                ]
+            }
             Kind::Webdav => &[
                 ("Name", "used as pdf.location and in :attach"),
                 ("URL", "the folder PDFs go in, e.g. https://dav.example.com/pdfs/"),
@@ -312,14 +328,16 @@ impl SetupForm {
                     bail!("give the model's name");
                 }
                 let p = Profile::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the provider is one of {}", PRESETS.map(|p| p.0).join(", ")))?;
-                if p.needs_key() && self.secret().is_none() {
+                // Codex signs in when the field is empty, so it is the one provider a form may
+                // reach the test without a typed credential.
+                if p.provider != Provider::Codex && p.needs_key() && self.secret().is_none() {
                     bail!("{}", match p.provider {
                         Provider::Anthropic => "Anthropic needs an API key or an OAuth token (from `claude setup-token`)",
                         Provider::Mistral => "Mistral needs an API key",
                         Provider::Openrouter => "OpenRouter needs an API key",
                         Provider::OpencodeGo => "OpenCode Go needs an API key",
                         Provider::Openai => "OpenAI needs an API key",
-                        Provider::Codex => "Codex needs an OAuth token: run `codex login`, then paste the compacted `~/.codex/auth.json` (jq -c .)",
+                        Provider::Codex => "Codex signs in itself: press Enter and open the link yeda shows",
                     });
                 }
                 Setup::Llm(v[0].to_string(), p)
@@ -590,6 +608,27 @@ mod tests {
         assert_eq!(SetupForm::new(Kind::Llm, "cx", &codex).values[1], "codex");
         let gemini = Library::parse(Some("[llm.g]\nprovider = \"openai\"\nmodel = \"m\"\nbase_url = \"https://generativelanguage.googleapis.com/v1beta/openai\"\n"), None, [], None).unwrap();
         assert_eq!(SetupForm::new(Kind::Llm, "g", &gemini).values[1], "gemini");
+
+        // The guidance speaks for the chosen provider only.
+        let hints = |f: &SetupForm| f.fields().iter().map(|(l, h)| (l.clone(), *h)).collect::<Vec<_>>();
+        let anthropic = hints(&SetupForm::new(Kind::Llm, "new", &lib));
+        let (_, model) = anthropic.iter().find(|(l, _)| l == "Model").unwrap();
+        let (_, token) = anthropic.iter().find(|(l, _)| l == "Key / token").unwrap();
+        assert!(token.contains("claude setup-token") && !token.contains("codex") && !token.contains("gpt"), "{token}");
+        assert!(model.contains("claude") && !model.contains("codex") && !model.contains("gpt"), "{model}");
+        let mut cx = SetupForm::new(Kind::Llm, "cx2", &lib);
+        cx.values[1] = "codex".into();
+        cx.provider_changed();
+        let codex_hints = hints(&cx);
+        let (_, token) = codex_hints.iter().find(|(l, _)| l == "Key / token").unwrap();
+        let (_, model) = codex_hints.iter().find(|(l, _)| l == "Model").unwrap();
+        assert!(token.contains("signs in itself") && !token.contains("claude"), "{token}");
+        assert!(model.contains("gpt") && !model.contains("claude"), "{model}");
+        // Codex signs in with an empty field, so the section builds without a credential.
+        cx.values[2] = "gpt-5.1".into();
+        let (t, _) = cx.section().unwrap();
+        assert_eq!(t["provider"].as_str(), Some("codex"));
+        assert!(!t.contains_key("base_url"));
 
         let mut f = SetupForm::new(Kind::Webdav, "dav", &lib);
         f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "pw".into()]);

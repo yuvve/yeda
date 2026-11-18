@@ -204,12 +204,12 @@ pub const NOTES: &[(&str, &str)] = &[
 ];
 
 /// The `f` popup: one value per `search::FILTER_FIELDS` entry, then free text.
-/// A `:setup` connection test running; saved when it passes.
+/// The `:setup` connection test running; saved when it passes. The thread owns the secret or the
+/// sign-in's credentials and sends them on success.
 struct SetupJob {
-    rx: Receiver<anyhow::Result<()>>,
+    rx: Receiver<anyhow::Result<Option<String>>>,
     section: toml::Table,
     setup: setup::Setup,
-    secret: Option<String>,
 }
 
 pub struct FilterForm {
@@ -1581,6 +1581,11 @@ impl App {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let Some(form) = &mut self.setup else { return };
         if form.testing {
+            // Waiting for the browser or a slow test: Esc cancels, the thread's result is dropped.
+            if k.code == KeyCode::Esc {
+                self.setup_job = None;
+                self.close_setup();
+            }
             return;
         }
         let n = form.values.len();
@@ -1629,12 +1634,42 @@ impl App {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
                     let (probe, test_secret) = (setup.clone(), secret.clone());
+                    let account = setup::account(&setup);
+                    // An empty field asks a Codex profile to sign in instead: stored credentials
+                    // are used as they are, and only a missing one starts the browser flow.
+                    let stored = secret.is_none()
+                        && matches!(&setup, setup::Setup::Llm(_, p) if p.provider == yeda_core::llm::Provider::Codex)
+                        && yeda_secrets::get(&account).ok().flatten().is_none();
+                    if stored {
+                        let Ok(sign_in) = yeda_net::codex::start(None, None) else {
+                            self.status = "could not start the sign-in listener".into();
+                            return;
+                        };
+                        let url = sign_in.url.clone();
+                        form.sign_in_url = Some(url.clone());
+                        std::thread::spawn(move || {
+                            let signed = sign_in.finish(std::time::Duration::from_secs(10 * 60));
+                            let _ = tx.send(match signed {
+                                Ok(credentials) => {
+                                    // Stored before the test, so fixing the model does not ask for another sign-in.
+                                    let _ = yeda_secrets::set(&account, &credentials);
+                                    setup::test(&probe, Some(&credentials)).map(|_| Some(credentials))
+                                }
+                                Err(e) => Err(e),
+                            });
+                        });
+                        form.testing = true;
+                        self.status = "waiting for the browser to sign in with ChatGPT…".into();
+                        self.setup_job = Some(SetupJob { rx, section, setup });
+                        self.xdg_open(&url);
+                        return;
+                    }
                     std::thread::spawn(move || {
-                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()));
+                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()).map(|_| test_secret.clone()));
                     });
                     form.testing = true;
                     self.status = "testing the connection…".into();
-                    self.setup_job = Some(SetupJob { rx, section, setup, secret });
+                    self.setup_job = Some(SetupJob { rx, section, setup });
                 }
                 Err(e) => self.status = format!("{e:#}"),
             },
@@ -1795,15 +1830,19 @@ impl App {
         let job = self.setup_job.take().unwrap();
         let Some(form) = &mut self.setup else { return };
         form.testing = false;
-        if let Err(e) = result {
-            self.status = format!("not saved: {e:#}");
-            return;
-        }
+        form.sign_in_url = None;
+        let secret = match result {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("not saved: {e:#}");
+                return;
+            }
+        };
         let kind = form.kind;
         let mut stored = String::new();
-        if let Some(secret) = &job.secret {
+        if let Some(secret) = secret {
             let account = setup::account(&job.setup);
-            if let Err(e) = yeda_secrets::set(&account, secret) {
+            if let Err(e) = yeda_secrets::set(&account, &secret) {
                 stored = format!(" (secret kept for this session only: {e:#})");
             }
             self.secrets.insert(account.clone(), secret.clone());

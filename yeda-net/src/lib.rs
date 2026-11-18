@@ -7,6 +7,7 @@ pub mod web_search;
 pub mod webdav;
 pub mod openalex;
 pub mod fulltext;
+pub mod codex;
 
 /// The most a downloaded file may take in memory; a server that sends more is refused.
 pub const MAX_BYTES: u64 = 200 << 20;
