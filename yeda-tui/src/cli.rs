@@ -539,8 +539,13 @@ fn graph(lib: &mut Library, dir: &Path, a: &Args) -> Result<()> {
 
 /// The API key or OAuth token for LLM profile `name`, from the secret store.
 fn llm_key(name: &str, profile: &yeda_core::llm::Profile) -> Result<Option<String>> {
-    let key = yeda_secrets::get(&crate::setup::llm_account(name, profile))?;
+    let account = crate::setup::llm_account(name, profile);
+    let mut key = yeda_secrets::get(&account)?;
     anyhow::ensure!(key.is_some() || !profile.needs_key(), "no key stored for LLM profile '{name}'; set it in yeda with :setup llm {name}");
+    if profile.provider == yeda_core::llm::Provider::Codex && key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+        key = Some(yeda_net::llm::codex_refresh(key.as_deref().unwrap_or_default())?);
+        yeda_secrets::set(&account, key.as_deref().unwrap_or_default())?;
+    }
     Ok(key)
 }
 

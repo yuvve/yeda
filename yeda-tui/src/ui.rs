@@ -488,8 +488,29 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         })
         .collect();
     lines.push(Line::raw(""));
-    let hint = if form.testing { "testing the connection…" } else { fields[form.sel].1 };
-    lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
+    let hint = if form.sign_in_url.is_some() {
+        "waiting for you to finish signing in in the browser…".to_string()
+    } else if form.testing {
+        "testing the connection…".to_string()
+    } else {
+        fields[form.sel].1.to_string()
+    };
+    // A hint too long for one line would be cut off, so it wraps; the popup grows for it.
+    let width = main.width.min(76) as usize;
+    let chars_per_line = width.saturating_sub(2 + w + 2).max(20);
+    let hint_lines = wrapped(&hint, chars_per_line);
+    for hint in &hint_lines {
+        lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
+    }
+    if let Some(url) = &form.sign_in_url {
+        lines.push(Line::raw(""));
+        for hint in wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line) {
+            lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
+        }
+        for line in wrapped(url, chars_per_line) {
+            lines.push(Line::raw(format!("{:>w$}  {line}", "")));
+        }
+    }
     let what = match form.kind {
         crate::setup::Kind::Llm => "LLM profile",
         crate::setup::Kind::Webdav => "WebDAV location",
@@ -504,7 +525,12 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         crate::setup::Kind::Firecrawl => "Firecrawl API key",
         crate::setup::Kind::Searxng => "SearXNG",
     };
-    let area = popup(main, 76, fields.len() as u16 + 4);
+    let mut height = fields.len() as u16 + 3 + hint_lines.len() as u16;
+    if let Some(url) = &form.sign_in_url {
+        height += 2 + wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line).len() as u16
+            + wrapped(url, chars_per_line).len() as u16;
+    }
+    let area = popup(main, 76, height.max(5));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table) { "save" } else { "test and save" }), true)), area);
 }
@@ -643,6 +669,31 @@ fn pdf_name(pdf: &Pdf) -> &str {
 }
 
 /// `value` with a bar where the cursor is, `back` characters from the end.
+/// Breaks `text` into lines of at most `width` characters, on spaces where possible.
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for text in text.split('\n') {
+        let mut line = String::new();
+        for word in text.split(' ') {
+            let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if line.chars().count() + word.chars().count() + usize::from(!line.is_empty()) > width && !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+                line = word.to_string();
+            } else {
+                line = next;
+            }
+            // A word longer than the width is cut, so the rest of the hint still shows.
+            while line.chars().count() > width {
+                let cut: String = line.chars().take(width).collect();
+                lines.push(cut);
+                line = line.chars().skip(width).collect();
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 fn with_cursor(value: &str, back: usize) -> String {
     let at = value.chars().count().saturating_sub(back);
     value.chars().take(at).chain(std::iter::once('▏')).chain(value.chars().skip(at)).collect()

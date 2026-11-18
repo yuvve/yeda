@@ -205,12 +205,12 @@ pub const NOTES: &[(&str, &str)] = &[
 ];
 
 /// The `f` popup: one value per `search::FILTER_FIELDS` entry, then free text.
-/// A `:setup` connection test running; saved when it passes.
+/// The `:setup` connection test running; saved when it passes. The thread owns the secret or the
+/// sign-in's credentials and sends them on success.
 struct SetupJob {
-    rx: Receiver<anyhow::Result<()>>,
+    rx: Receiver<anyhow::Result<Option<String>>>,
     section: toml::Table,
     setup: setup::Setup,
-    secret: Option<String>,
 }
 
 pub struct FilterForm {
@@ -1587,10 +1587,22 @@ impl App {
 
     fn setup_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        let Some(form) = &mut self.setup else { return };
-        if form.testing {
+        // Waiting for the browser or a slow test: c copies the sign-in link, Esc cancels and
+        // drops the thread's result. Both end here, before the form is borrowed for editing.
+        if self.setup.as_ref().is_some_and(|form| form.testing) {
+            let link = self.setup.as_ref().and_then(|form| form.sign_in_url.clone());
+            if k.code == KeyCode::Esc {
+                self.setup_job = None;
+                self.close_setup();
+            } else if link.is_some() && k.code == KeyCode::Char('c') {
+                self.status = match self.copy(link.as_ref().unwrap()) {
+                    Ok(()) => "sign-in link copied to the clipboard".into(),
+                    Err(e) => format!("clipboard: {e}"),
+                };
+            }
             return;
         }
+        let Some(form) = &mut self.setup else { return };
         let n = form.values.len();
         match k.code {
             KeyCode::Esc => self.close_setup(),
@@ -1637,12 +1649,46 @@ impl App {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
                     let (probe, test_secret) = (setup.clone(), secret.clone());
+                    let account = setup::account(&setup);
+                    // An empty field asks a Codex profile to sign in instead: stored credentials
+                    // reauthorize with their own client and host id, a missing one registers anew.
+                    let codex_empty = secret.is_none()
+                        && matches!(&setup, setup::Setup::Llm(_, p) if p.provider == yeda_core::llm::Provider::Codex);
+                    if codex_empty {
+                        let (issued, host, hint) = yeda_secrets::get(&account)
+                            .ok()
+                            .flatten()
+                            .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
+                            .map_or((None, None, None), |c| (c.client_id, c.host_id, c.id_token));
+                        let Ok(sign_in) = yeda_net::codex::start(issued.as_deref(), host.as_deref(), hint.as_deref()) else {
+                            self.status = "could not start the sign-in listener".into();
+                            return;
+                        };
+                        let url = sign_in.url.clone();
+                        form.sign_in_url = Some(url.clone());
+                        std::thread::spawn(move || {
+                            let signed = sign_in.finish(std::time::Duration::from_secs(10 * 60));
+                            let _ = tx.send(match signed {
+                                Ok(credentials) => {
+                                    // Stored before the test, so fixing the model does not ask for another sign-in.
+                                    let _ = yeda_secrets::set(&account, &credentials);
+                                    setup::test(&probe, Some(&credentials)).map(|_| Some(credentials))
+                                }
+                                Err(e) => Err(e),
+                            });
+                        });
+                        form.testing = true;
+                        self.status = "waiting for the browser to sign in with ChatGPT…".into();
+                        self.setup_job = Some(SetupJob { rx, section, setup });
+                        self.xdg_open(&url);
+                        return;
+                    }
                     std::thread::spawn(move || {
-                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()));
+                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()).map(|_| test_secret.clone()));
                     });
                     form.testing = true;
                     self.status = "testing the connection…".into();
-                    self.setup_job = Some(SetupJob { rx, section, setup, secret });
+                    self.setup_job = Some(SetupJob { rx, section, setup });
                 }
                 Err(e) => self.status = format!("{e:#}"),
             },
@@ -1803,15 +1849,19 @@ impl App {
         let job = self.setup_job.take().unwrap();
         let Some(form) = &mut self.setup else { return };
         form.testing = false;
-        if let Err(e) = result {
-            self.status = format!("not saved: {e:#}");
-            return;
-        }
+        form.sign_in_url = None;
+        let secret = match result {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("not saved: {e:#}");
+                return;
+            }
+        };
         let kind = form.kind;
         let mut stored = String::new();
-        if let Some(secret) = &job.secret {
+        if let Some(secret) = secret {
             let account = setup::account(&job.setup);
-            if let Err(e) = yeda_secrets::set(&account, secret) {
+            if let Err(e) = yeda_secrets::set(&account, &secret) {
                 stored = format!(" (secret kept for this session only: {e:#})");
             }
             self.secrets.insert(account.clone(), secret.clone());
@@ -2519,11 +2569,42 @@ impl App {
     /// `command` runs again. `None` while prompting.
     fn llm_key(&mut self, name: &str, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
         let account = crate::setup::llm_account(name, profile);
-        if profile.needs_key() {
-            let what = if profile.provider == yeda_core::llm::Provider::Anthropic { "API key or OAuth token (from `claude setup-token`)" } else { "API key" };
+        let got = if profile.needs_key() {
+            let what = match profile.provider {
+                yeda_core::llm::Provider::Anthropic => "API key or OAuth token (from `claude setup-token`)",
+                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
+                _ => "API key",
+            };
             self.secret(&account, &format!("{what} for {name}, sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
         } else {
             Some(yeda_secrets::get(&account).ok().flatten())
+        };
+        got.map(|key| self.renewed_codex(profile, account, key))
+    }
+
+    /// Replaces Codex credentials that are about to expire; a failed renewal keeps the old ones,
+    /// whose expiry the request reports.
+    fn renewed_codex(&mut self, profile: &yeda_core::llm::Profile, account: String, key: Option<String>) -> Option<String> {
+        if profile.provider != yeda_core::llm::Provider::Codex {
+            return key;
+        }
+        if !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+            return key;
+        }
+        let key = key.unwrap();
+        match yeda_net::llm::codex_refresh(&key) {
+            Ok(renewed) => {
+                if let Err(e) = yeda_secrets::set(&account, &renewed) {
+                    self.status = format!("kept for this session only, not saved: {e:#}");
+                }
+                self.secrets.insert(account.clone(), renewed.clone());
+                self.rejected.remove(&account);
+                Some(renewed)
+            }
+            Err(e) => {
+                self.status = format!("{e:#}; ");
+                Some(key)
+            }
         }
     }
 
@@ -2948,6 +3029,7 @@ impl App {
         for (name, profile) in &self.lib.llm {
             let what = match profile.provider {
                 yeda_core::llm::Provider::Anthropic => "API key or OAuth token",
+                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
                 _ if profile.needs_key() => "API key",
                 _ => "API key, optional",
             };

@@ -119,13 +119,15 @@ Both features below use an LLM profile from the library's `yeda.toml`; `:setup l
 default_llm = "claude"
 
 [llm.claude]
-provider = "anthropic"           # or "mistral", "openrouter", "opencode-go", or "openai" for any OpenAI-compatible server
+provider = "anthropic"           # or "mistral", "openrouter", "opencode-go", "codex", or "openai" for any OpenAI-compatible server
 model = "claude-opus-5-5"
 ```
 
 An Anthropic profile takes an API key or an OAuth token; yeda tells them apart by themselves. An OAuth token uses your Claude subscription instead of API credits: run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints. Anthropic may restrict subscription use outside Claude Code.
 
 An `opencode-go` profile uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
+
+A `codex` profile uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup llm` signs you in: it generates a ChatGPT link, opens it in your browser (`c` copies the link), and keeps the tokens it returns in the secret store, renewing them on their own. Pasting a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search, and the profile's `max_tokens` has no effect.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 
@@ -167,7 +169,7 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic profile keeps its own API key or OAuth token. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic or Codex profile keeps its own API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
 ## Keys and commands
 

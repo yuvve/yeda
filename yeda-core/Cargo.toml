@@ -12,6 +12,7 @@ zotero = ["dep:rusqlite"]
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.23.1"
 hayagriva = "0.10.1"
 csv = "1.4.0"
 lopdf = "0.46.0"
