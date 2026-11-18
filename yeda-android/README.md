@@ -23,6 +23,8 @@ On first start, pick the library folder with the system folder picker and allow 
 - **Filter**: a form for searching by field. **▲ key** sorts.
 - **⟳**: git sync. **⚙**: settings.
 
+Every other row of the list is shaded, so a line is easy to follow across the screen.
+
 Tap a paper to open it. There you open its PDFs or add one, preview its annotations, edit its Markdown note or its raw file, and change its reading status, tags and collection.
 
 ## Reading and annotating

@@ -72,6 +72,8 @@ yeda            # open it
 
 `h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
 
+Every other row of the reference list and of a literature table is shaded a little lighter than the terminal's own background, so a line is easy to follow across the window. A terminal that does not report its background gets plain rows.
+
 ## Reading and annotating
 
 `o` opens the selected paper's PDF in yeda's reader, which you control with vim keys. There you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
@@ -144,6 +146,8 @@ subproblem = "The problem it tackles and why earlier work falls short."
 `:summarize` has the LLM read each selected paper and fill in its row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
 
 `:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values.
+
+![Literature table](screenshots/table.png)
 
 ### Finding papers
 
