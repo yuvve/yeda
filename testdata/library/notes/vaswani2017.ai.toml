@@ -1,0 +1,4 @@
+[lit]
+contribution = "Shows that a network built only from attention, with no recurrence or convolution, translates better and trains faster than the recurrent models it replaces."
+group = "Attention and sequence models"
+subproblem = "Recurrent models process a sequence one step at a time, so they cannot be parallelised across positions and their long-range dependencies pass through many steps. The paper removes recurrence instead of making it cheaper."

@@ -1,0 +1,14 @@
+type = "inproceedings"
+title = "MuJoCo: A physics engine for model-based control"
+authors = ["Todorov, Emanuel", "Erez, Tom", "Tassa, Yuval"]
+year = 2012
+doi = "10.1109/iros.2012.6386109"
+tags = ["robotics", "simulation"]
+collections = ["phd/methods"]
+status = "Read"
+
+[extra]
+journal = "2012 IEEE/RSJ International Conference on Intelligent Robots and Systems"
+pages = "5026-5033"
+publisher = "IEEE"
+url = "http://dx.doi.org/10.1109/IROS.2012.6386109"

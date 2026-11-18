@@ -278,3 +278,5 @@ The PDF URLs in `[fulltext.patterns]` come from `yeda.toml` too, and the open-ac
 git clone --recursive <this repo>
 cargo install --path yeda-tui      # the `yeda` binary, with the reader built in
 ```
+
+`scripts/test-library.sh` copies `testdata/library`, a library of real papers, to a scratch folder and fetches its open-access PDFs, for trying changes without touching your own library.

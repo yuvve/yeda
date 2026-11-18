@@ -1,0 +1,16 @@
+type = "article"
+title = "Swarm robotics: a review from the swarm engineering perspective"
+authors = ["Brambilla, Manuele", "Ferrante, Eliseo", "Birattari, Mauro", "Dorigo, Marco"]
+year = 2013
+doi = "10.1007/s11721-012-0075-2"
+tags = ["swarm", "robotics", "survey"]
+collections = ["phd/related-work"]
+status = "Read"
+
+[extra]
+journal = "Swarm Intelligence"
+number = "1"
+pages = "1-41"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1007/s11721-012-0075-2"
+volume = "7"

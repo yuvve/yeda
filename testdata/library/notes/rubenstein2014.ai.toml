@@ -1,0 +1,4 @@
+[lit]
+contribution = "Reports a thousand-robot swarm that assembles into user-given shapes using only local communication, four landmarks and no global coordinates."
+group = "Swarm and flocking models"
+subproblem = "Self-assembly had been shown with tens of robots or in simulation. Scaling to a thousand needs rules that tolerate collisions, noise and robots joining or failing mid-run."

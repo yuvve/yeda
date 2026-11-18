@@ -1,0 +1,4 @@
+[lit]
+contribution = "Adds residual connections that let networks with hundreds of layers train: a block learns a correction to its input rather than a full mapping."
+group = "Deep convolutional networks"
+subproblem = "Deeper plain networks have higher training error than shallower ones, so the obstacle is optimisation rather than overfitting. The paper traces that to signal propagation through stacked nonlinear layers."

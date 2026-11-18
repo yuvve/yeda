@@ -1,0 +1,16 @@
+type = "article"
+title = "Highly accurate protein structure prediction with AlphaFold"
+authors = ["Jumper, John", "Evans, Richard", "Pritzel, Alexander", "Green, Tim", "Figurnov, Michael", "Ronneberger, Olaf", "Tunyasuvunakool, Kathryn", "Bates, Russ", "Žídek, Augustin", "Potapenko, Anna", "Bridgland, Alex", "Meyer, Clemens", "Kohl, Simon A. A.", "Ballard, Andrew J.", "Cowie, Andrew", "Romera-Paredes, Bernardino", "Nikolov, Stanislav", "Jain, Rishub", "Adler, Jonas", "Back, Trevor", "Petersen, Stig", "Reiman, David", "Clancy, Ellen", "Zielinski, Michal", "Steinegger, Martin", "Pacholska, Michalina", "Berghammer, Tamas", "Bodenstein, Sebastian", "Silver, David", "Vinyals, Oriol", "Senior, Andrew W.", "Kavukcuoglu, Koray", "Kohli, Pushmeet", "Hassabis, Demis"]
+year = 2021
+doi = "10.1038/s41586-021-03819-2"
+tags = ["deep learning", "biology"]
+collections = ["reading/queue"]
+status = "To Read"
+
+[extra]
+journal = "Nature"
+number = "7873"
+pages = "583-589"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/s41586-021-03819-2"
+volume = "596"

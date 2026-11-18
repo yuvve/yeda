@@ -1,0 +1,16 @@
+type = "article"
+title = "Learning representations by back-propagating errors"
+authors = ["Rumelhart, David E.", "Hinton, Geoffrey E.", "Williams, Ronald J."]
+year = 1986
+doi = "10.1038/323533a0"
+tags = ["classic", "deep learning"]
+collections = ["phd/related-work/foundations"]
+status = "Read"
+
+[extra]
+journal = "Nature"
+number = "6088"
+pages = "533-536"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/323533a0"
+volume = "323"

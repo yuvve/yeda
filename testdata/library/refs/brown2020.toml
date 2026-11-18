@@ -1,0 +1,12 @@
+type = "article"
+title = "Language Models are Few-Shot Learners"
+authors = ["Brown, Tom B.", "Mann, Benjamin", "Ryder, Nick", "Subbiah, Melanie", "Kaplan, Jared", "Dhariwal, Prafulla", "Neelakantan, Arvind", "Shyam, Pranav", "Sastry, Girish", "Askell, Amanda", "Agarwal, Sandhini", "Herbert-Voss, Ariel", "Krueger, Gretchen", "Henighan, Tom", "Child, Rewon", "Ramesh, Aditya", "Ziegler, Daniel M.", "Wu, Jeffrey", "Winter, Clemens", "Hesse, Christopher", "Chen, Mark", "Sigler, Eric", "Litwin, Mateusz", "Gray, Scott", "Chess, Benjamin", "Clark, Jack", "Berner, Christopher", "McCandlish, Sam", "Radford, Alec", "Sutskever, Ilya", "Amodei, Dario"]
+year = 2020
+doi = "10.48550/arxiv.2005.14165"
+tags = ["nlp", "deep learning", "survey"]
+collections = ["reading/queue"]
+status = "To Read"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/2005.14165"

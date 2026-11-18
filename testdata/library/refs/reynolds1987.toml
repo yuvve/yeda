@@ -1,0 +1,14 @@
+type = "inproceedings"
+title = "Flocks, herds and schools: A distributed behavioral model"
+authors = ["Reynolds, Craig W."]
+year = 1987
+doi = "10.1145/37401.37406"
+tags = ["swarm", "robotics", "classic"]
+collections = ["phd/related-work/foundations", "teaching/course"]
+status = "Read"
+
+[extra]
+journal = "Proceedings of the 14th annual conference on Computer graphics and interactive techniques"
+pages = "25-34"
+publisher = "ACM"
+url = "http://dx.doi.org/10.1145/37401.37406"

@@ -1,0 +1,26 @@
+[locations]
+papers = "~/yeda-pdfs"
+
+[tag_colors]
+"swarm" = "green"
+"robotics" = "blue"
+"deep learning" = "red"
+"reinforcement learning" = "magenta"
+"survey" = "cyan"
+"classic" = "yellow"
+
+[searches]
+"To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
+"Queue" = { query = "coll:reading/queue", sort = "year", descending = true }
+"Swarm reading" = { query = "tag:swarm", sort = "author" }
+"Surveys" = { query = "tag:survey", sort = "year" }
+"Unread learning" = { query = 'tag:"deep learning" status:"^New$|^To Read$"', sort = "year", descending = true }
+"Short classics" = { query = "tag:classic tag:swarm" }
+
+[tables.lit]
+columns = ["contribution", "group", "subproblem"]
+
+[tables.lit.describe]
+contribution = "What the paper adds, in plain words; no jargon."
+group = "The topic it works on: a short label many papers share."
+subproblem = "The problem it tackles and why earlier work falls short."

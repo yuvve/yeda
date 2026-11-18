@@ -1,0 +1,4 @@
+[lit]
+contribution = "Introduces the boids model: each agent steers using only its neighbours, through separation, alignment and cohesion, and the group forms ordered motion with no leader."
+group = "Swarm and flocking models"
+subproblem = "Animating a flock by scripting each bird's path does not scale or look right. The paper asks for local rules that produce flocking as an emergent behaviour."

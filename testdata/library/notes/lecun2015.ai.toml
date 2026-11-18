@@ -1,0 +1,4 @@
+[lit]
+contribution = "A review that lays out why deep architectures learn useful representations, covering convolutional and recurrent nets, backpropagation and the data and compute behind the gains."
+group = "Deep learning"
+subproblem = "Hand-designed features had to be designed per task and transferred poorly. The review argues that learned, layered representations remove that bottleneck."

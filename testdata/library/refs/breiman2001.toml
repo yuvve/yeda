@@ -1,0 +1,16 @@
+type = "article"
+title = "Random Forests"
+authors = ["Breiman, Leo"]
+year = 2001
+doi = "10.1023/a:1010933404324"
+tags = ["classic"]
+collections = ["phd/related-work/foundations"]
+status = "Not Reading"
+
+[extra]
+journal = "Machine Learning"
+number = "1"
+pages = "5-32"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1023/A:1010933404324"
+volume = "45"

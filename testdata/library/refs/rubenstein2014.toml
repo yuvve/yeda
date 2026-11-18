@@ -1,0 +1,16 @@
+type = "article"
+title = "Programmable self-assembly in a thousand-robot swarm"
+authors = ["Rubenstein, Michael", "Cornejo, Alejandro", "Nagpal, Radhika"]
+year = 2014
+doi = "10.1126/science.1254295"
+tags = ["swarm", "robotics"]
+collections = ["phd/related-work"]
+status = "To Read"
+
+[extra]
+journal = "Science"
+number = "6198"
+pages = "795-799"
+publisher = "American Association for the Advancement of Science (AAAS)"
+url = "http://dx.doi.org/10.1126/science.1254295"
+volume = "345"

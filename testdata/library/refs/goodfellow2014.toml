@@ -1,0 +1,17 @@
+type = "article"
+title = "Generative Adversarial Networks"
+authors = ["Goodfellow, Ian J.", "Pouget-Abadie, Jean", "Mirza, Mehdi", "Xu, Bing", "Warde-Farley, David", "Ozair, Sherjil", "Courville, Aaron", "Bengio, Yoshua"]
+year = 2014
+doi = "10.48550/arxiv.1406.2661"
+tags = ["deep learning", "generative models"]
+collections = ["phd/methods"]
+status = "To Read"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/1406.2661"
+
+[[pdf]]
+id = "1"
+location = "papers"
+path = "goodfellow2014/goodfellow2014.pdf"

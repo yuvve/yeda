@@ -1,0 +1,16 @@
+type = "article"
+title = "Grandmaster level in StarCraft II using multi-agent reinforcement learning"
+authors = ["Vinyals, Oriol", "Babuschkin, Igor", "Czarnecki, Wojciech M.", "Mathieu, Michaël", "Dudzik, Andrew", "Chung, Junyoung", "Choi, David H.", "Powell, Richard", "Ewalds, Timo", "Georgiev, Petko", "Oh, Junhyuk", "Horgan, Dan", "Kroiss, Manuel", "Danihelka, Ivo", "Huang, Aja", "Sifre, Laurent", "Cai, Trevor", "Agapiou, John P.", "Jaderberg, Max", "Vezhnevets, Alexander S.", "Leblond, Rémi", "Pohlen, Tobias", "Dalibard, Valentin", "Budden, David", "Sulsky, Yury", "Molloy, James", "Paine, Tom L.", "Gulcehre, Caglar", "Wang, Ziyu", "Pfaff, Tobias", "Wu, Yuhuai", "Ring, Roman", "Yogatama, Dani", "Wünsch, Dario", "McKinney, Katrina", "Smith, Oliver", "Schaul, Tom", "Lillicrap, Timothy", "Kavukcuoglu, Koray", "Hassabis, Demis", "Apps, Chris", "Silver, David"]
+year = 2019
+doi = "10.1038/s41586-019-1724-z"
+tags = ["reinforcement learning", "deep learning"]
+collections = ["reading/queue"]
+status = "New"
+
+[extra]
+journal = "Nature"
+number = "7782"
+pages = "350-354"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/s41586-019-1724-z"
+volume = "575"

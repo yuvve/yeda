@@ -1,0 +1,16 @@
+type = "article"
+title = "Mastering the game of Go with deep neural networks and tree search"
+authors = ["Silver, David", "Huang, Aja", "Maddison, Chris J.", "Guez, Arthur", "Sifre, Laurent", "van den Driessche, George", "Schrittwieser, Julian", "Antonoglou, Ioannis", "Panneershelvam, Veda", "Lanctot, Marc", "Dieleman, Sander", "Grewe, Dominik", "Nham, John", "Kalchbrenner, Nal", "Sutskever, Ilya", "Lillicrap, Timothy", "Leach, Madeleine", "Kavukcuoglu, Koray", "Graepel, Thore", "Hassabis, Demis"]
+year = 2016
+doi = "10.1038/nature16961"
+tags = ["reinforcement learning"]
+collections = ["phd/related-work"]
+status = "To Read"
+
+[extra]
+journal = "Nature"
+number = "7587"
+pages = "484-489"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/nature16961"
+volume = "529"

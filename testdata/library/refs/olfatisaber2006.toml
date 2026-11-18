@@ -1,0 +1,16 @@
+type = "article"
+title = "Flocking for Multi-Agent Dynamic Systems: Algorithms and Theory"
+authors = ["Olfati-Saber, R."]
+year = 2006
+doi = "10.1109/tac.2005.864190"
+tags = ["swarm", "robotics"]
+collections = ["phd/related-work"]
+status = "In Progress"
+
+[extra]
+journal = "IEEE Transactions on Automatic Control"
+number = "3"
+pages = "401-420"
+publisher = "Institute of Electrical and Electronics Engineers (IEEE)"
+url = "http://dx.doi.org/10.1109/TAC.2005.864190"
+volume = "51"

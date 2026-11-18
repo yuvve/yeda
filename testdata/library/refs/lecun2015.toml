@@ -1,0 +1,16 @@
+type = "article"
+title = "Deep learning"
+authors = ["LeCun, Yann", "Bengio, Yoshua", "Hinton, Geoffrey"]
+year = 2015
+doi = "10.1038/nature14539"
+tags = ["survey", "deep learning"]
+collections = ["phd/related-work"]
+status = "Read"
+
+[extra]
+journal = "Nature"
+number = "7553"
+pages = "436-444"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/nature14539"
+volume = "521"

@@ -1,0 +1,17 @@
+type = "article"
+title = "Proximal Policy Optimization Algorithms"
+authors = ["Schulman, John", "Wolski, Filip", "Dhariwal, Prafulla", "Radford, Alec", "Klimov, Oleg"]
+year = 2017
+doi = "10.48550/arxiv.1707.06347"
+tags = ["reinforcement learning", "optimization"]
+collections = ["phd/methods"]
+status = "In Progress"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/1707.06347"
+
+[[pdf]]
+id = "1"
+location = "papers"
+path = "schulman2017/schulman2017.pdf"

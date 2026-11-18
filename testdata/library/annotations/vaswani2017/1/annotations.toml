@@ -1,0 +1,26 @@
+[[annotation]]
+id = "VASW0001"
+kind = "highlight"
+page = "1"
+color = "#ffd400"
+text = "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder."
+comment = "The baseline the Transformer replaces: recurrence plus convolution, encoder and decoder."
+source = "reader"
+sort_index = "00000|000036|00414"
+
+[annotation.position]
+pageIndex = 0
+rects = [[159.359, 368.883, 468.299, 377.79], [199.157, 357.974, 468.131, 366.881]]
+
+[[annotation]]
+id = "VASW0002"
+kind = "underline"
+page = "1"
+color = "#2ea8e5"
+text = "The best performing models also connect the encoder and decoder through an attention mechanism."
+source = "reader"
+sort_index = "00000|000268|00436"
+
+[annotation.position]
+pageIndex = 0
+rects = [[199.157, 357.974, 468.131, 366.881], [189.584, 347.065, 468.131, 355.972], [192.694, 336.156, 469.381, 345.063]]
