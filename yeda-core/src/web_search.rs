@@ -232,7 +232,7 @@ mod tests {
         assert!(parse("disabled_search_providers = [\"exa\", \"exa\"]").unwrap_err().to_string().contains("twice"));
         assert!(parse("discover_queries = 7").unwrap_err().to_string().contains("1 to 6"));
         assert!(parse("discover_results = 0").unwrap_err().to_string().contains("1 to 50"));
-        assert!(parse("always_search_providers = [\"brave\"]").unwrap_err().to_string().contains("unknown provider"));
+        assert!(parse("always_search_providers = [\"tavily\"]").unwrap_err().to_string().contains("unknown provider"));
         assert!(parse("searxng_url = \"http://searx.example.org\"").unwrap_err().to_string().contains("https://"));
         assert!(parse("searxng_url = \"https://me:pw@searx.example.org\"").unwrap_err().to_string().contains("user name or password"));
         let (_, warnings) = parse("searxng_url = \"https://searx.example.org/?token=abc\"").unwrap();

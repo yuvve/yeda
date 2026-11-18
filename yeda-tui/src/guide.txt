@@ -257,17 +257,28 @@ THE READER  ( o, yeda read )
   the whole page, and C after that carries on where you were. It is
   remembered per paper.
 
-FINDING PAPERS  ( :discover [--llm <profile>] [what] )
+FINDING PAPERS  ( :discover[!] [--llm <profile>] [what] )
 
   :discover asks the default LLM profile, or the one --llm names, for
   papers like the selected or marked references; with a description (:discover swarm exploration
   under comms loss) it looks for that, with the marked references as
-  context. Anthropic, Mistral and OpenRouter profiles search the web.
-  OpenCode Go and other OpenAI-compatible profiles answer from what the
-  model knows, and the status line and the list say so. Every suggestion is looked up in OpenAlex: ✓ found,
-  ? not found (it may not exist), ◎ already in the library. v marks papers, and a adds the marked
-  ones (else the selected one) by DOI or URL; o opens a paper, q closes
-  the list, and :found opens it again.
+  context. The model writes several queries; yeda searches the web
+  providers and arXiv in parallel, matches the hits to OpenAlex works,
+  drops what is not a paper, and has the model rank the rest. Every
+  suggestion is in OpenAlex: ✓ found, ◎ already in the library. v marks
+  papers, and a adds the marked ones (else the selected one) by DOI or
+  URL; o opens a paper, q closes the list, and :found opens it again.
+  :discover! skips cached results.
+
+  :setup web-search opens the provider list: a, f and d put the selected
+  provider in the always, fallback or disabled group, ←/→ cycles it, and
+  e sets its optional API key or, for searxng, its instance URL. Every
+  "always" provider is searched; fallbacks run only if all of them fail.
+  arXiv is always searched. The popup also sets how many queries the
+  model writes (1-6) and how many papers are shown (1-50). Web search
+  keys are optional: without one, a provider uses its shared free tier.
+  The provider's own search (`model_provider_web_search`) is off by
+  default and sends your query to the LLM provider.
 
 TABLES  ( :table [name], T )
 

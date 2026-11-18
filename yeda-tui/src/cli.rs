@@ -117,6 +117,9 @@ fn dispatch(command: &str, a: Args) -> Result<()> {
     for (_, e) in &lib.unreadable {
         eprintln!("left out: {e}");
     }
+    for warning in &lib.warnings {
+        eprintln!("warning: {warning}");
+    }
     match command {
         "search" => search(&lib, &a),
         "annotations" => show_annotations(&lib, &dir, &a),
