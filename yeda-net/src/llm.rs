@@ -3,7 +3,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 use std::time::Duration;
-use yeda_core::llm::{CodexCredential, Profile, Provider};
+use yeda_core::llm::{Auth, Bound, CodexCredential, Protocol};
 
 /// The paper's PDF; `text` extracts its plain text, called only for providers that need it.
 pub struct Paper<'a> {
@@ -31,17 +31,17 @@ fn clean(key: Option<&str>) -> Option<String> {
     key.map(|k| k.split_whitespace().collect::<String>()).filter(|k| !k.is_empty())
 }
 
-/// `key` is the API key or OAuth token stored for the profile's `url()`, if any.
-pub fn complete(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
+/// `key` is the API key or OAuth credentials stored for the profile's provider, if any.
+pub fn complete(b: &Bound, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
     let key = clean(key);
     let key = key.as_deref();
-    if key.is_none() && p.needs_key() {
-        bail!("no API key or OAuth token for {}", p.url());
+    if key.is_none() && b.needs_key() {
+        bail!("no API key or OAuth credentials for provider '{}' ({})", b.provider, b.url());
     }
-    match p.provider {
-        Provider::Anthropic => anthropic(p, prompt, key.unwrap_or_default()),
-        Provider::Codex => codex(p, prompt, key.unwrap_or_default()),
-        Provider::Openai | Provider::Mistral | Provider::Openrouter | Provider::OpencodeGo => openai(p, prompt, key),
+    match b.protocol() {
+        Protocol::Anthropic => anthropic(b, prompt, key.unwrap_or_default()),
+        Protocol::OpenaiResponses => codex(b, prompt, key.unwrap_or_default()),
+        Protocol::Openai | Protocol::Mistral | Protocol::Openrouter | Protocol::OpencodeGo => openai(b, prompt, key),
     }
 }
 
@@ -49,13 +49,13 @@ static OPENCODE_SESSION: OnceLock<String> = OnceLock::new();
 
 /// The headers for an OpenAI-compatible request. OpenRouter also gets its app attribution headers,
 /// so the traffic shows as yeda rather than "Unknown app"; other servers never see them.
-fn openai_headers(p: &Profile, key: Option<&str>) -> Vec<(&'static str, String)> {
+fn openai_headers(b: &Bound, key: Option<&str>) -> Vec<(&'static str, String)> {
     let mut headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
-    if p.provider == Provider::Openrouter {
+    if b.protocol() == Protocol::Openrouter {
         headers.push(("http-referer", "https://github.com/yuvve/yeda".into()));
         headers.push(("x-openrouter-title", "yeda".into()));
     }
-    if p.provider == Provider::OpencodeGo {
+    if b.protocol() == Protocol::OpencodeGo {
         // OpenCode Go rejects requests without a session id (HTTP 400 MissingSessionID) and asks
         // clients to name themselves; one session per process groups a run's requests.
         let session = OPENCODE_SESSION.get_or_init(|| format!("ses_{}", uuid::Uuid::new_v4().simple()));
@@ -87,18 +87,18 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
 }
 
-fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
-    let base = p.url();
+fn anthropic(b: &Bound, prompt: &Prompt, key: &str) -> Result<Reply> {
+    let base = b.url();
     let mut body = json!({
-        "model": p.model,
-        "max_tokens": p.max_tokens.unwrap_or(32000),
+        "model": b.model,
+        "max_tokens": 32000,
         "system": prompt.system,
         "output_config": {
-            "effort": p.effort.as_deref().unwrap_or("high"),
+            "effort": "high",
             "format": {"type": "json_schema", "schema": prompt.schema},
         },
     });
-    let headers = authorize(p, key, &mut body)?;
+    let headers = authorize(b, key, &mut body)?;
     let question = json!({"type": "text", "text": prompt.text});
     let mut note = None;
     body["messages"] = match &prompt.paper {
@@ -122,7 +122,7 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
     let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
     match v["stop_reason"].as_str() {
         Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
-        Some("max_tokens") => bail!("output hit max_tokens ({}); raise max_tokens in the llm profile", body["max_tokens"]),
+        Some("max_tokens") => bail!("output hit the 32000-token limit; ask for less in the prompt"),
         _ => {}
     }
     let text = v["content"]
@@ -133,11 +133,6 @@ fn anthropic(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
         .filter_map(|b| b["text"].as_str())
         .collect::<String>();
     Ok(Reply { text, note })
-}
-
-/// A token from `claude setup-token`, which uses the Claude subscription instead of API credits.
-fn is_oauth(key: &str) -> bool {
-    key.starts_with("sk-ant-oat")
 }
 
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
@@ -157,10 +152,10 @@ fn claude_code_version() -> Result<String> {
 }
 
 /// The headers for an Anthropic request, adapting `body` (which already has its `system`) to the key.
-fn authorize(p: &Profile, key: &str, body: &mut Value) -> Result<Vec<(&'static str, String)>> {
+fn authorize(b: &Bound, key: &str, body: &mut Value) -> Result<Vec<(&'static str, String)>> {
     let mut headers = vec![("anthropic-version", "2023-06-01".to_string())];
     let mut betas = Vec::new();
-    if is_oauth(key) {
+    if b.auth() == Auth::Oauth {
         headers.push(("authorization", format!("Bearer {key}")));
         headers.push(("user-agent", format!("claude-code/{} (external, cli)", claude_code_version()?)));
         headers.push(("x-app", "cli".into()));
@@ -171,10 +166,8 @@ fn authorize(p: &Profile, key: &str, body: &mut Value) -> Result<Vec<(&'static s
     } else {
         headers.push(("x-api-key", key.to_string()));
     }
-    let fallback_models = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
-    // Unverified with subscription tokens, so they only get fallbacks when the profile asks.
-    let default = p.base_url.is_none() && !is_oauth(key) && fallback_models.contains(&p.model.as_str());
-    if p.fallbacks.unwrap_or(default) {
+    // Unverified with subscription tokens, so they are left to API keys.
+    if b.auth() != Auth::Oauth {
         body["fallbacks"] = json!("default");
         betas.push("server-side-fallback-2026-07-01");
     }
@@ -188,96 +181,74 @@ fn refusal_category(v: &Value) -> &str {
     v["stop_details"]["category"].as_str().unwrap_or("no category")
 }
 
-fn openai(p: &Profile, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
-    let (body, note) = openai_body(p, prompt)?;
-    let v = post(&format!("{}/chat/completions", p.url()), &openai_headers(p, key), &body)?;
+fn openai(b: &Bound, prompt: &Prompt, key: Option<&str>) -> Result<Reply> {
+    let (body, note) = openai_body(b, prompt)?;
+    let v = post(&format!("{}/chat/completions", b.url()), &openai_headers(b, key), &body)?;
     if matches!(v["choices"][0]["finish_reason"].as_str(), Some("length" | "model_length")) {
-        bail!("output was cut off at the token limit; raise max_tokens in the llm profile");
+        bail!("output was cut off at the token limit; ask for less in the prompt");
     }
     let text = v["choices"][0]["message"]["content"].as_str().context("no message content in response")?;
     Ok(Reply { text: text.to_string(), note })
 }
 
 /// The chat completions request for `prompt`, with a note on how the paper went along.
-fn openai_body(p: &Profile, prompt: &Prompt) -> Result<(Value, Option<String>)> {
+fn openai_body(b: &Bound, prompt: &Prompt) -> Result<(Value, Option<String>)> {
     let mut note = None;
     let user = match &prompt.paper {
-        Some(paper) if p.provider == Provider::Mistral => {
+        Some(paper) if b.protocol() == Protocol::Mistral => {
             let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
             let doc = json!({"type": "document_url", "document_url": format!("data:application/pdf;base64,{data}")});
             json!([doc, {"type": "text", "text": prompt.text}])
         }
-        Some(paper) if p.provider == Provider::Openrouter => {
+        Some(paper) if b.protocol() == Protocol::Openrouter => {
             let data = base64::engine::general_purpose::STANDARD.encode(paper.pdf);
             let file = json!({"type": "file", "file": {"filename": "paper.pdf", "file_data": format!("data:application/pdf;base64,{data}")}});
             json!([file, {"type": "text", "text": prompt.text}])
         }
-        Some(paper) => {
-            let mut paper = (paper.text)()?;
-            if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
-                note = Some(format!("paper text truncated from {} to {max} characters", paper.chars().count()));
-                paper = paper.chars().take(max).collect();
-            }
-            json!(format!("{}\n\nPaper text:\n{paper}", prompt.text))
-        }
+        Some(paper) => json!(format!("{}\n\nPaper text:\n{}", prompt.text, (paper.text)()?)),
         None => {
             note = Some("no PDF; summarized from metadata and notes only".into());
             json!(prompt.text)
         }
     };
     let mut body = json!({
-        "model": p.model,
+        "model": b.model,
         "messages": [{"role": "system", "content": prompt.system}, {"role": "user", "content": user}],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "table_row", "strict": true, "schema": prompt.schema}},
     });
-    if p.json_schema.unwrap_or(true) {
-        body["response_format"] =
-            json!({"type": "json_schema", "json_schema": {"name": "table_row", "strict": true, "schema": prompt.schema}});
-    }
     // OpenCode Go's models reason before answering, which takes output tokens too.
-    let default = (p.provider == Provider::OpencodeGo).then_some(32000);
-    if let Some(m) = p.max_tokens.or(default) {
-        body["max_tokens"] = json!(m);
+    if b.protocol() == Protocol::OpencodeGo {
+        body["max_tokens"] = json!(32000);
     }
     Ok((body, note))
 }
 
 /// The request for `prompt` against the Responses API, which the Codex token is accepted by.
-fn codex_body(p: &Profile, prompt: &Prompt, schema: Option<&Value>) -> Result<(Value, Option<String>)> {
+fn codex_body(b: &Bound, prompt: &Prompt, schema: Option<&Value>) -> Result<(Value, Option<String>)> {
     let mut note = None;
     let user = match &prompt.paper {
-        Some(paper) => {
-            let mut paper = (paper.text)()?;
-            if let Some(max) = p.max_input_chars.filter(|&m| paper.chars().count() > m) {
-                note = Some(format!("paper text truncated from {} to {max} characters", paper.chars().count()));
-                paper = paper.chars().take(max).collect();
-            }
-            json!([{"type": "input_text", "text": format!("{}\n\nPaper text:\n{paper}", prompt.text)}])
-        }
+        Some(paper) => json!([{"type": "input_text", "text": format!("{}\n\nPaper text:\n{}", prompt.text, (paper.text)()?)}]),
         None => {
             note = Some("no PDF; summarized from metadata and notes only".into());
             json!([{"type": "input_text", "text": prompt.text}])
         }
     };
     let mut body = json!({
-        "model": p.model,
+        "model": b.model,
         "instructions": prompt.system,
         "input": [{"role": "user", "content": user}],
         "store": false,
         "stream": true,
     });
-    if let Some(schema) = schema.filter(|_| p.json_schema.unwrap_or(true)) {
+    if let Some(schema) = schema {
         body["text"] = json!({"format": {"type": "json_schema", "name": "table_row", "strict": true, "schema": schema}});
-    }
-    // max_output_tokens is rejected on this route, so the profile's limit cannot be sent.
-    if p.max_tokens.is_some() {
-        note = Some("max_tokens has no effect on Codex; the server decides the length".into());
     }
     Ok((body, note))
 }
 
-fn codex(p: &Profile, prompt: &Prompt, key: &str) -> Result<Reply> {
-    let (body, note) = codex_body(p, prompt, Some(&prompt.schema))?;
-    let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, Some(key)), &body)?;
+fn codex(b: &Bound, prompt: &Prompt, key: &str) -> Result<Reply> {
+    let (body, note) = codex_body(b, prompt, Some(&prompt.schema))?;
+    let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, Some(key)), &body)?;
     let text = response_text(&response)?;
     Ok(Reply { text, note })
 }
@@ -382,111 +353,106 @@ fn post_form(url: &str, form: &str) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
 }
 
-/// A minimal request, to test the profile and key.
-pub fn ping(p: &Profile, key: Option<&str>) -> Result<()> {
-    let mut p = p.clone();
-    p.effort = Some("low".into());
+/// A minimal request, to test the profile and its provider's credentials.
+pub fn ping(b: &Bound, key: Option<&str>) -> Result<()> {
     let schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": false});
     let prompt = Prompt { system: "Set ok to true.".into(), text: "Connection test.".into(), paper: None, schema };
-    complete(&p, &prompt, key).map(|_| ())
+    complete(b, &prompt, key).map(|_| ())
 }
 
 /// A plain answer to `text`, searching the web where the provider can: Anthropic's, Mistral's and
 /// OpenRouter's web search tools, or an OpenAI-compatible server that searches by itself.
-/// Says so when `p` answers a search from what the model knows instead of from the web.
+/// Says so when `b` answers a search from what the model knows instead of from the web.
 /// Generic OpenAI-compatible servers aren't asked to search, and OpenCode Go ignores search tools.
-pub fn search_note(p: &Profile) -> Option<&'static str> {
-    match p.provider {
-        Provider::Openai | Provider::OpencodeGo | Provider::Codex => Some("answered without web search, from what the model knows"),
-        Provider::Anthropic | Provider::Mistral | Provider::Openrouter => None,
+pub fn search_note(b: &Bound) -> Option<&'static str> {
+    match b.protocol() {
+        Protocol::Openai | Protocol::OpencodeGo | Protocol::OpenaiResponses => Some("answered without web search, from what the model knows"),
+        Protocol::Anthropic | Protocol::Mistral | Protocol::Openrouter => None,
     }
 }
 
 /// Answers `text` in plain text, without tools or a JSON schema: queries and ranking for `:discover`.
-pub fn text(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<String> {
+pub fn text(b: &Bound, system: &str, text: &str, key: Option<&str>) -> Result<String> {
     let key = clean(key);
     let key = key.as_deref();
-    if key.is_none() && p.needs_key() {
-        bail!("no API key or OAuth token for {}", p.url());
+    if key.is_none() && b.needs_key() {
+        bail!("no API key or OAuth credentials for provider '{}' ({})", b.provider, b.url());
     }
-    match p.provider {
-        Provider::Anthropic => {
+    match b.protocol() {
+        Protocol::Anthropic => {
             let mut body = json!({
-                "model": p.model,
-                "max_tokens": p.max_tokens.unwrap_or(8000),
+                "model": b.model,
+                "max_tokens": 8000,
                 "system": system,
-                "output_config": {"effort": p.effort.as_deref().unwrap_or("low")},
+                "output_config": {"effort": "low"},
                 "messages": [{"role": "user", "content": text}],
             });
-            let headers = authorize(p, key.unwrap_or_default(), &mut body)?;
-            let v = post(&format!("{}/v1/messages", p.url()), &headers, &body)?;
+            let headers = authorize(b, key.unwrap_or_default(), &mut body)?;
+            let v = post(&format!("{}/v1/messages", b.url()), &headers, &body)?;
             match v["stop_reason"].as_str() {
                 Some("refusal") => bail!("the model declined ({})", refusal_category(&v)),
-                Some("max_tokens") => bail!("output hit max_tokens; raise it in the llm profile"),
+                Some("max_tokens") => bail!("output hit the 8000-token limit; ask for less in the prompt"),
                 _ => {}
             }
             Ok(v["content"].as_array().into_iter().flatten().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect())
         }
-        Provider::Codex => {
+        Protocol::OpenaiResponses => {
             let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
-            let (body, _) = codex_body(p, &prompt, None)?;
-            let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, key), &body)?;
+            let (body, _) = codex_body(b, &prompt, None)?;
+            let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, key), &body)?;
             response_text(&response)
         }
         _ => {
-            let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
-            if let Some(m) = p.max_tokens {
-                body["max_tokens"] = json!(m);
-            }
-            let v = post(&format!("{}/chat/completions", p.url()), &openai_headers(p, key), &body)?;
+            let body = json!({"model": b.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            let v = post(&format!("{}/chat/completions", b.url()), &openai_headers(b, key), &body)?;
             Ok(v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string())
         }
     }
 }
 
 /// Answers `text`, searching the web where the provider can; the note says when it didn't.
-pub fn search(p: &Profile, system: &str, text: &str, key: Option<&str>) -> Result<Reply> {
+pub fn search(b: &Bound, system: &str, text: &str, key: Option<&str>) -> Result<Reply> {
     let key = clean(key);
     let key = key.as_deref();
-    if key.is_none() && p.needs_key() {
-        bail!("no API key or OAuth token for {}", p.url());
+    if key.is_none() && b.needs_key() {
+        bail!("no API key or OAuth credentials for provider '{}' ({})", b.provider, b.url());
     }
-    let text = match p.provider {
-        Provider::Anthropic => anthropic_search(p, system, text, key.unwrap_or_default())?,
-        Provider::Mistral => mistral_search(p, system, text, key.unwrap_or_default())?,
-        Provider::Codex => {
+    let text = match b.protocol() {
+        Protocol::Anthropic => anthropic_search(b, system, text, key.unwrap_or_default())?,
+        Protocol::Mistral => mistral_search(b, system, text, key.unwrap_or_default())?,
+        Protocol::OpenaiResponses => {
             let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
-            let (body, _) = codex_body(p, &prompt, None)?;
-            let response = stream(&format!("{}/responses", p.url()), &openai_headers(p, key), &body)?;
+            let (body, _) = codex_body(b, &prompt, None)?;
+            let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, key), &body)?;
             response_text(&response)?
         }
-        Provider::Openai | Provider::Openrouter | Provider::OpencodeGo => {
-            let base = p.url();
-            let mut body = json!({"model": p.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
-            if p.provider == Provider::Openrouter {
+        Protocol::Openai | Protocol::Openrouter | Protocol::OpencodeGo => {
+            let base = b.url();
+            let mut body = json!({"model": b.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]});
+            if b.protocol() == Protocol::Openrouter {
                 body["tools"] = json!([{"type": "openrouter:web_search"}]);
             }
-            let v = post(&format!("{base}/chat/completions"), &openai_headers(p, key), &body)?;
+            let v = post(&format!("{base}/chat/completions"), &openai_headers(b, key), &body)?;
             v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string()
         }
     };
-    Ok(Reply { text, note: search_note(p).map(String::from) })
+    Ok(Reply { text, note: search_note(b).map(String::from) })
 }
 
-fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
-    let base = p.url();
+fn anthropic_search(b: &Bound, system: &str, text: &str, key: &str) -> Result<String> {
+    let base = b.url();
     let mut messages = vec![json!({"role": "user", "content": text})];
     // A long search ends the turn with `pause_turn`; sending the partial answer back continues it.
     for _ in 0..4 {
         let mut body = json!({
-            "model": p.model,
-            "max_tokens": p.max_tokens.unwrap_or(16000),
+            "model": b.model,
+            "max_tokens": 16000,
             "system": system,
-            "output_config": {"effort": p.effort.as_deref().unwrap_or("medium")},
+            "output_config": {"effort": "medium"},
             "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
             "messages": messages,
         });
-        let headers = authorize(p, key, &mut body)?;
+        let headers = authorize(b, key, &mut body)?;
         let v = post(&format!("{base}/v1/messages"), &headers, &body)?;
         match v["stop_reason"].as_str() {
             Some("pause_turn") => messages.push(json!({"role": "assistant", "content": v["content"]})),
@@ -500,19 +466,16 @@ fn anthropic_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<
     bail!("the search did not finish")
 }
 
-fn mistral_search(p: &Profile, system: &str, text: &str, key: &str) -> Result<String> {
-    let mut body = json!({
-        "model": p.model,
+fn mistral_search(b: &Bound, system: &str, text: &str, key: &str) -> Result<String> {
+    let body = json!({
+        "model": b.model,
         "instructions": system,
         "inputs": text,
         "tools": [{"type": "web_search"}],
         "stream": false,
         "store": false,
     });
-    if let Some(m) = p.max_tokens {
-        body["completion_args"] = json!({"max_tokens": m});
-    }
-    let v = post(&format!("{}/conversations", p.url()), &[("authorization", format!("Bearer {key}"))], &body)?;
+    let v = post(&format!("{}/conversations", b.url()), &[("authorization", format!("Bearer {key}"))], &body)?;
     Ok(conversation_text(&v))
 }
 
@@ -530,21 +493,24 @@ fn conversation_text(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yeda_core::llm::Provider;
 
-    fn profile(fallbacks: Option<bool>) -> Profile {
-        Profile {
-            provider: Provider::Anthropic,
-            model: "claude-opus-5-5".into(),
-            base_url: None,
-            max_tokens: None,
-            effort: None,
-            fallbacks,
-            max_input_chars: None,
-            json_schema: None,
-        }
+    fn provider(protocol: Protocol, auth: Auth) -> Provider {
+        let base_url = match protocol {
+            Protocol::Anthropic => "https://api.anthropic.com",
+            Protocol::Openai | Protocol::OpenaiResponses => "https://api.openai.com/v1",
+            Protocol::Mistral => "https://api.mistral.ai/v1",
+            Protocol::Openrouter => "https://openrouter.ai/api/v1",
+            Protocol::OpencodeGo => "https://opencode.ai/inference/go/openai/v1",
+        };
+        Provider { base_url: base_url.into(), protocol, auth }
     }
 
-    fn header<'a>(h: &'a [(&str, String)], name: &str) -> Option<&'a str> {
+    fn bound(protocol: Protocol, auth: Auth) -> Bound {
+        Bound { profile: "test".into(), provider: "test".into(), model: "test-model".into(), settings: provider(protocol, auth) }
+    }
+
+    fn header<'a>(h: &'a [(&'a str, String)], name: &str) -> Option<&'a str> {
         h.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
     }
 
@@ -552,10 +518,10 @@ mod tests {
     fn codex_sends_responses_with_stream_and_schema() {
         let schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": false});
         let prompt = Prompt { system: "s".into(), text: "t".into(), paper: None, schema: schema.clone() };
-        let p = Profile { provider: Provider::Codex, model: "gpt-5.1".into(), ..profile(None) };
-        assert!(p.needs_key());
-        assert_eq!(p.url(), "https://api.openai.com/v1");
-        let (body, _) = codex_body(&p, &prompt, Some(&prompt.schema)).unwrap();
+        let b = Bound { model: "gpt-5.1".into(), ..bound(Protocol::OpenaiResponses, Auth::Oauth) };
+        assert!(b.needs_key());
+        assert_eq!(b.url(), "https://api.openai.com/v1");
+        let (body, _) = codex_body(&b, &prompt, Some(&prompt.schema)).unwrap();
         assert_eq!(body["store"], false);
         assert_eq!(body["stream"], true);
         assert_eq!(body["instructions"], "s");
@@ -565,10 +531,6 @@ mod tests {
         assert_eq!(body["text"]["format"]["schema"], schema);
         assert!(body.get("response_format").is_none());
         assert!(body.get("max_tokens").is_none());
-
-        let (body, note) = codex_body(&Profile { max_tokens: Some(1000), ..profile(None) }, &prompt, None).unwrap();
-        assert!(body.get("text").is_none());
-        assert!(note.unwrap().contains("max_tokens"));
     }
 
     #[test]
@@ -594,25 +556,25 @@ mod tests {
     }
 
     #[test]
-    fn codex_profile_is_not_a_chat_completions_server() {
-        let p = Profile { provider: Provider::Codex, model: "gpt-5.1".into(), ..profile(None) };
-        assert_eq!(search_note(&p).unwrap(), search_note(&Profile { provider: Provider::Openai, ..profile(None) }).unwrap());
+    fn codex_is_not_a_chat_completions_server() {
+        let b = bound(Protocol::OpenaiResponses, Auth::Oauth);
+        assert_eq!(search_note(&b).unwrap(), search_note(&bound(Protocol::Openai, Auth::ApiKey)).unwrap());
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let http = Profile { base_url: Some(format!("http://{}/v1", server.local_addr().unwrap())), ..p };
+        let http = Bound { settings: Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), ..provider(Protocol::OpenaiResponses, Auth::Oauth) }, ..bound(Protocol::OpenaiResponses, Auth::Oauth) };
         let err = ping(&http, Some("k")).unwrap_err().to_string();
         assert!(err.contains("only go over https://"), "{err}");
     }
 
     #[test]
     fn only_openrouter_gets_attribution_headers() {
-        for provider in [Provider::Openai, Provider::Mistral, Provider::Anthropic] {
-            let h = openai_headers(&Profile { provider, ..profile(None) }, Some("k"));
+        for protocol in [Protocol::Openai, Protocol::Mistral, Protocol::Anthropic] {
+            let h = openai_headers(&bound(protocol, Auth::ApiKey), Some("k"));
             assert_eq!(header(&h, "authorization"), Some("Bearer k"));
             assert_eq!(header(&h, "http-referer"), None);
             assert_eq!(header(&h, "x-openrouter-title"), None);
         }
-        let h = openai_headers(&Profile { provider: Provider::Openrouter, ..profile(None) }, Some("k"));
+        let h = openai_headers(&bound(Protocol::Openrouter, Auth::ApiKey), Some("k"));
         assert_eq!(header(&h, "authorization"), Some("Bearer k"));
         assert_eq!(header(&h, "http-referer"), Some("https://github.com/yuvve/yeda"));
         assert_eq!(header(&h, "x-openrouter-title"), Some("yeda"));
@@ -623,18 +585,18 @@ mod tests {
     fn refuses_a_local_plain_http_server() {
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let p = Profile { provider: Provider::Openai, base_url: Some(format!("http://{}/v1", server.local_addr().unwrap())), ..profile(None) };
-        let err = ping(&p, Some("key")).unwrap_err().to_string();
+        let b = Bound { settings: Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), ..provider(Protocol::Openai, Auth::ApiKey) }, ..bound(Protocol::Openai, Auth::ApiKey) };
+        let err = ping(&b, Some("key")).unwrap_err().to_string();
         assert!(err.contains("only go over https://"), "{err}");
-        assert!(search(&p, "s", "t", None).is_err());
+        assert!(search(&b, "s", "t", None).is_err());
         assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
-    fn oauth_token_is_sent_as_claude_code_without_default_fallbacks() {
+    fn oauth_token_is_sent_as_claude_code_without_fallbacks() {
         let _ = CLAUDE_CODE_VERSION.set("9.9.9".into());
         let mut body = json!({"system": "s"});
-        let h = authorize(&profile(None), "sk-ant-oat01-x", &mut body).unwrap();
+        let h = authorize(&bound(Protocol::Anthropic, Auth::Oauth), "sk-ant-oat01-x", &mut body).unwrap();
         assert_eq!(header(&h, "authorization"), Some("Bearer sk-ant-oat01-x"));
         assert_eq!(header(&h, "x-api-key"), None);
         assert_eq!(header(&h, "anthropic-beta"), Some("claude-code-20250219,oauth-2025-04-20"));
@@ -642,15 +604,10 @@ mod tests {
         assert_eq!(header(&h, "user-agent"), Some("claude-code/9.9.9 (external, cli)"));
         assert_eq!(body["system"], json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "text", "text": "s"}]));
         assert!(body.get("fallbacks").is_none());
-
-        let mut body = json!({"system": "s"});
-        let h = authorize(&profile(Some(true)), "sk-ant-oat01-x", &mut body).unwrap();
-        assert_eq!(header(&h, "anthropic-beta"), Some("claude-code-20250219,oauth-2025-04-20,server-side-fallback-2026-07-01"));
-        assert_eq!(body["fallbacks"], "default");
     }
 
-    fn opencode_go() -> Profile {
-        Profile { provider: Provider::OpencodeGo, model: "glm-5.3-flash".into(), ..profile(None) }
+    fn opencode_go() -> Bound {
+        Bound { model: "glm-5.3-flash".into(), ..bound(Protocol::OpencodeGo, Auth::ApiKey) }
     }
 
     #[test]
@@ -662,37 +619,38 @@ mod tests {
         assert_eq!(header(&openai_headers(&opencode_go(), None), "x-opencode-session"), Some(session));
         assert_eq!(header(&h, "user-agent"), Some(concat!("yeda/", env!("CARGO_PKG_VERSION"))));
 
-        let openai = Profile { provider: Provider::Openai, ..opencode_go() };
+        let openai = bound(Protocol::Openai, Auth::ApiKey);
         assert_eq!(openai_headers(&openai, Some("k")), [("authorization", "Bearer k".to_string())]);
     }
 
     #[test]
     fn opencode_go_needs_a_key_and_https() {
-        let p = opencode_go();
-        assert!(p.needs_key());
-        assert_eq!(p.url(), "https://opencode.ai/inference/go/openai/v1");
-        assert!(ping(&p, None).unwrap_err().to_string().contains("no API key"));
+        let b = opencode_go();
+        assert!(b.needs_key());
+        assert_eq!(b.url(), "https://opencode.ai/inference/go/openai/v1");
+        assert!(ping(&b, None).unwrap_err().to_string().contains("no API key"));
 
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let p = Profile { base_url: Some(format!("http://{}/v1", server.local_addr().unwrap())), ..opencode_go() };
-        let err = ping(&p, Some("oc-key")).unwrap_err().to_string();
+        let b = Bound { settings: Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), ..provider(Protocol::OpencodeGo, Auth::ApiKey) }, ..opencode_go() };
+        let err = ping(&b, Some("oc-key")).unwrap_err().to_string();
         assert!(err.contains("only go over https://"), "{err}");
-        assert!(search(&p, "s", "t", Some("oc-key")).is_err());
+        assert!(search(&b, "s", "t", Some("oc-key")).is_err());
         assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
     fn says_when_a_search_skipped_the_web() {
-        for (provider, searches) in [
-            (Provider::OpencodeGo, false),
-            (Provider::Openai, false),
-            (Provider::Anthropic, true),
-            (Provider::Mistral, true),
-            (Provider::Openrouter, true),
+        for (protocol, auth, searches) in [
+            (Protocol::OpencodeGo, Auth::ApiKey, false),
+            (Protocol::Openai, Auth::ApiKey, false),
+            (Protocol::OpenaiResponses, Auth::Oauth, false),
+            (Protocol::Anthropic, Auth::ApiKey, true),
+            (Protocol::Mistral, Auth::ApiKey, true),
+            (Protocol::Openrouter, Auth::ApiKey, true),
         ] {
-            let note = search_note(&Profile { provider, ..profile(None) });
-            assert_eq!(note.is_none(), searches, "{provider:?}");
+            let note = search_note(&bound(protocol, auth));
+            assert_eq!(note.is_none(), searches, "{protocol:?}");
         }
         assert!(search_note(&opencode_go()).unwrap().contains("without web search"));
     }
@@ -705,12 +663,17 @@ mod tests {
         assert_eq!(body["response_format"], json!({"type": "json_schema", "json_schema": {"name": "table_row", "strict": true, "schema": schema}}));
         assert_eq!(body["model"], "glm-5.3-flash");
         assert_eq!(body["max_tokens"], 32000);
-
-        let (body, _) = openai_body(&Profile { max_tokens: Some(1000), json_schema: Some(false), ..opencode_go() }, &prompt).unwrap();
-        assert_eq!(body["max_tokens"], 1000);
-        assert!(body.get("response_format").is_none());
-        let (body, _) = openai_body(&Profile { provider: Provider::Openai, ..opencode_go() }, &prompt).unwrap();
+        let (body, _) = openai_body(&bound(Protocol::Openai, Auth::ApiKey), &prompt).unwrap();
         assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn each_profile_keeps_its_own_model_on_a_shared_provider() {
+        let settings = provider(Protocol::Anthropic, Auth::ApiKey);
+        let a = Bound { profile: "a".into(), provider: "claude".into(), model: "claude-opus-5-5".into(), settings: settings.clone() };
+        let b = Bound { profile: "b".into(), provider: "claude".into(), model: "claude-sonnet-5-5".into(), settings };
+        assert_eq!((a.url(), b.url()), ("https://api.anthropic.com", "https://api.anthropic.com"));
+        assert_eq!((a.model.as_str(), b.model.as_str()), ("claude-opus-5-5", "claude-sonnet-5-5"));
     }
 
     #[test]
@@ -731,7 +694,7 @@ mod tests {
     fn api_key_keeps_plain_system_and_default_fallbacks() {
         let mut body = json!({"system": "s"});
         assert_eq!(clean(Some(" sk-ant-oat01-ab\ncd \n")).as_deref(), Some("sk-ant-oat01-abcd"));
-        let h = authorize(&profile(None), "sk-ant-api03-x", &mut body).unwrap();
+        let h = authorize(&bound(Protocol::Anthropic, Auth::ApiKey), "sk-ant-api03-x", &mut body).unwrap();
         assert_eq!(header(&h, "x-api-key"), Some("sk-ant-api03-x"));
         assert_eq!(header(&h, "authorization"), None);
         assert_eq!(header(&h, "anthropic-beta"), Some("server-side-fallback-2026-07-01"));

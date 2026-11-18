@@ -49,11 +49,12 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
         ("graph", 1) if args[0] == "col" => lib.tables.values().flat_map(|t| t.columns.clone()).collect(),
         ("fetch", 0) | ("attach", 1) => locations(),
-        ("setup", 0) => ["exa", "firecrawl", "keenable", "llm", "openalex", "parallel", "proxy", "searxng", "table", "web-search", "webdav"].map(String::from).to_vec(),
+        ("setup", 0) => ["exa", "firecrawl", "keenable", "llm", "openalex", "parallel", "provider", "proxy", "searxng", "table", "web-search", "webdav"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "web-search" => ["exa", "firecrawl", "keenable", "parallel", "searxng"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "table" => tables(),
         ("config", 0) => ["device", "library"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "llm" => lib.llm.keys().cloned().collect(),
+        ("setup", 1) if args[0] == "provider" => lib.providers.keys().cloned().collect(),
         ("setup", 1) if args[0] == "webdav" => lib.remotes.keys().cloned().collect(),
         ("cite", 0) => ["bibtex", "ident"].into_iter().chain(cite::style_names()).map(String::from).collect(),
         _ => Vec::new(),
@@ -77,7 +78,7 @@ mod tests {
 
     #[test]
     fn completes_commands_and_arguments() {
-        let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[llm.claude]\nprovider = \"anthropic\"\nmodel = \"m\"\n";
+        let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"api-key\"\n[llm.claude]\nprovider = \"claude\"\nmodel = \"m\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let c = Completion::new(&lib, "summ").unwrap();
         assert_eq!(c.candidates, ["summarize"]);

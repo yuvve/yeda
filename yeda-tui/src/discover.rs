@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use yeda_core::discover::{self, Found, Hit, RankCandidate};
 use yeda_core::graph::{self, Work};
 use yeda_core::library::{Library, Ref};
-use yeda_core::llm::Profile;
+use yeda_core::llm::Bound;
 use yeda_core::web_search::{Provider, Settings};
 
 /// A phase waits this long for its providers.
@@ -55,7 +55,7 @@ pub enum Msg {
 }
 
 pub struct Input {
-    pub profile: Profile,
+    pub profile: Bound,
     pub key: Option<String>,
     pub prompt: String,
     pub from: Vec<Ref>,
@@ -354,7 +354,7 @@ fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: In
 }
 
 /// The provider's own web search: the model answers, and yeda keeps the links in it.
-fn native(profile: &Profile, key: Option<&str>, query: &str, limit: usize) -> std::result::Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure> {
+fn native(profile: &Bound, key: Option<&str>, query: &str, limit: usize) -> std::result::Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure> {
     // shortcut: a native search runs the LLM's own request, which can outlive the phase deadline; its late answer is ignored.
     let text = yeda_net::llm::search(profile, "Search the web and answer with the relevant pages.", &format!("Find up to {limit} research papers about: {query}"), key).map_err(|e| yeda_net::web_search::Failure::down(format!("{e:#}")))?;
     Ok(yeda_net::web_search::Answer { hits: discover::links_in_answer(&text.text), reset_in: None })
