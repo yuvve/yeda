@@ -151,8 +151,8 @@ pub fn ranking_request(prompt: &str, candidates: &[RankCandidate], results: usiz
     for c in candidates {
         let year = c.year.map(|y| format!(" ({y})")).unwrap_or_default();
         let venue = c.venue.as_ref().map(|v| format!(" — {}", data(v))).unwrap_or_default();
-        let doi = c.doi.as_ref().map(|d| format!(" doi:{d}")).unwrap_or_default();
-        let url = c.url.as_ref().map(|u| format!(" {u}")).unwrap_or_default();
+        let doi = c.doi.as_ref().map(|d| format!(" doi:{}", data(d))).unwrap_or_default();
+        let url = c.url.as_ref().map(|u| format!(" {}", data(u))).unwrap_or_default();
         text += &format!("[{}] {}{}{}{} {}{}\n", c.id, data(&c.title), data(&c.authors), year, venue, doi, url);
         if let Some(a) = &c.abstract_text {
             text += &format!("  {}\n", data(a));

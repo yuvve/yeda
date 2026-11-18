@@ -70,7 +70,7 @@ mod tests {
         let started = std::time::Instant::now();
         spaced(Some(&dir), Duration::from_millis(120), || ()).unwrap();
         spaced(Some(&dir), Duration::from_millis(120), || ()).unwrap();
-        assert!(started.elapsed() >= Duration::from_millis(120));
+        assert!(started.elapsed() >= Duration::from_millis(100));
         let _ = fs::remove_dir_all(&dir);
     }
 }

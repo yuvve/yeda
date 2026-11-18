@@ -1735,6 +1735,7 @@ impl App {
                 }) {
                     Ok(effect) => self.apply(Ok(vec![effect])),
                     Err(e) => {
+                        self.reload();
                         self.status = format!("{e:#}");
                         false
                     }
@@ -1834,6 +1835,7 @@ impl App {
             }) {
                 Ok(effect) => self.apply(Ok(vec![effect])),
                 Err(e) => {
+                    self.reload();
                     self.status = format!("{e:#}");
                     false
                 }
@@ -1846,6 +1848,7 @@ impl App {
             self.setup = None;
             self.setup_from_web_search = false;
             if let Some(form) = &mut self.web_search {
+                form.settings.searxng_url = self.lib.web_search.searxng_url.clone();
                 form.refresh();
             }
             self.mode = if self.web_search.is_some() { Mode::WebSearch } else { Mode::Normal };

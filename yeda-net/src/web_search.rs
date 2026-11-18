@@ -207,7 +207,7 @@ fn http_date(value: &str) -> Option<SystemTime> {
     let year: u64 = year.parse().ok()?;
     let mut clock = time.split(':');
     let (h, m, s): (u64, u64, u64) = (clock.next()?.parse().ok()?, clock.next()?.parse().ok()?, clock.next()?.parse().ok()?);
-    if !(1..=31).contains(&day) || year == 0 || h > 23 || m > 59 || s > 60 {
+    if !(1..=31).contains(&day) || !(1970..=9999).contains(&year) || h > 23 || m > 59 || s > 60 {
         return None;
     }
     let y = if month <= 2 { year - 1 } else { year };
@@ -238,7 +238,7 @@ fn post(url: &str, host: &str, ctx: &Ctx<'_>, body: &Value) -> Result<Reply, Fai
     call(req.send(body.to_string()), ctx)
 }
 
-fn get(url: &str, host: &str, ctx: &Ctx<'_>, params: &[(&str, String)]) -> Result<Reply, Failure> {
+fn get(url: &str, host: &str, ctx: &Ctx<'_>, params: &[(&str, String, bool)]) -> Result<Reply, Failure> {
     if host_of(url) != Some(host) {
         return Err(Failure::down("unexpected redirect"));
     }
@@ -247,8 +247,8 @@ fn get(url: &str, host: &str, ctx: &Ctx<'_>, params: &[(&str, String)]) -> Resul
     for (k, v) in headers(ctx) {
         req = req.header(&k, &v);
     }
-    for (k, v) in params {
-        req = req.query(k, v);
+    for (k, v, raw) in params {
+        req = if *raw { req.query_raw(k, v) } else { req.query(k, v) };
     }
     call(req.call(), ctx)
 }
@@ -289,19 +289,12 @@ fn walk(v: &Value, out: &mut Vec<Hit>) {
 }
 
 fn hit(title: String, url: &str, text: Option<String>) -> Hit {
-    let doi = url.strip_prefix("https://doi.org/").or_else(|| url.strip_prefix("http://doi.org/")).and_then(yeda_core::discover::normalize_doi);
-    let arxiv = url
-        .split("arxiv.org/abs/")
-        .nth(1)
-        .or_else(|| url.split("arxiv.org/pdf/").nth(1))
-        .map(|id| {
-            let id = id.split(['?', '#', '/']).next().unwrap_or(id).trim_end_matches(".pdf");
-            // The version names the same paper in OpenAlex, whose DOI has none.
-            match id.rsplit_once('v').filter(|(_, v)| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit())) {
-                Some((base, _)) => base.to_string(),
-                None => id.to_string(),
-            }
-        });
+    let clean = url.split(['?', '#']).next().unwrap_or(url);
+    let doi = clean.strip_prefix("https://doi.org/").or_else(|| clean.strip_prefix("http://doi.org/")).and_then(yeda_core::discover::normalize_doi);
+    let arxiv = match yeda_core::ids::parse_id(clean.trim_end_matches(".pdf")) {
+        Some(yeda_core::ids::Id::Arxiv(id)) => Some(id),
+        _ => None,
+    };
     Hit { title, url: Some(url.to_string()), doi, arxiv, text }
 }
 
@@ -359,17 +352,17 @@ fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
         Some((path, query)) => (path, Some(query)),
         None => (without_fragment, None),
     };
-    let mut params: Vec<(&str, String)> = Vec::new();
+    let mut params: Vec<(&str, String, bool)> = Vec::new();
     if let Some(extra) = extra {
         for pair in extra.split('&').filter(|p| !p.is_empty()) {
             match pair.split_once('=') {
-                Some((k, v)) => params.push((k, v.to_string())),
-                None => params.push((pair, String::new())),
+                Some((k, v)) => params.push((k, v.to_string(), true)),
+                None => params.push((pair, String::new(), true)),
             }
         }
     }
-    params.push(("q", s.query.to_string()));
-    params.push(("format", "json".to_string()));
+    params.push(("q", s.query.to_string(), false));
+    params.push(("format", "json".to_string(), false));
     let url = format!("{}/search", path.trim_end_matches('/'));
     let reply = get(&url, &host, &ctx, &params)?;
     let body = json_reply(&reply)?;
@@ -428,7 +421,7 @@ pub fn arxiv(query: &str, max_results: usize) -> Result<Answer, Failure> {
         "https://export.arxiv.org/api/query",
         "export.arxiv.org",
         &ctx,
-        &[("search_query", query.to_string()), ("start", "0".to_string()), ("max_results", max_results.to_string())],
+        &[("search_query", query.to_string(), false), ("start", "0".to_string(), false), ("max_results", max_results.to_string(), false)],
     )?;
     let mut out = Vec::new();
     for entry in reply.body.split("<entry>").skip(1) {
@@ -464,6 +457,8 @@ mod tests {
         assert_eq!(hits(&exa)[0].arxiv.as_deref(), Some("2401.01234"));
         let versioned = json!({"results": [{"title": "V", "url": "https://arxiv.org/abs/2401.01234v2"}]});
         assert_eq!(hits(&versioned)[0].arxiv.as_deref(), Some("2401.01234"));
+        let old = json!({"results": [{"title": "O", "url": "https://arxiv.org/abs/hep-th/9901001v2"}]});
+        assert_eq!(hits(&old)[0].arxiv.as_deref(), Some("hep-th/9901001"));
         let fire = json!({"success": true, "data": {"web": [{"title": "C", "url": "https://c.org", "description": "d"}]}});
         assert_eq!(hits(&fire)[0].title, "C");
     }
