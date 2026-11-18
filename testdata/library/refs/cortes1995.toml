@@ -1,0 +1,16 @@
+type = "article"
+title = "Support-vector networks"
+authors = ["Cortes, Corinna", "Vapnik, Vladimir"]
+year = 1995
+doi = "10.1007/bf00994018"
+tags = ["classic"]
+collections = ["phd/related-work/foundations"]
+status = "Read"
+
+[extra]
+journal = "Machine Learning"
+number = "3"
+pages = "273-297"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1007/BF00994018"
+volume = "20"

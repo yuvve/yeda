@@ -1,0 +1,16 @@
+type = "article"
+title = "Long Short-Term Memory"
+authors = ["Hochreiter, Sepp", "Schmidhuber, Jürgen"]
+year = 1997
+doi = "10.1162/neco.1997.9.8.1735"
+tags = ["deep learning"]
+collections = ["phd/methods"]
+status = "Read"
+
+[extra]
+journal = "Neural Computation"
+number = "8"
+pages = "1735-1780"
+publisher = "MIT Press"
+url = "http://dx.doi.org/10.1162/neco.1997.9.8.1735"
+volume = "9"

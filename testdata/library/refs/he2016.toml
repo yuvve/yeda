@@ -1,0 +1,19 @@
+type = "inproceedings"
+title = "Deep Residual Learning for Image Recognition"
+authors = ["He, Kaiming", "Zhang, Xiangyu", "Ren, Shaoqing", "Sun, Jian"]
+year = 2016
+doi = "10.1109/cvpr.2016.90"
+tags = ["vision", "deep learning"]
+collections = ["phd/related-work"]
+status = "In Progress"
+
+[extra]
+journal = "2016 IEEE Conference on Computer Vision and Pattern Recognition (CVPR)"
+pages = "770-778"
+publisher = "IEEE"
+url = "http://dx.doi.org/10.1109/CVPR.2016.90"
+
+[[pdf]]
+id = "1"
+location = "papers"
+path = "he2016/he2016.pdf"

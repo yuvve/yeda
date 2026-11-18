@@ -1,0 +1,16 @@
+type = "article"
+title = "ORB-SLAM2: An Open-Source SLAM System for Monocular, Stereo, and RGB-D Cameras"
+authors = ["Mur-Artal, Raul", "Tardos, Juan D."]
+year = 2017
+doi = "10.1109/tro.2017.2705103"
+tags = ["robotics", "vision"]
+collections = ["phd/related-work"]
+status = "Not Reading"
+
+[extra]
+journal = "IEEE Transactions on Robotics"
+number = "5"
+pages = "1255-1262"
+publisher = "Institute of Electrical and Electronics Engineers (IEEE)"
+url = "http://dx.doi.org/10.1109/TRO.2017.2705103"
+volume = "33"

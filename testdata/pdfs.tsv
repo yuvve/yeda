@@ -1,0 +1,8 @@
+# The open-access papers in testdata/library, and where their PDFs come from.
+# One line per paper: citekey, then a tab, then the URL. scripts/test-library.sh fetches them.
+devlin2019	https://arxiv.org/pdf/1810.04805
+goodfellow2014	https://arxiv.org/pdf/1406.2661
+he2016	https://arxiv.org/pdf/1512.03385
+kingma2014	https://arxiv.org/pdf/1412.6980
+schulman2017	https://arxiv.org/pdf/1707.06347
+vaswani2017	https://arxiv.org/pdf/1706.03762

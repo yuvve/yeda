@@ -1,0 +1,4 @@
+[lit]
+contribution = "Trains a single network from pixels and game score alone to play Atari games, combining Q-learning with a convolutional network and experience replay."
+group = "Deep reinforcement learning"
+subproblem = "Previous agents needed hand-engineered features for each game. The paper asks whether one architecture can learn control directly from high-dimensional observations."

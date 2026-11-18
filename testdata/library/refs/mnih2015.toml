@@ -1,0 +1,16 @@
+type = "article"
+title = "Human-level control through deep reinforcement learning"
+authors = ["Mnih, Volodymyr", "Kavukcuoglu, Koray", "Silver, David", "Rusu, Andrei A.", "Veness, Joel", "Bellemare, Marc G.", "Graves, Alex", "Riedmiller, Martin", "Fidjeland, Andreas K.", "Ostrovski, Georg", "Petersen, Stig", "Beattie, Charles", "Sadik, Amir", "Antonoglou, Ioannis", "King, Helen", "Kumaran, Dharshan", "Wierstra, Daan", "Legg, Shane", "Hassabis, Demis"]
+year = 2015
+doi = "10.1038/nature14236"
+tags = ["reinforcement learning", "deep learning"]
+collections = ["phd/related-work"]
+status = "Read"
+
+[extra]
+journal = "Nature"
+number = "7540"
+pages = "529-533"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/nature14236"
+volume = "518"

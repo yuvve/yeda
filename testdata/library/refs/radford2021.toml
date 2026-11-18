@@ -1,0 +1,12 @@
+type = "article"
+title = "Learning Transferable Visual Models From Natural Language Supervision"
+authors = ["Radford, Alec", "Kim, Jong Wook", "Hallacy, Chris", "Ramesh, Aditya", "Goh, Gabriel", "Agarwal, Sandhini", "Sastry, Girish", "Askell, Amanda", "Mishkin, Pamela", "Clark, Jack", "Krueger, Gretchen", "Sutskever, Ilya"]
+year = 2021
+doi = "10.48550/arxiv.2103.00020"
+tags = ["vision", "nlp", "deep learning"]
+collections = ["reading/queue"]
+status = "New"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/2103.00020"

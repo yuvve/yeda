@@ -1,0 +1,17 @@
+type = "article"
+title = "Adam: A Method for Stochastic Optimization"
+authors = ["Kingma, Diederik P.", "Ba, Jimmy"]
+year = 2014
+doi = "10.48550/arxiv.1412.6980"
+tags = ["deep learning", "optimization"]
+collections = ["phd/methods"]
+status = "In Progress"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/1412.6980"
+
+[[pdf]]
+id = "1"
+location = "papers"
+path = "kingma2014/kingma2014.pdf"

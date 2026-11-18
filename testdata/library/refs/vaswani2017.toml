@@ -1,0 +1,17 @@
+type = "article"
+title = "Attention Is All You Need"
+authors = ["Vaswani, Ashish", "Shazeer, Noam", "Parmar, Niki", "Uszkoreit, Jakob", "Jones, Llion", "Gomez, Aidan N.", "Kaiser, Lukasz", "Polosukhin, Illia"]
+year = 2017
+doi = "10.48550/arxiv.1706.03762"
+tags = ["nlp", "deep learning"]
+collections = ["phd/related-work"]
+status = "Read"
+
+[extra]
+publisher = "arXiv"
+url = "https://arxiv.org/abs/1706.03762"
+
+[[pdf]]
+id = "1"
+location = "papers"
+path = "vaswani2017/vaswani2017.pdf"

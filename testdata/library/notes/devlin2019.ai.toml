@@ -1,0 +1,4 @@
+[lit]
+contribution = "Pre-trains a bidirectional Transformer on unlabelled text and then fine-tunes it, giving a single model that transfers to many language tasks with a small task-specific head."
+group = "Attention and sequence models"
+subproblem = "Task-specific architectures and features were needed for each benchmark. The paper asks for one pre-trained representation that needs only light fine-tuning."

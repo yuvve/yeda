@@ -1,0 +1,16 @@
+type = "article"
+title = "Mastering the game of Go without human knowledge"
+authors = ["Silver, David", "Schrittwieser, Julian", "Simonyan, Karen", "Antonoglou, Ioannis", "Huang, Aja", "Guez, Arthur", "Hubert, Thomas", "Baker, Lucas", "Lai, Matthew", "Bolton, Adrian", "Chen, Yutian", "Lillicrap, Timothy", "Hui, Fan", "Sifre, Laurent", "van den Driessche, George", "Graepel, Thore", "Hassabis, Demis"]
+year = 2017
+doi = "10.1038/nature24270"
+tags = ["reinforcement learning"]
+collections = ["reading/queue"]
+status = "To Read"
+
+[extra]
+journal = "Nature"
+number = "7676"
+pages = "354-359"
+publisher = "Springer Science and Business Media LLC"
+url = "http://dx.doi.org/10.1038/nature24270"
+volume = "550"

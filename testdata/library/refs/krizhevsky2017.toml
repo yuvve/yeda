@@ -1,0 +1,16 @@
+type = "article"
+title = "ImageNet classification with deep convolutional neural networks"
+authors = ["Krizhevsky, Alex", "Sutskever, Ilya", "Hinton, Geoffrey E."]
+year = 2017
+doi = "10.1145/3065386"
+tags = ["vision", "deep learning"]
+collections = ["phd/related-work"]
+status = "Read"
+
+[extra]
+journal = "Communications of the ACM"
+number = "6"
+pages = "84-90"
+publisher = "Association for Computing Machinery (ACM)"
+url = "http://dx.doi.org/10.1145/3065386"
+volume = "60"

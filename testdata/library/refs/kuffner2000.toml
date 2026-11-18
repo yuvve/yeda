@@ -1,0 +1,14 @@
+type = "inproceedings"
+title = "RRT-connect: An efficient approach to single-query path planning"
+authors = ["Kuffner, J.J.", "LaValle, S.M."]
+year = 2000
+doi = "10.1109/robot.2000.844730"
+tags = ["robotics", "planning"]
+collections = ["phd/methods"]
+status = "Read"
+
+[extra]
+journal = "Proceedings 2000 ICRA. Millennium Conference. IEEE International Conference on Robotics and Automation. Symposia Proceedings (Cat. No.00CH37065)"
+pages = "995-1001 vol.2"
+publisher = "IEEE"
+url = "http://dx.doi.org/10.1109/ROBOT.2000.844730"
