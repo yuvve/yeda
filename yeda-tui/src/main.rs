@@ -15,6 +15,7 @@ mod sync;
 mod table;
 mod ui;
 mod undo;
+mod websearch;
 mod wizard;
 
 use anyhow::{Context, Result};

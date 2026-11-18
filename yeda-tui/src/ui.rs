@@ -408,6 +408,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Setup => draw_setup(f, app, main),
         Mode::SetupMenu => draw_setup_menu(f, app, main),
+        Mode::WebSearch => draw_web_search(f, app, main),
         Mode::Found => draw_found(f, app, main),
         Mode::Git => draw_git(f, app, main),
         Mode::Diff => draw_diff(f, app, main),
@@ -479,13 +480,18 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         crate::setup::Kind::Reference => "New reference",
         crate::setup::Kind::Proxy => "Library proxies",
         crate::setup::Kind::Table => "Literature table",
+        crate::setup::Kind::Keenable => "Keenable API key",
+        crate::setup::Kind::Exa => "Exa API key",
+        crate::setup::Kind::Parallel => "Parallel API key",
+        crate::setup::Kind::Firecrawl => "Firecrawl API key",
+        crate::setup::Kind::Searxng => "SearXNG",
     };
     let area = popup(main, 76, fields.len() as u16 + 4);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table) { "save" } else { "test and save" }), true)), area);
 }
 
-/// ✓ found in OpenAlex, ? not found (it may not exist), ◎ already in the library.
+/// ✓ found in OpenAlex, ◎ already in the library.
 fn draw_found(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, main.width.saturating_sub(4).min(120), main.height.saturating_sub(2));
     let width = area.width.saturating_sub(10) as usize;
@@ -495,7 +501,7 @@ fn draw_found(f: &mut Frame, app: &App, main: Rect) {
         .enumerate()
         .map(|(i, c)| {
             let marked = if app.found_marked.contains(&i) { Span::styled("▌", Style::new().fg(Color::Yellow)) } else { Span::raw(" ") };
-            let mark = if app.found_in_library(c) { "◎" } else if c.work.is_some() { "✓" } else { "?" };
+            let mark = if app.found_in_library(c) { "◎" } else { "✓" };
             let year = c.found.year.or(c.work.as_ref().and_then(|w| w.year)).map(|y| y.to_string()).unwrap_or_default();
             let head = Line::from(vec![marked, Span::raw(format!("{mark} {year:4}  {:<16.16} {}", c.authors(), c.title()))]);
             let why: String = c.found.why.chars().take(width).collect();
@@ -506,7 +512,7 @@ fn draw_found(f: &mut Frame, app: &App, main: Rect) {
         0 => String::new(),
         n => format!("{n} marked · "),
     };
-    let mut frame = block(format!(" Found · {marked}✓ in OpenAlex · ? not found · ◎ in library · v mark · a add · o open · q close "), true);
+    let mut frame = block(format!(" Found · {marked}✓ in OpenAlex · ◎ in library · v mark · a add · o open · q close · the why is the model's note "), true);
     if let Some(note) = &app.found_note {
         frame = frame.title_bottom(Line::styled(format!(" {note} "), Style::new().fg(Color::Yellow)));
     }
@@ -555,6 +561,40 @@ fn draw_setup_menu(f: &mut Frame, app: &App, main: Rect) {
         area,
         &mut ListState::default().with_selected(Some(app.setup_menu_sel)),
     );
+}
+
+fn draw_web_search(f: &mut Frame, app: &App, main: Rect) {
+    let Some(form) = &app.web_search else { return };
+    let rows = form.rows();
+    let mut lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let line = match row {
+                crate::websearch::Row::Header(text) => Line::raw(*text).dim(),
+                crate::websearch::Row::Provider(p) => Line::from(vec![Span::raw(format!("{:<26}", p.name())), Span::raw(form.state(*p))]),
+                crate::websearch::Row::Queries => Line::from(vec![Span::raw(format!("{:<26}", "queries")), Span::raw(form.settings.discover_queries.to_string())]),
+                crate::websearch::Row::Results => Line::from(vec![Span::raw(format!("{:<26}", "results")), Span::raw(form.settings.discover_results.to_string())]),
+            };
+            if i == form.sel { line.reversed() } else { line }
+        })
+        .collect();
+    lines.push(Line::raw(""));
+    lines.push(Line::raw(form.hint()).dim());
+    if form.store_unavailable {
+        lines.push(Line::raw("(secret store unavailable)").dim());
+    }
+    if form.keyless() {
+        lines.push(Line::raw("Keyless providers use a shared free tier.").dim());
+    }
+    let height = (lines.len() as u16 + 3).min(main.height);
+    let area = popup(main, 76, height);
+    let title = " Web search · Enter save · Esc/q cancel ";
+    let footer = " a always · f fallback · d disabled · ←/→ cycle · e edit ";
+    let mut frame = block(title.into(), true);
+    frame = frame.title_bottom(Line::styled(footer.to_string(), Style::new().fg(Color::Yellow)));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(frame), area);
 }
 
 fn draw_sort(f: &mut Frame, app: &App, main: Rect) {

@@ -42,6 +42,8 @@ pub enum Mode {
     Setup,
     /// The `:setup` list of everything it sets.
     SetupMenu,
+    /// `:setup web-search`: the provider groups and the discover limits.
+    WebSearch,
     /// The papers `:discover` found.
     Found,
     /// git's output from `:sync` or `:git-init`.
@@ -158,12 +160,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover [--llm <profile>] [what]", "ask the LLM (searching the web where it can) for papers like the selected or marked ones, or as described with the marked ones as context; v marks, a adds"),
+    (":discover[!] [--llm <profile>] [what]", "ask the LLM for papers like the selected or marked ones, or as described, searching the web and arXiv; ! skips cached results; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
     (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
     (":setup openalex", "set the optional OpenAlex API key, testing it first"),
+    (":setup web-search [keenable|exa|parallel|firecrawl|searxng]", "the search providers :discover uses, or one provider's optional key or SearXNG URL, testing it first"),
     (":setup proxy", "set the library proxies :fetch opens papers through"),
     (":setup table [name]", "add or change a literature table: its columns and what each holds"),
     (":config [library|device]", "edit yeda.toml, or this device's config.toml, in $EDITOR"),
@@ -655,6 +658,10 @@ pub struct App {
     /// The `:setup` list's rows, from `setup::overview`; empty when it is closed.
     pub setup_menu: Vec<[String; 3]>,
     pub setup_menu_sel: usize,
+    /// The `:setup web-search` popup, staged until Enter.
+    pub web_search: Option<crate::websearch::WebSearchForm>,
+    /// A setup form opened from `:setup web-search`, which it returns to.
+    setup_from_web_search: bool,
     setup_job: Option<SetupJob>,
     pub help_scroll: u16,
     /// What `/` searches for in a help page, and whether it's still being typed.
@@ -778,7 +785,8 @@ impl App {
             found_marked: BTreeSet::new(),
             setup_menu: Vec::new(),
             setup_menu_sel: 0,
-            setup_job: None,
+            web_search: None,
+            setup_from_web_search: false,            setup_job: None,
             help_scroll: 0,
             help_query: String::new(),
             help_hit: None,
@@ -794,6 +802,9 @@ impl App {
             clipboard: None,
         };
         app.refilter_sidebar(false);
+        for warning in app.lib.warnings.clone() {
+            app.log.write(&warning);
+        }
         app
     }
 
@@ -1038,6 +1049,7 @@ impl App {
             Mode::Filter => self.filter_key(k),
             Mode::Setup => self.setup_key(k),
             Mode::SetupMenu => self.setup_menu_key(k),
+            Mode::WebSearch => self.websearch_key(k),
             Mode::Found => self.found_key(k),
             Mode::Git => self.git_key(k),
             Mode::Diff => self.diff_key(k),
@@ -1646,12 +1658,87 @@ impl App {
         }
     }
 
-    /// Closes the `:setup` form, back to the `:setup` list if it was opened from there.
+    /// Closes the `:setup` form, back to the `:setup` list or the web search popup it came from.
     fn close_setup(&mut self) {
         self.setup = None;
+        if self.setup_from_web_search {
+            self.setup_from_web_search = false;
+            if let Some(form) = &mut self.web_search {
+                form.refresh();
+            }
+            self.mode = Mode::WebSearch;
+            return;
+        }
         self.mode = Mode::Normal;
         if !self.setup_menu.is_empty() {
             self.open_setup_menu();
+        }
+    }
+
+    fn open_web_search(&mut self) {
+        self.web_search = Some(crate::websearch::WebSearchForm::new(&self.lib));
+        self.setup_from_web_search = false;
+        self.mode = Mode::WebSearch;
+    }
+
+    fn websearch_key(&mut self, k: KeyEvent) {
+        let Some(form) = &mut self.web_search else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let mut warn = false;
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.web_search = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('j') | KeyCode::Down => form.move_cursor(true),
+            KeyCode::Char('k') | KeyCode::Up => form.move_cursor(false),
+            KeyCode::Char('g') | KeyCode::Home => form.sel = 0,
+            KeyCode::Char('G') | KeyCode::End => form.sel = form.rows().len().saturating_sub(1),
+            KeyCode::Char('a') => warn = form.set_group(0),
+            KeyCode::Char('f') => warn = form.set_group(1),
+            KeyCode::Char('d') if !ctrl => warn = form.set_group(2),
+            KeyCode::Left => form.cycle(true),
+            KeyCode::Right => form.cycle(false),
+            KeyCode::Char('e') => {
+                let provider = match form.selected() {
+                    Some(crate::websearch::Row::Provider(p)) => p,
+                    _ => return,
+                };
+                let kind = match provider {
+                    yeda_core::web_search::Provider::Keenable => setup::Kind::Keenable,
+                    yeda_core::web_search::Provider::Exa => setup::Kind::Exa,
+                    yeda_core::web_search::Provider::Parallel => setup::Kind::Parallel,
+                    yeda_core::web_search::Provider::Firecrawl => setup::Kind::Firecrawl,
+                    yeda_core::web_search::Provider::Searxng => setup::Kind::Searxng,
+                    yeda_core::web_search::Provider::ModelProviderWebSearch => {
+                        self.status = "model_provider_web_search uses the LLM profile's key".into();
+                        return;
+                    }
+                };
+                self.setup = Some(SetupForm::new(kind, "", &self.lib));
+                self.setup_from_web_search = true;
+                self.mode = Mode::Setup;
+            }
+            KeyCode::Enter => {
+                if form.searxng_in_use() && form.settings.searxng_url.is_none() {
+                    self.status = "searxng needs an instance URL: press e".into();
+                    return;
+                }
+                let section = form.section();
+                let result = self.lib.update_config(|t| {
+                    let web = config_section(t, "web_search")?;
+                    web.extend(section.clone());
+                    Ok(())
+                });
+                self.after_config_change(result);
+                self.web_search = None;
+                self.mode = Mode::Normal;
+                self.status = "saved [web_search] to yeda.toml".into();
+            }
+            _ => {}
+        }
+        if warn {
+            self.status = "the provider's own search sends your query to the LLM provider and returns an answer yeda cannot check".into();
         }
     }
 
@@ -1712,6 +1799,35 @@ impl App {
         if kind == setup::Kind::Openalex {
             self.close_setup();
             self.status = format!("saved the OpenAlex key to the secret store{stored}");
+            return;
+        }
+        if let setup::Setup::ApiKey(provider) = &job.setup {
+            let provider = *provider;
+            crate::discover::clear_state(provider);
+            self.setup = None;
+            self.setup_from_web_search = false;
+            if let Some(form) = &mut self.web_search {
+                form.refresh();
+            }
+            self.mode = Mode::WebSearch;
+            self.status = format!("saved the {} key to the secret store{stored}", provider.name());
+            return;
+        }
+        if let setup::Setup::Searxng(url) = &job.setup {
+            let url = url.clone();
+            let result = self.lib.update_config(|t| {
+                config_section(t, "web_search")?.insert("searxng_url".into(), url.into());
+                Ok(())
+            });
+            self.after_config_change(result);
+            crate::discover::clear_state(yeda_core::web_search::Provider::Searxng);
+            self.setup = None;
+            self.setup_from_web_search = false;
+            if let Some(form) = &mut self.web_search {
+                form.refresh();
+            }
+            self.mode = Mode::WebSearch;
+            self.status = "searxng URL saved; enable it here".into();
             return;
         }
         self.save_setup(job.section, &stored);
@@ -2185,17 +2301,31 @@ impl App {
                 ("setup", rest) if rest.trim().is_empty() => self.open_setup_menu(),
                 ("setup", rest) => {
                     let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+                    if kind == "web-search" {
+                        if name.trim().is_empty() {
+                            self.open_web_search();
+                        } else {
+                            self.status = "usage: :setup web-search [keenable|exa|parallel|firecrawl|searxng]".into();
+                        }
+                        return;
+                    }
                     let kind = match kind {
                         "llm" => setup::Kind::Llm,
                         "webdav" => setup::Kind::Webdav,
                         "openalex" => setup::Kind::Openalex,
                         "proxy" => setup::Kind::Proxy,
                         "table" => setup::Kind::Table,
+                        "keenable" => setup::Kind::Keenable,
+                        "exa" => setup::Kind::Exa,
+                        "parallel" => setup::Kind::Parallel,
+                        "firecrawl" => setup::Kind::Firecrawl,
+                        "searxng" => setup::Kind::Searxng,
                         _ => {
-                            self.status = "usage: :setup [llm|webdav|table [name]], :setup openalex or :setup proxy".into();
+                            self.status = "usage: :setup [llm|webdav|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
                             return;
                         }
                     };
+                    self.setup_from_web_search = matches!(kind, setup::Kind::Keenable | setup::Kind::Exa | setup::Kind::Parallel | setup::Kind::Firecrawl | setup::Kind::Searxng);
                     self.setup = Some(SetupForm::new(kind, name.trim(), &self.lib));
                     self.mode = Mode::Setup;
                 }
@@ -2275,6 +2405,9 @@ impl App {
                 self.secrets.insert(p.account.clone(), text.into());
                 self.rejected.remove(&p.account);
                 let saved = yeda_secrets::set(&p.account, text);
+                if let Some(provider) = crate::websearch::provider_of_account(&p.account) {
+                    crate::discover::clear_state(provider);
+                }
                 self.status = "saved".into();
                 self.retry(p.retry);
                 // After the retry, so its own status doesn't hide that the secret wasn't saved.
@@ -2776,6 +2909,14 @@ impl App {
             items.push((account, format!("LLM {}: {what} for {}", names.join(", "), profile.url())));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
+        for (account, label) in [
+            (yeda_secrets::KEENABLE, "Keenable API key, optional: keyless search uses the shared public tier"),
+            (yeda_secrets::EXA, "Exa API key, optional: keyless search uses the shared free tier, direct IPv4 only"),
+            (yeda_secrets::PARALLEL, "Parallel API key, optional: keyless search uses the shared free tier"),
+            (yeda_secrets::FIRECRAWL, "Firecrawl API key, optional: keyless search uses the shared free tier"),
+        ] {
+            items.push((account.into(), label.into()));
+        }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
         self.secret_items = items
@@ -2813,10 +2954,14 @@ impl App {
             }
             KeyCode::Char('d') => {
                 self.secrets.remove(&account);
-                self.status = match yeda_secrets::delete(&account) {
+                let status = match yeda_secrets::delete(&account) {
                     Ok(()) => "removed".into(),
                     Err(e) => format!("{e:#}"),
                 };
+                if let Some(provider) = crate::websearch::provider_of_account(&account) {
+                    crate::discover::clear_state(provider);
+                }
+                self.status = status;
                 let status = std::mem::take(&mut self.status);
                 self.open_secrets();
                 self.status = status;

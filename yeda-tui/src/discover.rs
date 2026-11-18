@@ -146,6 +146,16 @@ fn states() -> &'static States {
     STATES.get_or_init(States::default)
 }
 
+/// Why a provider got no request: it failed for a reason other than a rate limit.
+pub fn down(provider: Provider) -> Option<String> {
+    states().down(provider)
+}
+
+/// Forgets a provider's cool-down and down state; a key or URL change makes it a different service.
+pub fn clear_state(provider: Provider) {
+    states().clear(provider);
+}
+
 #[derive(Default)]
 struct State {
     /// Consecutive headerless 429s.
@@ -166,6 +176,14 @@ impl States {
             return Some((reason.clone(), true));
         }
         state.until.filter(|u| *u > Instant::now()).map(|_| ("rate limited".to_string(), false))
+    }
+
+    fn clear(&self, provider: Provider) {
+        self.0.lock().unwrap().remove(&provider);
+    }
+
+    fn down(&self, provider: Provider) -> Option<String> {
+        self.0.lock().unwrap().get(&provider).and_then(|s| s.down.clone())
     }
 
     fn success(&self, provider: Provider, reset_in: Option<Duration>) {
