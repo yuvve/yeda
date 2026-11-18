@@ -224,7 +224,7 @@ impl SetupForm {
                     _ => "the model's name at the server",
                 };
                 let token = match provider {
-                    Provider::Codex => "signs in itself: press Enter and open the link yeda shows",
+                    Provider::Codex => "press Enter and open the link yeda shows",
                     Provider::Anthropic => "API key, or an OAuth token from `claude setup-token`",
                     _ => "API key",
                 };
@@ -337,7 +337,7 @@ impl SetupForm {
                         Provider::Openrouter => "OpenRouter needs an API key",
                         Provider::OpencodeGo => "OpenCode Go needs an API key",
                         Provider::Openai => "OpenAI needs an API key",
-                        Provider::Codex => "Codex signs in itself: press Enter and open the link yeda shows",
+                        Provider::Codex => "Codex: press Enter and open the link yeda shows",
                     });
                 }
                 Setup::Llm(v[0].to_string(), p)
@@ -622,7 +622,7 @@ mod tests {
         let codex_hints = hints(&cx);
         let (_, token) = codex_hints.iter().find(|(l, _)| l == "Key / token").unwrap();
         let (_, model) = codex_hints.iter().find(|(l, _)| l == "Model").unwrap();
-        assert!(token.contains("signs in itself") && !token.contains("claude"), "{token}");
+        assert!(token.contains("press Enter") && !token.contains("claude"), "{token}");
         assert!(model.contains("gpt") && !model.contains("claude"), "{model}");
         // Codex signs in with an empty field, so the section builds without a credential.
         cx.values[2] = "gpt-5.1".into();
