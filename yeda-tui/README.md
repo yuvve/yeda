@@ -128,13 +128,7 @@ provider = "claude"
 model = "claude-opus-5-5"
 ```
 
-`:setup provider` starts from a preset (codex, claude, mistral, openrouter, opencode-go, gemini, or any OpenAI-compatible server) and fills in its base URL, protocol and auth; `:setup llm` adds profiles. Profiles bound to one provider share its credential.
-
-An `oauth` provider takes a token instead of an API key. For Claude, run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints; it uses your Claude subscription instead of API credits. Anthropic may restrict subscription use outside Claude Code.
-
-An `opencode-go` provider uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
-
-A `codex` provider uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup provider` signs you in: it generates a ChatGPT link, opens it in your browser (`c` copies the link), and keeps the tokens it returns in the secret store, renewing them on their own. Pasting a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search.
+Use `:setup provider` to set up a provider and its credential, then `:setup llm` to add profiles that name a provider and a model. Profiles bound to one provider share its credential.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 
