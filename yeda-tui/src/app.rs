@@ -4483,6 +4483,7 @@ mod tests {
     fn combo_keys_are_nested_inside_the_setup_form() {
         let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "codex", &lib);
+        assert_eq!(form.values, [""; 6], "the provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,
@@ -4494,16 +4495,16 @@ mod tests {
         let key = |code| ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
         use ratatui::crossterm::event::KeyCode;
 
-        app.sync_combo();
+        app.setup_key(key(KeyCode::Tab));
         {
             let c = app.combo.as_ref().unwrap();
             assert!(c.open);
             assert_eq!(c.options.len(), 7, "all options show on focus");
-            assert_eq!(c.options[c.sel].1, "codex", "the current value is highlighted");
+            assert_eq!(c.options[c.sel].1, "codex", "the first preset is highlighted");
         }
         app.setup_key(key(KeyCode::Esc));
         assert!(!app.combo.as_ref().unwrap().open, "Esc closes the dropdown");
-        assert_eq!(app.setup.as_ref().unwrap().values[1], "codex", "Esc keeps the old value");
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "", "Esc keeps the field empty");
         assert!(app.setup.is_some(), "Esc does not close the form yet");
 
         app.setup_key(key(KeyCode::Tab));

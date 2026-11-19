@@ -201,6 +201,9 @@ THE COMMAND LINE  ( : )
   The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
   searches, the filter form, :setup and the tag and collection pickers.
 
+  :setup provider and :setup llm start with every field empty. Picking a preset
+  in the provider form fills its base URL, protocol and auth.
+
   In :setup, fields for presets, providers, protocols, auth, models, sorts and
   reference types open a fuzzy list with every option shown and the current
   value highlighted. Typing replaces the value and filters the list; Up/Down

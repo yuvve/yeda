@@ -140,24 +140,12 @@ pub enum Setup {
 }
 
 impl SetupForm {
-    /// Filled in from the provider, profile or location `name`, if there is one.
+    /// Filled in from the location, search or reference `name`, if there is one. Provider and LLM
+    /// forms start empty: the preset or provider the user picks fills the rest of the form.
     pub fn new(kind: Kind, name: &str, lib: &Library) -> SetupForm {
         let values = match kind {
-            Kind::Provider => match lib.providers.get(name) {
-                Some(p) => {
-                    // Editing keeps the preset when the URL is still its own; a typed URL may be custom.
-                    let known = PRESETS.iter().find(|q| q.protocol == p.protocol.name() && q.base_url == p.url());
-                    vec![name.into(), known.map_or(String::new(), |q| q.name.into()), p.url().into(), p.protocol.name().into(), p.auth.name().into(), String::new()]
-                }
-                None => {
-                    let p = &PRESETS[0];
-                    vec![name.into(), p.name.into(), p.base_url.into(), p.protocol.into(), p.auth.into(), String::new()]
-                }
-            },
-            Kind::Llm => match lib.llm.get(name) {
-                Some(p) => vec![name.into(), p.provider.clone(), p.model.clone()],
-                None => vec![name.into(), lib.providers.keys().next().cloned().unwrap_or_default(), String::new()],
-            },
+            Kind::Provider => vec![String::new(); 6],
+            Kind::Llm => vec![String::new(); 3],
             Kind::Webdav => match lib.remotes.get(name) {
                 Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), String::new()],
                 None => vec![name.into(), String::new(), String::new(), String::new()],
@@ -190,7 +178,7 @@ impl SetupForm {
         };
         let sel = match kind {
             Kind::Reference => 1,
-            Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
+            Kind::Provider | Kind::Llm | Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => 0,
             _ if name.is_empty() => 0,
             _ => 1,
@@ -681,6 +669,10 @@ mod tests {
     fn builds_providers_from_presets() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "codex", &lib);
+        assert_eq!(f.values, [""; 6], "the provider form starts empty");
+        f.values[0] = "codex".into();
+        f.values[1] = "codex".into();
+        f.provider_changed();
         assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", ""]);
         // Codex signs in with an empty field, so the section builds without a credential.
         let (t, s) = f.section().unwrap();
@@ -705,10 +697,10 @@ mod tests {
         assert_eq!(t["protocol"].as_str(), Some("mistral"));
         let saved = Library::parse(Some(&format!("[providers.mistral]\n{t}")), None, [], None).unwrap();
         let edited = SetupForm::new(Kind::Provider, "mistral", &saved);
-        assert_eq!(edited.values[1], "");
-        assert_eq!(edited.values[2..5], ["https://mistral.example.edu/v1", "mistral", "api-key"]);
+        assert_eq!(edited.values, [""; 6], "editing also starts empty");
 
         let mut g = SetupForm::new(Kind::Provider, "local", &lib);
+        g.values[0] = "local".into();
         g.values[1] = "openai-compatible".into();
         g.provider_changed();
         assert_eq!(g.values[2..5], ["", "openai", "api-key"]);
@@ -729,7 +721,10 @@ mod tests {
 
         // The guidance speaks for the chosen auth and protocol only.
         let hints = |f: &SetupForm| f.fields().iter().map(|(l, h)| (l.clone(), *h)).collect::<Vec<_>>();
-        let (_, token) = hints(&SetupForm::new(Kind::Provider, "cx", &lib)).into_iter().find(|(l, _)| l == "Key / token").unwrap();
+        let mut hinted = SetupForm::new(Kind::Provider, "cx", &lib);
+        hinted.values[1] = "codex".into();
+        hinted.provider_changed();
+        let (_, token) = hints(&hinted).into_iter().find(|(l, _)| l == "Key / token").unwrap();
         assert!(token.contains("press Enter") && !token.contains("claude"), "{token}");
     }
 
@@ -738,9 +733,10 @@ mod tests {
         let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
         let lib = Library::parse(Some(&format!("{cfg}[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n")), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "cx", &lib);
-        assert_eq!(f.values, ["cx", "codex", "gpt-5.1"]);
+        assert_eq!(f.values, [""; 3], "the LLM form starts empty");
         let mut g = SetupForm::new(Kind::Llm, "new", &lib);
-        assert_eq!(g.values[1], "claude");
+        assert_eq!(g.values, [""; 3]);
+        g.values[0] = "new".into();
         g.values[1] = "codex".into();
         g.values[2] = "gpt-5.1".into();
         let (t, s) = g.section().unwrap();
@@ -757,7 +753,9 @@ mod tests {
 
         // A profile that names a provider the library lacks is refused when it is tested.
         let orphans = Library::parse(Some("[llm.ghost]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
-        let (_, orphan) = SetupForm::new(Kind::Llm, "ghost", &orphans).section().unwrap();
+        let mut ghost = SetupForm::new(Kind::Llm, "ghost", &orphans);
+        ghost.values.clone_from_slice(&["ghost".into(), "nowhere".into(), "m".into()]);
+        let (_, orphan) = ghost.section().unwrap();
         assert!(test(&orphans.providers, &orphan, None).unwrap_err().to_string().contains("no provider named 'nowhere'"));
     }
 
