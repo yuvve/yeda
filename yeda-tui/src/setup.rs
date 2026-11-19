@@ -511,13 +511,30 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
     rows
 }
 
+/// A profile bound to its provider, plus the credential a connection test sends: whatever the
+/// provider's account holds, or nothing when the provider takes no key.
+pub fn profile_credential(
+    providers: &BTreeMap<String, Provider>,
+    name: &str,
+    p: &Profile,
+    lookup: impl Fn(&str) -> Result<Option<String>>,
+) -> Result<(Bound, Option<String>)> {
+    let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider {}", p.provider, p.provider))?;
+    let bound = Bound::new(name, p, &p.provider, provider);
+    let key = lookup(&yeda_secrets::provider_account(&bound.provider, bound.url()))?;
+    if bound.needs_key() && key.is_none() {
+        bail!("provider '{}' has no credential yet; set it with :setup provider {}", bound.provider, bound.provider);
+    }
+    Ok((bound, key))
+}
+
 /// Tests the connection; blocks. A provider form has no model, so its profile tests it.
 pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Option<&str>) -> Result<()> {
     match setup {
         Setup::Provider(..) => Ok(()),
         Setup::Llm(name, p) => {
-            let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider {}", p.provider, p.provider))?;
-            yeda_net::llm::ping(&Bound::new(name, p, &p.provider, provider), secret)
+            let (bound, _) = profile_credential(providers, name, p, |_| Ok(None))?;
+            yeda_net::llm::ping(&bound, secret)
         }
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
@@ -675,6 +692,27 @@ mod tests {
         let orphans = Library::parse(Some("[llm.ghost]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let (_, orphan) = SetupForm::new(Kind::Llm, "ghost", &orphans).section().unwrap();
         assert!(test(&orphans.providers, &orphan, None).unwrap_err().to_string().contains("no provider named 'nowhere'"));
+    }
+
+    #[test]
+    fn a_profile_tests_with_its_providers_credential() {
+        let cfg = "[providers.cx]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"cx\"\nmodel = \"gpt-5.1\"\n[llm.b]\nprovider = \"cx\"\nmodel = \"gpt-5.1-mini\"\n[llm.c]\nprovider = \"local\"\nmodel = \"qwen\"\n";
+        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
+        let lookup = |account: &str| Ok::<_, anyhow::Error>((account == "provider:cx:https://api.openai.com/v1").then(|| "cred".to_string()));
+        let (a, key) = profile_credential(&lib.providers, "a", &lib.llm["a"], lookup).unwrap();
+        assert_eq!((a.url(), a.model.as_str(), key.as_deref()), ("https://api.openai.com/v1", "gpt-5.1", Some("cred")));
+        let (b, key) = profile_credential(&lib.providers, "b", &lib.llm["b"], lookup).unwrap();
+        assert_eq!((a.provider.as_str(), b.provider.as_str(), key.as_deref()), ("cx", "cx", Some("cred")));
+        let (c, key) = profile_credential(&lib.providers, "c", &lib.llm["c"], lookup).unwrap();
+        assert!((c.url(), key.as_deref()) == ("https://localhost:8080/v1", None));
+
+        let err = profile_credential(&lib.providers, "a", &lib.llm["a"], |_| Ok(None)).unwrap_err().to_string();
+        assert!(err.contains(":setup provider cx"), "{err}");
+        let err = profile_credential(&lib.providers, "a", &lib.llm["a"], |_| Err(anyhow::anyhow!("secret store unavailable"))).unwrap_err().to_string();
+        assert!(err.contains("secret store unavailable"), "{err}");
+
+        let orphan = Library::parse(Some("[llm.x]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        assert!(profile_credential(&orphan.providers, "x", &orphan.llm["x"], |_| Ok(None)).unwrap_err().to_string().contains("no provider named 'nowhere'"));
     }
 
     #[test]

@@ -1645,6 +1645,40 @@ impl App {
                     }
                 }
                 Ok((section, setup::Setup::Untested)) => self.save_setup(section, ""),
+                Ok((section, s @ setup::Setup::Llm(..))) => {
+                    let (name, p) = match &s {
+                        setup::Setup::Llm(name, p) => (name.clone(), p.clone()),
+                        _ => unreachable!(),
+                    };
+                    let providers = self.lib.providers.clone();
+                    let found = setup::profile_credential(&providers, &name, &p, |account| match self.secrets.get(account) {
+                        Some(secret) => Ok(Some(secret.clone())),
+                        None => yeda_secrets::get(account),
+                    });
+                    let (bound, key) = match found {
+                        Ok(found) => found,
+                        Err(e) => {
+                            self.status = format!("{e:#}");
+                            return;
+                        }
+                    };
+                    let account = yeda_secrets::provider_account(&bound.provider, bound.url());
+                    let key = match bound.protocol() {
+                        yeda_core::llm::Protocol::OpenaiResponses => self.renewed_codex(&bound, account, key),
+                        _ => key,
+                    };
+                    let (tx, rx) = mpsc::channel();
+                    let probe = s.clone();
+                    std::thread::spawn(move || {
+                        // The profile has no account of its own; its provider's credential stays put.
+                        let _ = tx.send(setup::test(&providers, &probe, key.as_deref()).map(|_| None));
+                    });
+                    if let Some(form) = &mut self.setup {
+                        form.testing = true;
+                    }
+                    self.status = "testing the connection…".into();
+                    self.setup_job = Some(SetupJob { rx, section, setup: s });
+                }
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
@@ -1861,7 +1895,10 @@ impl App {
         };
         let kind = form.kind;
         let mut stored = String::new();
-        if let Some(secret) = secret {
+        // An LLM profile form tests with its provider's credential and has no account of its own.
+        if let Some(secret) = secret
+            && !setup::account(&job.setup).is_empty()
+        {
             let account = setup::account(&job.setup);
             if let Err(e) = yeda_secrets::set(&account, &secret) {
                 stored = format!(" (secret kept for this session only: {e:#})");
