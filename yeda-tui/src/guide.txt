@@ -201,13 +201,13 @@ THE COMMAND LINE  ( : )
   The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
   searches, the filter form, :setup and the tag and collection pickers.
 
-  In :setup, fields for presets, providers, protocols, auth, models, sorts and
-  reference types open a fuzzy list. Type to filter, Up/Down or Tab/shift-Tab
+  In :setup, Ctrl-Down (or Ctrl-Space) opens a fuzzy list on fields for
+  presets, providers, protocols, auth, models, sorts and reference types.
+  Focusing a field does not open it. Type to filter, Up/Down or Tab/shift-Tab
   to move, Enter to put the value in the field, Esc to close the list. Typing a
   value of your own always works. Esc closes the list first, then the form.
-  The model list is fetched from the bound provider when you focus Model;
-  changing Provider fetches it for the new one. If the server refuses, the
-  error shows in the list and the form still works.
+  The model list is fetched when the list is opened; changing Provider drops
+  the old list. If the server refuses, the error shows and the form still works.
 
   Options are written --name value (or --name=value), anywhere in a
   command: :discover --llm gpt swarm robots. -- ends the options, so what

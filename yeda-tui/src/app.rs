@@ -1645,15 +1645,23 @@ impl App {
                         self.models_for = None;
                     }
                     c.query = text;
-                    c.open = true;
                     c.base = base;
                     c.sel = 0;
                 }
             }
-            _ => self.combo = Some(Combo { choice, field, query: text, base, options: Vec::new(), sel: 0, open: true, note: None }),
+            _ => self.combo = Some(Combo { choice, field, query: text, base, options: Vec::new(), sel: 0, open: false, note: None }),
         }
         self.refresh_combo();
-        if choice == setup::Choice::Models {
+    }
+
+    /// Opens the dropdown on the selected field. Nothing pops up while the field is only focused.
+    fn open_combo(&mut self) {
+        self.sync_combo();
+        let choice = self.combo.as_ref().map(|c| c.choice);
+        let Some(c) = &mut self.combo else { return };
+        c.open = true;
+        c.sel = 0;
+        if choice == Some(setup::Choice::Models) {
             self.ensure_models();
         }
     }
@@ -1740,7 +1748,10 @@ impl App {
                 }
                 None
             }
-            Err(e) => Some(format!("model list: {e}")),
+            Err(e) => {
+                self.status = format!("model list: {e}");
+                Some(format!("model list: {e}"))
+            }
         };
         if let Some(c) = &mut self.combo {
             c.note = note;
@@ -1832,6 +1843,10 @@ impl App {
                     Err(e) => format!("clipboard: {e}"),
                 };
             }
+            return;
+        }
+        if ctrl && (k.code == KeyCode::Down || k.code == KeyCode::Char(' ')) {
+            self.open_combo();
             return;
         }
         self.sync_combo();
@@ -4446,16 +4461,21 @@ mod tests {
         app.mode = super::Mode::Setup;
         app.setup = Some(form);
         app.sync_combo();
-        let key = |code| ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
-        use ratatui::crossterm::event::KeyCode;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let open = || KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
+        assert!(!app.combo.as_ref().unwrap().open, "focusing a field does not open the dropdown");
 
+        app.setup_key(open());
+        assert!(app.combo.as_ref().unwrap().open, "Ctrl-Down opens it");
         app.setup_key(key(KeyCode::Esc));
         assert!(!app.combo.as_ref().unwrap().open, "Esc closes the dropdown");
         assert!(app.setup.is_some(), "Esc does not close the form yet");
 
         app.setup.as_mut().unwrap().values[1] = "clau".into();
         app.sync_combo();
-        assert!(app.combo.as_ref().unwrap().open, "typing reopens it");
+        assert!(!app.combo.as_ref().unwrap().open, "typing does not open it");
+        app.setup_key(open());
         assert_eq!(app.combo.as_ref().unwrap().options[0].1, "claude");
         app.setup_key(key(KeyCode::Enter));
         let form = app.setup.as_ref().unwrap();
