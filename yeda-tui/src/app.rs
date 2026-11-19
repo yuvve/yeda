@@ -1696,6 +1696,7 @@ impl App {
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
             KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
             KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Provider && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
+            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_bound_provider(k.code == KeyCode::Left, &self.lib),
             // A secret never goes to a file.
             KeyCode::Char('g') if ctrl && !form.masked(form.sel) => {
                 let sel = form.sel;
@@ -1706,10 +1707,8 @@ impl App {
             }
         }
         if let Some(form) = &mut self.setup {
-            match form.kind {
-                setup::Kind::Provider if form.sel == 1 => form.provider_changed(),
-                setup::Kind::Llm if form.sel == 1 => form.cycle_bound_provider(false, &self.lib),
-                _ => {}
+            if form.kind == setup::Kind::Provider && form.sel == 1 {
+                form.provider_changed();
             }
             form.sync_columns();
         }

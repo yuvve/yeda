@@ -136,7 +136,12 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     ]
     .map(|(k, v)| format!("{k}={}", encode(v)))
     .join("&");
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(60))).https_only(true).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .http_status_as_error(false)
+        .https_only(true)
+        .build()
+        .into();
     let mut resp = agent
         .post(TOKEN)
         .header("content-type", "application/x-www-form-urlencoded")
@@ -144,10 +149,7 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
         .with_context(|| TOKEN.to_string())?;
     let status = resp.status();
     let text = resp.body_mut().read_to_string()?;
-    if !status.is_success() {
-        bail!("{TOKEN}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
-    }
-    let v: Value = serde_json::from_str(&text).with_context(|| format!("{TOKEN}: response is not JSON"))?;
+    let v = token_response(TOKEN, status.as_u16(), &text)?;
     let access = v["access_token"].as_str().context("the token response has no access_token")?;
     let refresh = v["refresh_token"].as_str().unwrap_or_default();
     let id_token = v["id_token"].as_str().unwrap_or_default();
@@ -176,6 +178,14 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
         },
     });
     serde_json::to_string(&json).context("serializing the signed-in credentials")
+}
+
+/// The token endpoint's answer, or its error body: OpenAI says in the body why it refused.
+fn token_response(url: &str, status: u16, text: &str) -> Result<Value> {
+    if !(200..300).contains(&status) {
+        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
+    }
+    serde_json::from_str(text).with_context(|| format!("{url}: response is not JSON"))
 }
 
 fn jwt_claims(jwt: &str) -> Value {
@@ -236,6 +246,16 @@ fn percent_decode(v: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_exchange_reports_the_endpoints_own_reason() {
+        let body = r#"{"error":"invalid_grant","error_description":"code expired"}"#;
+        let err = token_response("https://auth.example/token", 400, body).unwrap_err().to_string();
+        assert!(err.contains("HTTP 400") && err.contains("code expired"), "{err}");
+        let ok = token_response("https://auth.example/token", 200, r#"{"access_token":"a"}"#).unwrap();
+        assert_eq!(ok["access_token"], "a");
+        assert!(token_response("https://auth.example/token", 200, "not json").is_err());
+    }
 
     #[test]
     fn encodes_a_url_with_the_callback_and_challenge() {
