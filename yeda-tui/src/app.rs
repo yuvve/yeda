@@ -552,6 +552,23 @@ impl Chooser {
     }
 }
 
+/// A fuzzy dropdown over one `:setup` field. A pick writes into the field; typing still works.
+pub struct Combo {
+    pub choice: setup::Choice,
+    pub field: usize,
+    /// The field's value when it was focused; Esc puts it back.
+    original: String,
+    /// The typed filter. Empty on focus, so every option is visible at first.
+    query: String,
+    last_text: String,
+    pub base: Vec<(String, String)>,
+    pub options: Vec<(String, String)>,
+    pub sel: usize,
+    pub open: bool,
+    /// Loading or a refused model list, shown without blocking the form.
+    pub note: Option<String>,
+}
+
 enum WorkerMsg {
     Started(String),
     Finished { key: String, result: Result<(Row, Option<String>), String> },
@@ -666,6 +683,11 @@ pub struct App {
     /// A setup form opened from `:setup web-search`, which it returns to.
     setup_from_web_search: bool,
     setup_job: Option<SetupJob>,
+    /// The open dropdown on the selected `:setup` field.
+    pub combo: Option<Combo>,
+    model_job: Option<Receiver<Result<Vec<yeda_net::llm::Model>, String>>>,
+    /// Provider and account the model list was fetched for; cleared when either changes.
+    models_for: Option<String>,
     pub help_scroll: u16,
     /// What `/` searches for in a help page, and whether it's still being typed.
     pub help_query: String,
@@ -795,6 +817,9 @@ impl App {
             setup_menu_sel: 0,
             web_search: None,
             setup_from_web_search: false,            setup_job: None,
+            combo: None,
+            model_job: None,
+            models_for: None,
             help_scroll: 0,
             help_query: String::new(),
             help_hit: None,
@@ -1479,6 +1504,9 @@ impl App {
             form.sync_columns();
         }
         self.cursor_back = 0;
+        if self.mode == Mode::Setup {
+            self.sync_combo();
+        }
         match self.mode {
             Mode::Search => self.refilter(),
             Mode::SideSearch => self.refilter_sidebar(true),
@@ -1585,6 +1613,245 @@ impl App {
         self.mode = Mode::Filter;
     }
 
+    /// Keeps the dropdown on the selected field, opening it for known values and fetching the
+    /// provider's model list once per provider and account.
+    fn sync_combo(&mut self) {
+        let (field, choice, text) = match &self.setup {
+            Some(form) => match form.choice(form.sel) {
+                Some(choice) => (form.sel, choice, form.values[form.sel].clone()),
+                None => {
+                    self.combo = None;
+                    return;
+                }
+            },
+            None => {
+                self.combo = None;
+                self.model_job = None;
+                self.models_for = None;
+                return;
+            }
+        };
+        let base = match choice {
+            setup::Choice::Models => self
+                .combo
+                .as_ref()
+                .filter(|c| c.field == field && c.choice == choice)
+                .map(|c| c.base.clone())
+                .unwrap_or_default(),
+            other => setup::choices(other, &self.lib),
+        };
+        let mut fresh = false;
+        match &mut self.combo {
+            Some(c) if c.field == field && c.choice == choice => {
+                if c.last_text != text {
+                    if c.choice == setup::Choice::BoundProviders {
+                        self.model_job = None;
+                        self.models_for = None;
+                    }
+                    c.last_text = text.clone();
+                    c.query = text;
+                    c.sel = 0;
+                }
+            }
+            _ => {
+                self.combo = Some(Combo {
+                    choice,
+                    field,
+                    original: text.clone(),
+                    query: String::new(),
+                    last_text: text,
+                    base,
+                    options: Vec::new(),
+                    sel: 0,
+                    open: true,
+                    note: None,
+                });
+                fresh = true;
+            }
+        }
+        self.refresh_combo();
+        if fresh
+            && let Some(c) = &mut self.combo
+        {
+            let original = c.original.clone();
+            c.sel = c.options.iter().position(|(_, value)| value == &original).unwrap_or(0);
+        }
+        if choice == setup::Choice::Models {
+            self.ensure_models();
+        }
+    }
+
+    fn refresh_combo(&mut self) {
+        let Some(c) = &self.combo else { return };
+        let query = c.query.trim().to_string();
+        let base = c.base.clone();
+        let searcher = &mut self.searcher;
+        let mut scored: Vec<(u32, String, String)> = base
+            .iter()
+            .filter_map(|(label, value)| {
+                let score = if query.is_empty() { Some(0) } else { searcher.score(&query, label).or_else(|| searcher.score(&query, value)) }?;
+                Some((score, label.clone(), value.clone()))
+            })
+            .collect();
+        scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+        let mut options: Vec<(String, String)> = scored.into_iter().map(|(_, label, value)| (label, value)).collect();
+        if !query.is_empty() && !options.iter().any(|(_, value)| value == &query) {
+            options.push((format!("+ use \"{query}\""), query));
+        }
+        let Some(c) = &mut self.combo else { return };
+        c.options = options;
+        c.sel = c.sel.min(c.options.len().saturating_sub(1));
+    }
+
+    /// Resolves the provider's credential the same way the connection test does, then asks for
+    /// its model list in the background. Errors stay in the dropdown; typing is never blocked.
+    fn ensure_models(&mut self) {
+        let Some(form) = &self.setup else { return };
+        let name = form.values[0].trim().to_string();
+        let provider = form.values[1].trim().to_string();
+        let providers = self.lib.providers.clone();
+        let account = providers.get(&provider).map(|p| yeda_secrets::provider_account(&provider, p.url())).unwrap_or_default();
+        let key = format!("{provider}:{account}");
+        if self.model_job.is_some() || self.models_for.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        let profile = yeda_core::llm::Profile { provider: provider.clone(), model: String::new() };
+        let found = setup::profile_credential(&providers, &name, &profile, |account| match self.secrets.get(account) {
+            Some(secret) => Ok(Some(secret.clone())),
+            None => yeda_secrets::get(account),
+        });
+        let (bound, secret) = match found {
+            Ok(found) => found,
+            Err(e) => {
+                if let Some(c) = &mut self.combo {
+                    c.note = Some(format!("{e:#}"));
+                }
+                self.models_for = Some(key);
+                return;
+            }
+        };
+        let secret = self.renewed_codex(&bound, account, secret);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(yeda_net::llm::models(&bound, secret.as_deref()).map_err(|e| e.to_string()));
+        });
+        self.model_job = Some(rx);
+        self.models_for = Some(key);
+        if let Some(c) = &mut self.combo {
+            c.note = Some("loading models…".into());
+        }
+    }
+
+    fn poll_models(&mut self) {
+        let result = {
+            let Some(rx) = &self.model_job else { return };
+            match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err("the model list request stopped".into())),
+            }
+        };
+        let Some(result) = result else { return };
+        self.model_job = None;
+        if !self.combo.as_ref().is_some_and(|c| c.choice == setup::Choice::Models) {
+            return;
+        }
+        let note = match result {
+            Ok(models) => {
+                if let Some(c) = &mut self.combo {
+                    c.base = models.into_iter().map(|m| (m.label, m.id)).collect();
+                }
+                None
+            }
+            Err(e) => Some(format!("model list: {e}")),
+        };
+        if let Some(c) = &mut self.combo {
+            c.note = note;
+        }
+        self.refresh_combo();
+    }
+
+    fn combo_step(&mut self, delta: isize) {
+        let Some(c) = &mut self.combo else { return };
+        if c.options.is_empty() {
+            return;
+        }
+        let n = c.options.len() as isize;
+        c.sel = (c.sel as isize + delta).rem_euclid(n) as usize;
+    }
+
+    fn combo_pick(&mut self) {
+        let Some((field, value)) = self
+            .combo
+            .as_ref()
+            .and_then(|c| c.options.get(c.sel).cloned().map(|(_, v)| (c.field, v)))
+        else {
+            return;
+        };
+        if self.combo.as_ref().is_some_and(|c| c.choice == setup::Choice::BoundProviders) {
+            self.model_job = None;
+            self.models_for = None;
+        }
+        if let Some(c) = &mut self.combo {
+            c.original = value.clone();
+            c.last_text = value.clone();
+            c.query.clear();
+            c.open = false;
+            c.sel = 0;
+        }
+        if let Some(form) = &mut self.setup {
+            form.values[field] = value;
+            if form.kind == setup::Kind::Provider && field == 1 {
+                form.provider_changed();
+            }
+        }
+        self.cursor_back = 0;
+    }
+
+    /// While the dropdown is open, navigation belongs to it; editing keys still reach the form.
+    fn combo_key(&mut self, k: KeyEvent, ctrl: bool) -> bool {
+        if !self.combo.as_ref().is_some_and(|c| c.open) {
+            return false;
+        }
+        match k.code {
+            KeyCode::Esc => {
+                let Some((field, original)) = self.combo.as_ref().map(|c| (c.field, c.original.clone())) else { return false };
+                if let Some(c) = &mut self.combo {
+                    c.open = false;
+                    c.query.clear();
+                    c.last_text = original.clone();
+                }
+                if let Some(form) = &mut self.setup {
+                    form.values[field] = original;
+                }
+                self.cursor_back = 0;
+                self.refresh_combo();
+                true
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                self.combo_step(-1);
+                true
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.combo_step(1);
+                true
+            }
+            KeyCode::Char('p') if ctrl => {
+                self.combo_step(-1);
+                true
+            }
+            KeyCode::Char('n') if ctrl => {
+                self.combo_step(1);
+                true
+            }
+            KeyCode::Enter => {
+                self.combo_pick();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn setup_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         // Waiting for the browser or a slow test: c copies the sign-in link, Esc cancels and
@@ -1602,6 +1869,17 @@ impl App {
             }
             return;
         }
+        self.sync_combo();
+        if self.combo_key(k, ctrl) {
+            return;
+        }
+        let clear_on_type = self.combo.as_ref().is_some_and(|c| c.open)
+            && matches!(k.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete)
+            && self
+                .setup
+                .as_ref()
+                .zip(self.combo.as_ref())
+                .is_some_and(|(form, c)| form.values[form.sel] == c.original);
         let Some(form) = &mut self.setup else { return };
         let n = form.values.len();
         match k.code {
@@ -1729,14 +2007,16 @@ impl App {
             },
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
             KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
-            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Provider && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
-            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_bound_provider(k.code == KeyCode::Left, &self.lib),
             // A secret never goes to a file.
             KeyCode::Char('g') if ctrl && !form.masked(form.sel) => {
                 let sel = form.sel;
                 self.edit_in_editor(TextTarget::Setup(sel));
             }
             code => {
+                if clear_on_type {
+                    form.values[form.sel].clear();
+                    self.cursor_back = 0;
+                }
                 edit_line(&mut form.values[form.sel], &mut self.cursor_back, code, ctrl);
             }
         }
@@ -1746,10 +2026,14 @@ impl App {
             }
             form.sync_columns();
         }
+        self.sync_combo();
     }
 
     /// Closes the `:setup` form, back to the `:setup` list or the web search popup it came from.
     fn close_setup(&mut self) {
+        self.combo = None;
+        self.model_job = None;
+        self.models_for = None;
         self.setup = None;
         if self.setup_from_web_search {
             self.setup_from_web_search = false;
@@ -1876,6 +2160,7 @@ impl App {
 
     /// Saves a `:setup` form whose connection test passed: the secret to the secret store, the rest to yeda.toml.
     pub fn poll_setup(&mut self) {
+        self.poll_models();
         let Some(job) = &self.setup_job else { return };
         let result = match job.rx.try_recv() {
             Ok(r) => r,
@@ -1905,6 +2190,7 @@ impl App {
             }
             self.secrets.insert(account.clone(), secret.clone());
             self.rejected.remove(&account);
+            self.models_for = None;
         }
         if kind == setup::Kind::Openalex {
             self.close_setup();
@@ -2956,6 +3242,7 @@ impl App {
             (self.summarizer.is_some(), "summarize"),
             (self.fetch_job.is_some(), "fetch"),
             (self.setup_job.is_some(), "connection test"),
+            (self.model_job.is_some(), "model list"),
             (self.graph_job.is_some(), "graph"),
             (self.text_job.is_some(), "text extraction"),
             (self.cache_job.is_some(), "cache"),
@@ -4190,6 +4477,56 @@ mod tests {
         key(End, false);
         key(Char('!'), false);
         assert_eq!((buf.as_str(), back), ("l!", 0));
+    }
+
+    #[test]
+    fn combo_keys_are_nested_inside_the_setup_form() {
+        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
+        let form = super::SetupForm::new(super::setup::Kind::Provider, "codex", &lib);
+        assert_eq!(form.values, [""; 6], "the provider form starts empty");
+        let mut app = super::App::new(
+            std::path::PathBuf::from("/tmp"),
+            lib,
+            ratatui_image::picker::Picker::halfblocks(),
+            crate::keys::Keymap::load(None).unwrap(),
+        );
+        app.mode = super::Mode::Setup;
+        app.setup = Some(form);
+        let key = |code| ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
+        use ratatui::crossterm::event::KeyCode;
+
+        app.setup_key(key(KeyCode::Tab));
+        {
+            let c = app.combo.as_ref().unwrap();
+            assert!(c.open);
+            assert_eq!(c.options.len(), 7, "all options show on focus");
+            assert_eq!(c.options[c.sel].1, "codex", "the first preset is highlighted");
+        }
+        app.setup_key(key(KeyCode::Esc));
+        assert!(!app.combo.as_ref().unwrap().open, "Esc closes the dropdown");
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "", "Esc keeps the field empty");
+        assert!(app.setup.is_some(), "Esc does not close the form yet");
+
+        app.setup_key(key(KeyCode::Tab));
+        app.setup_key(key(KeyCode::BackTab));
+        assert!(app.combo.as_ref().unwrap().open);
+        assert!(app.combo.as_ref().unwrap().query.is_empty(), "the filter starts empty");
+        for ch in "clau".chars() {
+            app.setup_key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "clau");
+        assert_eq!(app.combo.as_ref().unwrap().options[0].1, "claude");
+        app.setup_key(key(KeyCode::Enter));
+        let form = app.setup.as_ref().unwrap();
+        assert_eq!(form.values[1], "claude");
+        assert_eq!(form.values[3], "anthropic", "picking a preset fills its protocol");
+        assert!(!app.combo.as_ref().unwrap().open, "Enter picks the value and closes the dropdown");
+
+        app.setup_key(key(KeyCode::Tab));
+        assert_eq!(app.setup.as_ref().unwrap().sel, 2);
+        assert!(app.combo.is_none(), "fields without choices have no dropdown");
+        app.setup_key(key(KeyCode::Esc));
+        assert!(app.setup.is_none(), "Esc closes the form once the dropdown is gone");
     }
 
     #[test]

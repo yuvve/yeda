@@ -62,6 +62,19 @@ pub struct SetupForm {
     described: BTreeMap<String, String>,
 }
 
+/// A `:setup` field whose values are known, but which still accepts a typed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    Presets,
+    Protocols,
+    Auth,
+    BoundProviders,
+    /// Filled from the network, not from the library.
+    Models,
+    Sort,
+    RefKind,
+}
+
 /// A predefined provider: what its form starts with.
 pub struct Preset {
     pub name: &'static str,
@@ -107,6 +120,8 @@ fn auth_of(name: &str) -> Auth {
 /// The reference form's last fields, kept in `Ref::extra`.
 pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 
+const CHOICE_HINT: &str = "all options shown · type to filter · ↓/↑ pick · Enter use · Esc restores · free text works";
+
 /// What the form saves, once its connection works.
 #[derive(Clone, Debug)]
 pub enum Setup {
@@ -125,24 +140,12 @@ pub enum Setup {
 }
 
 impl SetupForm {
-    /// Filled in from the provider, profile or location `name`, if there is one.
+    /// Filled in from the location, search or reference `name`, if there is one. Provider and LLM
+    /// forms start empty: the preset or provider the user picks fills the rest of the form.
     pub fn new(kind: Kind, name: &str, lib: &Library) -> SetupForm {
         let values = match kind {
-            Kind::Provider => match lib.providers.get(name) {
-                Some(p) => {
-                    // Editing keeps the preset when the URL is still its own; a typed URL may be custom.
-                    let known = PRESETS.iter().find(|q| q.protocol == p.protocol.name() && q.base_url == p.url());
-                    vec![name.into(), known.map_or(String::new(), |q| q.name.into()), p.url().into(), p.protocol.name().into(), p.auth.name().into(), String::new()]
-                }
-                None => {
-                    let p = &PRESETS[0];
-                    vec![name.into(), p.name.into(), p.base_url.into(), p.protocol.into(), p.auth.into(), String::new()]
-                }
-            },
-            Kind::Llm => match lib.llm.get(name) {
-                Some(p) => vec![name.into(), p.provider.clone(), p.model.clone()],
-                None => vec![name.into(), lib.providers.keys().next().cloned().unwrap_or_default(), String::new()],
-            },
+            Kind::Provider => vec![String::new(); 6],
+            Kind::Llm => vec![String::new(); 3],
             Kind::Webdav => match lib.remotes.get(name) {
                 Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), String::new()],
                 None => vec![name.into(), String::new(), String::new(), String::new()],
@@ -175,7 +178,7 @@ impl SetupForm {
         };
         let sel = match kind {
             Kind::Reference => 1,
-            Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
+            Kind::Provider | Kind::Llm | Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => 0,
             _ if name.is_empty() => 0,
             _ => 1,
@@ -214,19 +217,6 @@ impl SetupForm {
         form
     }
 
-    /// Picks the next (or previous) provider preset, filling in its base URL, protocol and auth.
-    pub fn cycle_provider(&mut self, back: bool) {
-        let at = PRESETS.iter().position(|p| p.name == self.values[1].trim().to_lowercase());
-        let n = PRESETS.len();
-        let next = match (at, back) {
-            (Some(i), false) => (i + 1) % n,
-            (Some(i), true) => (i + n - 1) % n,
-            (None, _) => 0,
-        };
-        self.values[1] = PRESETS[next].name.into();
-        self.provider_changed();
-    }
-
     /// A known preset replaces the base URL, protocol and auth, unless a URL was typed that no
     /// preset has.
     pub fn provider_changed(&mut self) {
@@ -238,22 +228,6 @@ impl SetupForm {
             self.values[3] = p.protocol.into();
             self.values[4] = p.auth.into();
         }
-    }
-
-    /// Picks the next (or previous) configured provider for a profile.
-    pub fn cycle_bound_provider(&mut self, back: bool, lib: &Library) {
-        let names: Vec<&String> = lib.providers.keys().collect();
-        if names.is_empty() {
-            return;
-        }
-        let at = names.iter().position(|n| n.as_str() == self.values[1].trim());
-        let n = names.len();
-        let next = match (at, back) {
-            (Some(i), false) => (i + 1) % n,
-            (Some(i), true) => (i + n - 1) % n,
-            (None, _) => 0,
-        };
-        self.values[1] = names[next].clone();
     }
 
     /// Each field's label and hint.
@@ -276,17 +250,17 @@ impl SetupForm {
                 };
                 &[
                     ("Name", "profiles name it: [llm.<name>] provider = \"…\""),
-                    ("Preset", "←/→: codex, claude, mistral, openrouter, opencode-go, gemini, openai-compatible"),
+                    ("Preset", CHOICE_HINT),
                     ("Base URL", "filled in by the preset; any https server for openai-compatible"),
-                    ("Protocol", "anthropic, openai, mistral, openrouter, opencode-go or openai-responses"),
-                    ("Auth", "api-key, oauth or none"),
+                    ("Protocol", CHOICE_HINT),
+                    ("Auth", CHOICE_HINT),
                     ("Key / token", token),
                 ]
             }
             Kind::Llm => &[
                 ("Name", "used as --llm <name>"),
-                ("Provider", "←/→: set providers up with :setup provider"),
-                ("Model", "the model's name at the provider"),
+                ("Provider", CHOICE_HINT),
+                ("Model", CHOICE_HINT),
             ],
             Kind::Webdav => &[
                 ("Name", "used as pdf.location and in :attach"),
@@ -301,7 +275,7 @@ impl SetupForm {
             Kind::Firecrawl => &[("API key", "optional; without one, search uses the shared free tier with lower limits; the test runs one real search and uses quota")],
             Kind::Searxng => &[("Instance URL", "example URL; https only, no user name or password; the instance must have JSON output enabled (search.formats in settings.yml)")],
             Kind::Reference => &[
-                ("Type", "article, inproceedings, incollection, book, preprint, or another, such as report or thesis"),
+                ("Type", CHOICE_HINT),
                 ("Title", ""),
                 ("Authors", "Surname, Given; separated by ;"),
                 ("Year", ""),
@@ -314,10 +288,24 @@ impl SetupForm {
             Kind::Search => &[
                 ("Name", ""),
                 ("Query", "as typed after /"),
-                ("Sort", "key, title, author, year, status or type; -year for descending; empty for none"),
+                ("Sort", CHOICE_HINT),
             ],
         };
         fields.iter().map(|(label, hint)| (label.to_string(), *hint)).collect()
+    }
+
+    /// Whether this field offers known values, which it may still ignore in favour of typed text.
+    pub fn choice(&self, field: usize) -> Option<Choice> {
+        match (self.kind, field) {
+            (Kind::Provider, 1) => Some(Choice::Presets),
+            (Kind::Provider, 3) => Some(Choice::Protocols),
+            (Kind::Provider, 4) => Some(Choice::Auth),
+            (Kind::Llm, 1) => Some(Choice::BoundProviders),
+            (Kind::Llm, 2) => Some(Choice::Models),
+            (Kind::Search, 2) => Some(Choice::Sort),
+            (Kind::Reference, 0) => Some(Choice::RefKind),
+            _ => None,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -479,6 +467,49 @@ impl SetupForm {
     }
 }
 
+/// Values the choice fields offer, as `(label, value)`; free text is always allowed too.
+pub fn choices(choice: Choice, lib: &Library) -> Vec<(String, String)> {
+    let pairs: &[(&str, &str)] = match choice {
+        Choice::Presets => return PRESETS.iter().map(|p| (p.name.to_string(), p.name.to_string())).collect(),
+        Choice::BoundProviders => return lib.providers.keys().map(|n| (n.clone(), n.clone())).collect(),
+        Choice::Models => return Vec::new(),
+        Choice::Protocols => &[
+            ("anthropic", "anthropic"),
+            ("openai", "openai"),
+            ("mistral", "mistral"),
+            ("openrouter", "openrouter"),
+            ("opencode-go", "opencode-go"),
+            ("openai-responses", "openai-responses"),
+        ],
+        Choice::Auth => &[("api-key", "api-key"), ("oauth", "oauth"), ("none", "none")],
+        Choice::Sort => &[
+            ("key", "key"),
+            ("title", "title"),
+            ("author", "author"),
+            ("year", "year"),
+            ("status", "status"),
+            ("type", "type"),
+            ("key descending", "-key"),
+            ("title descending", "-title"),
+            ("author descending", "-author"),
+            ("year descending", "-year"),
+            ("status descending", "-status"),
+            ("type descending", "-type"),
+        ],
+        Choice::RefKind => &[
+            ("article", "article"),
+            ("inproceedings", "inproceedings"),
+            ("incollection", "incollection"),
+            ("book", "book"),
+            ("preprint", "preprint"),
+            ("report", "report"),
+            ("thesis", "thesis"),
+            ("misc", "misc"),
+        ],
+    };
+    pairs.iter().map(|(label, value)| (label.to_string(), value.to_string())).collect()
+}
+
 /// The `:setup` list: what each row sets, how it is set now, and the command that changes it.
 pub fn overview(lib: &Library) -> Vec<[String; 3]> {
     let row = |what: String, now: String, command: String| [what, now, command];
@@ -596,6 +627,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn choice_fields_offer_known_values() {
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n";
+        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
+        let llm = SetupForm::new(Kind::Llm, "new", &lib);
+        assert_eq!(llm.choice(1), Some(Choice::BoundProviders));
+        assert_eq!(llm.choice(2), Some(Choice::Models));
+        assert_eq!(choices(Choice::BoundProviders, &lib), [("claude".into(), "claude".into())]);
+        assert!(choices(Choice::Models, &lib).is_empty());
+        let provider = SetupForm::new(Kind::Provider, "", &lib);
+        assert_eq!(provider.choice(1), Some(Choice::Presets));
+        assert_eq!(provider.choice(5), None);
+        let search = SetupForm::new(Kind::Search, "", &lib);
+        assert_eq!(search.choice(2), Some(Choice::Sort));
+        assert!(choices(Choice::Sort, &lib).contains(&("year descending".into(), "-year".into())));
+        let reference = SetupForm::new(Kind::Reference, "", &lib);
+        assert_eq!(reference.choice(0), Some(Choice::RefKind));
+    }
+
+    #[test]
     fn builds_provider_keys_and_searxng() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut key = SetupForm::new(Kind::Exa, "", &lib);
@@ -619,13 +669,18 @@ mod tests {
     fn builds_providers_from_presets() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "codex", &lib);
+        assert_eq!(f.values, [""; 6], "the provider form starts empty");
+        f.values[0] = "codex".into();
+        f.values[1] = "codex".into();
+        f.provider_changed();
         assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", ""]);
         // Codex signs in with an empty field, so the section builds without a credential.
         let (t, s) = f.section().unwrap();
         assert_eq!(t.to_string(), "base_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n");
         assert_eq!(account(&s), "provider:codex:https://api.openai.com/v1");
 
-        f.cycle_provider(false);
+        f.values[1] = "claude".into();
+        f.provider_changed();
         assert_eq!(f.values[2..5], ["https://api.anthropic.com", "anthropic", "oauth"]);
         assert!(f.section().unwrap_err().to_string().contains("claude setup-token"));
         f.values[5] = "sk-ant-oat01-x".into();
@@ -633,7 +688,8 @@ mod tests {
         assert_eq!(account(&s), "provider:codex:https://api.anthropic.com");
 
         // A URL that no preset has stays; a preset's own URL is replaced with the preset's.
-        f.cycle_provider(false);
+        f.values[1] = "mistral".into();
+        f.provider_changed();
         f.values[2] = "https://mistral.example.edu/v1".into();
         f.values[5] = "k".into();
         let (t, _) = f.section().unwrap();
@@ -641,10 +697,10 @@ mod tests {
         assert_eq!(t["protocol"].as_str(), Some("mistral"));
         let saved = Library::parse(Some(&format!("[providers.mistral]\n{t}")), None, [], None).unwrap();
         let edited = SetupForm::new(Kind::Provider, "mistral", &saved);
-        assert_eq!(edited.values[1], "");
-        assert_eq!(edited.values[2..5], ["https://mistral.example.edu/v1", "mistral", "api-key"]);
+        assert_eq!(edited.values, [""; 6], "editing also starts empty");
 
         let mut g = SetupForm::new(Kind::Provider, "local", &lib);
+        g.values[0] = "local".into();
         g.values[1] = "openai-compatible".into();
         g.provider_changed();
         assert_eq!(g.values[2..5], ["", "openai", "api-key"]);
@@ -665,7 +721,10 @@ mod tests {
 
         // The guidance speaks for the chosen auth and protocol only.
         let hints = |f: &SetupForm| f.fields().iter().map(|(l, h)| (l.clone(), *h)).collect::<Vec<_>>();
-        let (_, token) = hints(&SetupForm::new(Kind::Provider, "cx", &lib)).into_iter().find(|(l, _)| l == "Key / token").unwrap();
+        let mut hinted = SetupForm::new(Kind::Provider, "cx", &lib);
+        hinted.values[1] = "codex".into();
+        hinted.provider_changed();
+        let (_, token) = hints(&hinted).into_iter().find(|(l, _)| l == "Key / token").unwrap();
         assert!(token.contains("press Enter") && !token.contains("claude"), "{token}");
     }
 
@@ -674,11 +733,11 @@ mod tests {
         let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
         let lib = Library::parse(Some(&format!("{cfg}[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n")), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "cx", &lib);
-        assert_eq!(f.values, ["cx", "codex", "gpt-5.1"]);
+        assert_eq!(f.values, [""; 3], "the LLM form starts empty");
         let mut g = SetupForm::new(Kind::Llm, "new", &lib);
-        assert_eq!(g.values[1], "claude");
-        g.cycle_bound_provider(false, &lib);
-        assert_eq!(g.values[1], "codex");
+        assert_eq!(g.values, [""; 3]);
+        g.values[0] = "new".into();
+        g.values[1] = "codex".into();
         g.values[2] = "gpt-5.1".into();
         let (t, s) = g.section().unwrap();
         assert_eq!(t.to_string(), "provider = \"codex\"\nmodel = \"gpt-5.1\"\n");
@@ -694,7 +753,9 @@ mod tests {
 
         // A profile that names a provider the library lacks is refused when it is tested.
         let orphans = Library::parse(Some("[llm.ghost]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
-        let (_, orphan) = SetupForm::new(Kind::Llm, "ghost", &orphans).section().unwrap();
+        let mut ghost = SetupForm::new(Kind::Llm, "ghost", &orphans);
+        ghost.values.clone_from_slice(&["ghost".into(), "nowhere".into(), "m".into()]);
+        let (_, orphan) = ghost.section().unwrap();
         assert!(test(&orphans.providers, &orphan, None).unwrap_err().to_string().contains("no provider named 'nowhere'"));
     }
 

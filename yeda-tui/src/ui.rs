@@ -533,7 +533,36 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     }
     let area = popup(main, 76, height.max(5));
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table | crate::setup::Kind::Provider) { "save" } else { "test and save" }), true)), area);
+    let footer = if app.combo.as_ref().is_some_and(|c| c.open) {
+        " ↓/↑ pick · Enter use · Esc close ".into()
+    } else {
+        format!(" Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table | crate::setup::Kind::Provider) { "save" } else { "test and save" })
+    };
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} ·{footer}"), true)), area);
+    if let Some(c) = &app.combo
+        && c.open
+    {
+        let top = area.y + 1 + form.sel as u16 + 1;
+        if top < main.bottom() {
+            let height = (c.options.len().min(8) as u16 + 2).min(main.bottom() - top);
+            let left = area.x + w as u16 + 3;
+            let width = area.right().saturating_sub(left + 2);
+            if height >= 3 && width >= 12 {
+                let items: Vec<ListItem> = c.options.iter().map(|(label, _)| ListItem::new(label.clone())).collect();
+                let title = match &c.note {
+                    Some(note) => format!(" {note} "),
+                    None => " Enter use · Esc close · typed values work ".into(),
+                };
+                let combo = Rect { x: left, y: top, width, height };
+                f.render_widget(Clear, combo);
+                f.render_stateful_widget(
+                    List::new(items).block(block(title, true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+                    combo,
+                    &mut ListState::default().with_selected(Some(c.sel)),
+                );
+            }
+        }
+    }
 }
 
 /// ✓ found in OpenAlex, ◎ already in the library.

@@ -94,6 +94,82 @@ fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
 }
 
+/// A model a provider lists: `id` is what requests use and what yeda.toml keeps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    pub id: String,
+    pub label: String,
+}
+
+fn get(url: &str, headers: &[(&str, String)]) -> Result<Value> {
+    yeda_core::require_https(url)?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .http_status_as_error(false)
+        .https_only(true)
+        .build()
+        .into();
+    let mut req = agent.get(url);
+    for (k, v) in headers {
+        req = req.header(*k, v);
+    }
+    let mut resp = req.call().with_context(|| url.to_string())?;
+    let status = resp.status();
+    let text = resp.body_mut().read_to_string()?;
+    if !status.is_success() {
+        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
+    }
+    serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
+}
+
+/// Maps the OpenAI-style `data[]`, Codex's `models[]` and Anthropic's display names to one list.
+fn listed_models(v: &Value) -> Vec<Model> {
+    let rows = v.get("data").and_then(Value::as_array).or_else(|| v.get("models").and_then(Value::as_array));
+    let mut models: Vec<Model> = rows
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            if m.get("visibility").and_then(Value::as_str).is_some_and(|v| v != "list") {
+                return None;
+            }
+            let id = m.get("id").or_else(|| m.get("slug")).and_then(Value::as_str)?;
+            let label = m.get("display_name").or_else(|| m.get("name")).and_then(Value::as_str).unwrap_or(id);
+            Some(Model { id: id.into(), label: label.into() })
+        })
+        .collect();
+    models.dedup_by(|a, b| a.id == b.id);
+    models
+}
+
+/// The models the bound provider lists, for `:setup llm`'s picker. A server without the endpoint
+/// returns an error, which the form shows without blocking a typed model name.
+pub fn models(b: &Bound, key: Option<&str>) -> Result<Vec<Model>> {
+    let key = clean(key);
+    if key.is_none() && b.needs_key() {
+        bail!("no API key or OAuth credentials for provider '{}' ({})", b.provider, b.url());
+    }
+    let key = key.as_deref().unwrap_or_default();
+    let headers: Vec<(&'static str, String)> = match b.protocol() {
+        Protocol::OpenaiResponses => codex_headers(b, key)?,
+        Protocol::Anthropic if b.auth() == Auth::Oauth => vec![
+            ("anthropic-version", "2023-06-01".into()),
+            ("authorization", format!("Bearer {key}")),
+            ("anthropic-beta", "oauth-2025-04-20".into()),
+        ],
+        Protocol::Anthropic => vec![("anthropic-version", "2023-06-01".into()), ("x-api-key", key.into())],
+        _ => openai_headers(b, (!key.is_empty()).then_some(key)),
+    };
+    Ok(listed_models(&get(&models_url(b), &headers)?))
+}
+
+/// Anthropic's base URL omits `/v1`; every other protocol's base includes it.
+fn models_url(b: &Bound) -> String {
+    match b.protocol() {
+        Protocol::Anthropic => format!("{}/v1/models", b.url()),
+        _ => format!("{}/models", b.url()),
+    }
+}
+
 fn anthropic(b: &Bound, prompt: &Prompt, key: &str) -> Result<Reply> {
     let base = b.url();
     let mut body = json!({
@@ -596,6 +672,34 @@ mod tests {
         let http = Bound { settings: Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), ..provider(Protocol::OpenaiResponses, Auth::Oauth) }, ..bound(Protocol::OpenaiResponses, Auth::Oauth) };
         let err = ping(&http, Some("k")).unwrap_err().to_string();
         assert!(err.contains("only go over https://"), "{err}");
+    }
+
+    #[test]
+    fn model_lists_map_every_response_shape() {
+        let openai = json!({"data": [{"id": "gpt-5.1"}, {"id": "m", "name": "M"}]});
+        assert_eq!(listed_models(&openai), [
+            Model { id: "gpt-5.1".into(), label: "gpt-5.1".into() },
+            Model { id: "m".into(), label: "M".into() },
+        ]);
+        let codex = json!({"models": [
+            {"slug": "gpt-5", "display_name": "GPT-5", "visibility": "list"},
+            {"slug": "hidden", "display_name": "Hidden", "visibility": "hidden"},
+            {"slug": "gpt-5", "display_name": "GPT-5", "visibility": "list"},
+        ]});
+        assert_eq!(listed_models(&codex), [Model { id: "gpt-5".into(), label: "GPT-5".into() }]);
+        let anthropic = json!({"data": [{"id": "claude-x", "display_name": "Claude X"}]});
+        assert_eq!(listed_models(&anthropic), [Model { id: "claude-x".into(), label: "Claude X".into() }]);
+        assert!(listed_models(&json!({"data": []})).is_empty());
+    }
+
+    #[test]
+    fn model_list_urls_follow_each_base_url_convention() {
+        assert_eq!(models_url(&bound(Protocol::Openai, Auth::ApiKey)), "https://api.openai.com/v1/models");
+        assert_eq!(models_url(&bound(Protocol::OpenaiResponses, Auth::Oauth)), "https://api.openai.com/v1/models");
+        assert_eq!(models_url(&bound(Protocol::Mistral, Auth::ApiKey)), "https://api.mistral.ai/v1/models");
+        assert_eq!(models_url(&bound(Protocol::Openrouter, Auth::ApiKey)), "https://openrouter.ai/api/v1/models");
+        assert_eq!(models_url(&bound(Protocol::Anthropic, Auth::ApiKey)), "https://api.anthropic.com/v1/models");
+        assert_eq!(models_url(&bound(Protocol::OpencodeGo, Auth::ApiKey)), "https://opencode.ai/inference/go/openai/v1/models");
     }
 
     #[test]
