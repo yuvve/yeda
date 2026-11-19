@@ -74,14 +74,11 @@ pub fn git_account(url: &str) -> String {
     format!("git:{url}")
 }
 
-/// The account name for an LLM API key or OAuth token: the server's, shared by its profiles, or
-/// one `profile`'s own. It names the server, so a shared config that points a profile elsewhere
-/// finds no key to send there.
-pub fn llm_account(profile: Option<&str>, url: &str) -> String {
-    match profile {
-        Some(p) => format!("llm:{p}:{url}"),
-        None => format!("llm:{url}"),
-    }
+/// The account name for a provider's API key or OAuth credentials, shared by every profile bound to
+/// it. It names the server too: a shared config that points the provider elsewhere finds no secret
+/// to send there.
+pub fn provider_account(name: &str, url: &str) -> String {
+    format!("provider:{name}:{url}")
 }
 
 #[cfg(test)]
@@ -98,7 +95,7 @@ mod tests {
     #[test]
     #[ignore = "writes to the real secret store"]
     fn round_trip() {
-        for account in [super::webdav_account("yeda-test", "https://example.invalid/dav"), super::llm_account(Some("yeda-test"), "https://example.invalid/v1")] {
+        for account in [super::webdav_account("yeda-test", "https://example.invalid/dav"), super::provider_account("yeda-test", "https://example.invalid/v1")] {
             super::set(&account, "s3cret").unwrap();
             assert_eq!(super::get(&account).unwrap().as_deref(), Some("s3cret"));
             super::delete(&account).unwrap();

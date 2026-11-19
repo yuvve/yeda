@@ -96,7 +96,7 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
 
-`:setup` lists what it sets (LLM profiles, WebDAV locations, the OpenAlex key, web search, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
+`:setup` lists what it sets (LLM providers and profiles, WebDAV locations, the OpenAlex key, web search, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
 
 ## Graphs
 
@@ -113,21 +113,28 @@ In the graph, `Enter` opens a paper and grows the graph from it, and `a` adds it
 
 ## LLM features
 
-Both features below use an LLM profile from the library's `yeda.toml`; `:setup llm` writes one:
+Both features below use an LLM profile from the library's `yeda.toml`. A profile names a provider and a model; the provider holds where to connect and how:
 
 ```toml
 default_llm = "claude"
 
+[providers.claude]
+base_url = "https://api.anthropic.com"
+protocol = "anthropic"            # or "openai", "mistral", "openrouter", "opencode-go", "openai-responses"
+auth = "oauth"                    # or "api-key", or "none" for a server without a key
+
 [llm.claude]
-provider = "anthropic"           # or "mistral", "openrouter", "opencode-go", "codex", or "openai" for any OpenAI-compatible server
+provider = "claude"
 model = "claude-opus-5-5"
 ```
 
-An Anthropic profile takes an API key or an OAuth token; yeda tells them apart by themselves. An OAuth token uses your Claude subscription instead of API credits: run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints. Anthropic may restrict subscription use outside Claude Code.
+`:setup provider` starts from a preset (codex, claude, mistral, openrouter, opencode-go, gemini, or any OpenAI-compatible server) and fills in its base URL, protocol and auth; `:setup llm` adds profiles. Profiles bound to one provider share its credential.
 
-An `opencode-go` profile uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
+An `oauth` provider takes a token instead of an API key. For Claude, run `claude setup-token` in a terminal with Claude Code installed, log in, and paste the token it prints; it uses your Claude subscription instead of API credits. Anthropic may restrict subscription use outside Claude Code.
 
-A `codex` profile uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup llm` signs you in: it generates a ChatGPT link, opens it in your browser (`c` copies the link), and keeps the tokens it returns in the secret store, renewing them on their own. Pasting a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search, and the profile's `max_tokens` has no effect.
+An `opencode-go` provider uses an [OpenCode Go](https://opencode.ai/docs/go/) subscription and its API key. `glm-5.3-flash` is a cheap model; `kimi-k3.1-pro` is stronger but has a smaller monthly allowance.
+
+A `codex` provider uses your [ChatGPT subscription](https://chatgpt.com/codex) through the Responses API. `:setup provider` signs you in: it generates a ChatGPT link, opens it in your browser (`c` copies the link), and keeps the tokens it returns in the secret store, renewing them on their own. Pasting a bare access token works too, but it expires in about an hour and cannot be renewed. Codex has no web search.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 

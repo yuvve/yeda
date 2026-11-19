@@ -3,60 +3,161 @@ use serde_json::{Value, json};
 
 use anyhow::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+/// The wire dialect a provider speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Provider {
+pub enum Protocol {
     Anthropic,
-    /// OpenAI-compatible chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, …
+    /// OpenAI chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, …
     Openai,
     Mistral,
     Openrouter,
     /// The OpenCode Go subscription, through its OpenAI-compatible endpoint.
     #[serde(rename = "opencode-go")]
     OpencodeGo,
-    /// OpenAI's Codex OAuth tokens, which use the ChatGPT subscription through the Responses API.
-    Codex,
+    /// OpenAI's Responses API, which Codex OAuth tokens are accepted by.
+    #[serde(rename = "openai-responses")]
+    OpenaiResponses,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Profile {
-    pub provider: Provider,
-    pub model: String,
-    pub base_url: Option<String>,
-    pub max_tokens: Option<u32>,
-    /// Anthropic `output_config.effort`.
-    pub effort: Option<String>,
-    /// Anthropic server-side refusal fallbacks; defaults on for models that support them.
-    pub fallbacks: Option<bool>,
-    /// Truncate the paper text sent to OpenAI-compatible servers (small local context windows).
-    pub max_input_chars: Option<usize>,
-    /// Ask the server to enforce the JSON schema; turn off for servers that reject `response_format`.
-    pub json_schema: Option<bool>,
+impl Protocol {
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::Anthropic => "anthropic",
+            Protocol::Openai => "openai",
+            Protocol::Mistral => "mistral",
+            Protocol::Openrouter => "openrouter",
+            Protocol::OpencodeGo => "opencode-go",
+            Protocol::OpenaiResponses => "openai-responses",
+        }
+    }
 }
 
-impl Profile {
-    /// An OpenAI-compatible server needs a key only when it is OpenAI's own.
-    pub fn needs_key(&self) -> bool {
-        self.provider != Provider::Openai || self.base_url.is_none()
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Auth {
+    ApiKey,
+    Oauth,
+    None,
+}
+
+impl Auth {
+    pub fn name(self) -> &'static str {
+        match self {
+            Auth::ApiKey => "api-key",
+            Auth::Oauth => "oauth",
+            Auth::None => "none",
+        }
+    }
+}
+
+/// A `[providers.<name>]` entry: where to connect and how. Its secret is shared by every profile
+/// bound to it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provider {
+    pub base_url: String,
+    pub protocol: Protocol,
+    pub auth: Auth,
+}
+
+impl Provider {
+    /// Where requests, and so the credential, go.
+    pub fn url(&self) -> &str {
+        self.base_url.trim_end_matches('/')
     }
 
-    /// Where requests, and so the API key, go.
+    pub fn needs_key(&self) -> bool {
+        self.auth != Auth::None
+    }
+
+    /// Checks what a request would otherwise fail on: the address, and a credential the protocol
+    /// cannot use.
+    pub fn check(&self) -> Result<()> {
+        if !self.base_url.starts_with("https://") {
+            anyhow::bail!("{}: the base URL starts with https://", self.base_url);
+        }
+        match (self.protocol, self.auth) {
+            (Protocol::Openai, Auth::ApiKey | Auth::None) => Ok(()),
+            (Protocol::Anthropic, Auth::ApiKey | Auth::Oauth) => Ok(()),
+            (Protocol::OpenaiResponses, Auth::Oauth) => Ok(()),
+            (Protocol::Mistral | Protocol::Openrouter | Protocol::OpencodeGo, Auth::ApiKey) => Ok(()),
+            (protocol, auth) => anyhow::bail!("{} does not take auth = \"{}\"", protocol.name(), auth.name()),
+        }
+    }
+}
+
+/// A `[llm.<name>]` entry: which provider to ask, and which of its models.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Profile {
+    pub provider: String,
+    pub model: String,
+}
+
+/// A profile together with the provider it names: what one request needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bound {
+    pub profile: String,
+    pub provider: String,
+    pub model: String,
+    pub settings: Provider,
+}
+
+impl Bound {
+    pub fn new(profile: &str, p: &Profile, provider: &str, settings: &Provider) -> Bound {
+        Bound { profile: profile.into(), provider: provider.into(), model: p.model.clone(), settings: settings.clone() }
+    }
+
+    /// Where requests, and so the credential, go.
     pub fn url(&self) -> &str {
-        let default = match self.provider {
-            Provider::Anthropic => "https://api.anthropic.com",
-            Provider::Openai => "https://api.openai.com/v1",
-            Provider::Mistral => "https://api.mistral.ai/v1",
-            Provider::Openrouter => "https://openrouter.ai/api/v1",
-            Provider::OpencodeGo => "https://opencode.ai/inference/go/openai/v1",
-            Provider::Codex => "https://api.openai.com/v1",
-        };
-        self.base_url.as_deref().unwrap_or(default).trim_end_matches('/')
+        self.settings.url()
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        self.settings.protocol
+    }
+
+    pub fn auth(&self) -> Auth {
+        self.settings.auth
+    }
+
+    pub fn needs_key(&self) -> bool {
+        self.settings.needs_key()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn provider(text: &str) -> Result<Provider> {
+        toml::from_str(text).map_err(Into::into)
+    }
+
+    #[test]
+    fn providers_check_their_address_and_auth_pair() {
+        let codex = provider("base_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap();
+        assert_eq!((codex.url(), codex.protocol, codex.auth, codex.needs_key()), ("https://api.openai.com/v1", Protocol::OpenaiResponses, Auth::Oauth, true));
+        codex.check().unwrap();
+        let local = provider("base_url = \"https://localhost:8080/v1/\"\nprotocol = \"openai\"\nauth = \"none\"\n").unwrap();
+        assert_eq!(local.url(), "https://localhost:8080/v1");
+        assert!(!local.needs_key());
+        local.check().unwrap();
+        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"anthropic\"\nauth = \"none\"\n").unwrap().check().unwrap_err().to_string().contains("anthropic does not take auth = \"none\""));
+        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"opencode-go\"\nauth = \"oauth\"\n").unwrap().check().is_err());
+        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"openai-responses\"\nauth = \"api-key\"\n").unwrap().check().is_err());
+        assert!(provider("base_url = \"http://x.test/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n").unwrap().check().unwrap_err().to_string().contains("https://"));
+        assert!(provider("base_url = \"https://x.test\"\nprotocol = \"gemini\"\nauth = \"api-key\"\n").is_err());
+    }
+
+    #[test]
+    fn profiles_hold_only_a_provider_and_a_model() {
+        let p: Profile = toml::from_str("provider = \"codex\"\nmodel = \"gpt-5.1\"\n").unwrap();
+        assert_eq!((p.provider.as_str(), p.model.as_str()), ("codex", "gpt-5.1"));
+        assert!(toml::from_str::<Profile>("provider = \"codex\"\nmodel = \"m\"\nbase_url = \"https://api.openai.com/v1\"\n").is_err());
+        assert!(toml::from_str::<Profile>("provider = \"codex\"\nmodel = \"m\"\nmax_tokens = 100\n").is_err());
+    }
 
     #[test]
     fn codex_credentials_parse_json_and_bare_tokens() {
@@ -87,6 +188,7 @@ mod tests {
             account_id: Some("acc".into()),
             host_id: Some("urn:uuid:1".into()),
             id_token: Some("id.jwt".into()),
+            scope: None,
             expires_at: Some(1_000),
         };
         assert!(cred.needs_refresh(600, 900));
@@ -119,6 +221,8 @@ pub struct CodexCredential {
     /// The stable host id yeda signed in with, and the id token for its next sign-in.
     pub host_id: Option<String>,
     pub id_token: Option<String>,
+    /// The scopes granted at sign-in, kept for the next reauthorization.
+    pub scope: Option<String>,
     /// Seconds since the epoch when the access token stops working.
     pub expires_at: Option<i64>,
 }
@@ -142,6 +246,7 @@ impl CodexCredential {
                 account_id: tokens["account_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 host_id: v["ext_agent_host_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 id_token: v["id_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
+                scope: v["scope"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 expires_at: jwt_expires_at(access),
             })
         } else {
@@ -150,7 +255,7 @@ impl CodexCredential {
                 anyhow::bail!("no Codex OAuth token");
             }
             let expires_at = jwt_expires_at(&access);
-            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, host_id: None, id_token: None, expires_at })
+            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, host_id: None, id_token: None, scope: None, expires_at })
         }
     }
 
@@ -163,12 +268,16 @@ impl CodexCredential {
                 "oauth_provenance": self.client_id.as_ref().map(|c| json!({"client_id": c})),
                 "account_id": self.account_id,
             });
-            json!({
+            let mut record = json!({
                 "client_id": self.client_id,
                 "ext_agent_host_id": self.host_id,
                 "id_token": self.id_token,
                 "tokens": tokens,
-            })
+            });
+            if let Some(scope) = &self.scope {
+                record["scope"] = json!(scope);
+            }
+            record
         } else {
             Value::String(access_token.into())
         };
@@ -184,7 +293,7 @@ impl CodexCredential {
         if self.refresh_token.is_some() {
             "the Codex access token has expired; run `codex login` again and re-run the command"
         } else {
-            "the Codex access token has expired; open its profile in :setup llm and press Enter to sign in again"
+            "the Codex access token has expired; open its provider in :setup provider and press Enter to sign in again"
         }
     }
 }

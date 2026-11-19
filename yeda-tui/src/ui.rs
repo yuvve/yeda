@@ -512,6 +512,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         }
     }
     let what = match form.kind {
+        crate::setup::Kind::Provider => "LLM provider",
         crate::setup::Kind::Llm => "LLM profile",
         crate::setup::Kind::Webdav => "WebDAV location",
         crate::setup::Kind::Search => "Saved search",
@@ -532,7 +533,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     }
     let area = popup(main, 76, height.max(5));
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table) { "save" } else { "test and save" }), true)), area);
+    f.render_widget(Paragraph::new(lines).block(block(format!(" {what} · Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table | crate::setup::Kind::Provider) { "save" } else { "test and save" }), true)), area);
 }
 
 /// ✓ found in OpenAlex, ◎ already in the library.

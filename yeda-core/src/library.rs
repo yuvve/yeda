@@ -1,5 +1,5 @@
 use crate::Effect;
-use crate::llm::Profile;
+use crate::llm::{Bound, Profile, Provider};
 use crate::tables::Table;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -119,6 +119,7 @@ struct Config {
     searches: BTreeMap<String, SavedSearch>,
     reader: Option<String>,
     tables: BTreeMap<String, Table>,
+    providers: BTreeMap<String, Provider>,
     llm: BTreeMap<String, Profile>,
     default_llm: Option<String>,
     graph: Option<crate::graph::Settings>,
@@ -153,6 +154,8 @@ pub struct Library {
     /// Command that opens PDFs as `<reader> <pdf> --annotations <dir>`; clients default to yeda-reader.
     pub reader: Option<String>,
     pub tables: BTreeMap<String, Table>,
+    /// `[providers.<name>]`: where and how to reach each LLM server.
+    pub providers: BTreeMap<String, Provider>,
     pub llm: BTreeMap<String, Profile>,
     pub default_llm: Option<String>,
     /// `[graph]`, for citation graphs.
@@ -257,6 +260,7 @@ impl Library {
             lib.searches.extend(cfg.searches);
             lib.reader = cfg.reader.or(lib.reader);
             lib.tables.extend(cfg.tables);
+            lib.providers.extend(cfg.providers);
             lib.llm.extend(cfg.llm);
             lib.default_llm = cfg.default_llm.or(lib.default_llm);
             if let Some(g) = cfg.graph {
@@ -273,6 +277,9 @@ impl Library {
                 lib.web_search = settings;
                 lib.warnings = warnings;
             }
+        }
+        for (name, p) in &lib.providers {
+            p.check().with_context(|| format!("providers.{name}"))?;
         }
         for (key, text) in refs {
             match parse_ref(key.clone(), &text) {
@@ -304,8 +311,8 @@ impl Library {
         })
     }
 
-    /// The named profile, else `default_llm`, else the only profile configured.
-    pub fn llm_profile(&self, name: Option<&str>) -> Result<(String, Profile)> {
+    /// The named profile, else `default_llm`, else the only profile configured, bound to its provider.
+    pub fn llm_profile(&self, name: Option<&str>) -> Result<(String, Bound)> {
         let name = match (name, &self.default_llm) {
             (Some(n), _) => n.to_string(),
             (None, Some(d)) => d.clone(),
@@ -314,7 +321,14 @@ impl Library {
             (None, None) => bail!("several llm profiles ({}); set default_llm or pass --llm <profile>", self.llm.keys().cloned().collect::<Vec<_>>().join(", ")),
         };
         let p = self.llm.get(&name).with_context(|| format!("no llm profile named '{name}'"))?;
-        Ok((name, p.clone()))
+        let settings = self
+            .providers
+            .get(&p.provider)
+            .with_context(|| format!("llm.{name} names provider '{}', which is not in [providers.<name>]", p.provider))?;
+        if p.model.trim().is_empty() {
+            bail!("llm.{name}: give the model's name");
+        }
+        Ok((name.clone(), Bound::new(&name, p, &p.provider, settings)))
     }
 
     pub fn get(&self, key: &str) -> Option<&Ref> {
@@ -529,6 +543,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn binds_profiles_to_their_provider_and_refuses_a_missing_one() {
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
+        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
+        let (name, a) = lib.llm_profile(Some("a")).unwrap();
+        let (_, b) = lib.llm_profile(Some("b")).unwrap();
+        assert_eq!((name.as_str(), a.url(), b.url()), ("a", "https://api.anthropic.com", "https://api.anthropic.com"));
+        assert_eq!((a.model.as_str(), b.model.as_str()), ("claude-opus-5-5", "claude-sonnet-5-5"));
+
+        let orphan = Library::parse(Some("[llm.a]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let err = orphan.llm_profile(Some("a")).unwrap_err().to_string();
+        assert!(err.contains("names provider 'nowhere'"), "{err}");
+        let broken = Library::parse(Some("[providers.x]\nbase_url = \"http://x.test/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n"), None, [], None);
+        assert!(format!("{:#}", broken.unwrap_err()).contains("providers.x: http://x.test/v1"));
+    }
 
     #[test]
     fn rejects_pdf_paths_outside_their_location() {

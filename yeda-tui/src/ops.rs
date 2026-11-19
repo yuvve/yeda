@@ -123,13 +123,13 @@ pub fn extract_annotations(lib: &Library, dir: &Path, r: &Ref, write: &mut dyn F
 }
 
 /// Sends one paper to the LLM; returns its row and the LLM's note, if any.
-pub fn summarize(profile: &yeda_core::llm::Profile, job: tables::Job, key: Option<&str>) -> Result<(Row, Option<String>)> {
+pub fn summarize(bound: &yeda_core::llm::Bound, job: tables::Job, key: Option<&str>) -> Result<(Row, Option<String>)> {
     let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
     let path = job.pdf.clone().unwrap_or_default();
     let text = || poppler::pdf_text(&path);
     let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
     let prompt = Prompt { system: job.system, text: job.text, paper, schema: job.schema };
-    let reply = llm::complete(profile, &prompt, key)?;
+    let reply = llm::complete(bound, &prompt, key)?;
     Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note))
 }
 

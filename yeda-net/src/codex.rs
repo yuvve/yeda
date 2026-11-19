@@ -37,7 +37,9 @@ pub fn start(issued_client_id: Option<&str>, host_id: Option<&str>, id_token_hin
     let listener = TcpListener::bind("127.0.0.1:0").context("binding the sign-in callback listener")?;
     let port = listener.local_addr()?.port();
     let id = || uuid::Uuid::new_v4().simple().to_string();
-    let (verifier, nonce, state) = (id(), id(), id());
+    // PKCE wants a 43-128 character verifier; one compact UUID is 32.
+    let verifier = format!("{}{}", id(), id());
+    let (nonce, state) = (id(), id());
     // A hyphenated UUID: OpenAI rejects the compact form.
     let host_id = host_id.map(String::from).unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -136,7 +138,12 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     ]
     .map(|(k, v)| format!("{k}={}", encode(v)))
     .join("&");
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(60))).https_only(true).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .http_status_as_error(false)
+        .https_only(true)
+        .build()
+        .into();
     let mut resp = agent
         .post(TOKEN)
         .header("content-type", "application/x-www-form-urlencoded")
@@ -144,10 +151,7 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
         .with_context(|| TOKEN.to_string())?;
     let status = resp.status();
     let text = resp.body_mut().read_to_string()?;
-    if !status.is_success() {
-        bail!("{TOKEN}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
-    }
-    let v: Value = serde_json::from_str(&text).with_context(|| format!("{TOKEN}: response is not JSON"))?;
+    let v = token_response(TOKEN, status.as_u16(), &text)?;
     let access = v["access_token"].as_str().context("the token response has no access_token")?;
     let refresh = v["refresh_token"].as_str().unwrap_or_default();
     let id_token = v["id_token"].as_str().unwrap_or_default();
@@ -155,7 +159,7 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     if claims["iss"].as_str() != Some(ISSUER) {
         bail!("the sign-in's id token names another issuer");
     }
-    if claims["aud"].as_str() != Some(client_id) {
+    if !audience_has(&claims["aud"], client_id) {
         bail!("the sign-in's id token belongs to another client");
     }
     if claims["nonce"].as_str() != Some(nonce) {
@@ -163,8 +167,9 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     }
     // The signature is not checked: the token arrives straight from OpenAI over https and is only
     // used against OpenAI, so there is no third party to fool with a forged one.
+    let scope = granted_scope(&v)?;
     let account = claims["chatgpt_account_id"].as_str().filter(|s| !s.is_empty());
-    let json = json!({
+    let mut json = json!({
         "client_id": client_id,
         "ext_agent_host_id": host_id,
         "id_token": id_token,
@@ -175,7 +180,27 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
             "account_id": account,
         },
     });
+    if !scope.is_empty() {
+        json["scope"] = json!(scope);
+    }
     serde_json::to_string(&json).context("serializing the signed-in credentials")
+}
+
+/// The token endpoint's answer, or its error body: OpenAI says in the body why it refused.
+/// Plan inference needs this scope; an identity-only sign-in is not enough.
+fn granted_scope(response: &Value) -> Result<String> {
+    let scope = response["scope"].as_str().unwrap_or_default();
+    if !scope.split_whitespace().any(|s| s == "chatgpt.tokens.use.direct") {
+        bail!("the sign-in did not grant chatgpt.tokens.use.direct; approve ChatGPT plan usage to use this provider");
+    }
+    Ok(scope.to_string())
+}
+
+pub(crate) fn token_response(url: &str, status: u16, text: &str) -> Result<Value> {
+    if !(200..300).contains(&status) {
+        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
+    }
+    serde_json::from_str(text).with_context(|| format!("{url}: response is not JSON"))
 }
 
 fn jwt_claims(jwt: &str) -> Value {
@@ -183,6 +208,15 @@ fn jwt_claims(jwt: &str) -> Value {
         .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null)
+}
+
+/// `aud` is the client id, or an array that includes it.
+fn audience_has(aud: &Value, client_id: &str) -> bool {
+    match aud {
+        Value::String(a) => a == client_id,
+        Value::Array(a) => a.iter().any(|v| v.as_str() == Some(client_id)),
+        _ => false,
+    }
 }
 
 fn port_of(listener: &TcpListener) -> u16 {
@@ -236,6 +270,36 @@ fn percent_decode(v: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_without_plan_permission_is_refused() {
+        let ok = json!({"scope": "openid profile chatgpt.tokens.use.direct offline_access"});
+        assert_eq!(granted_scope(&ok).unwrap(), "openid profile chatgpt.tokens.use.direct offline_access");
+        let err = granted_scope(&json!({"scope": "openid email"})).unwrap_err().to_string();
+        assert!(err.contains("chatgpt.tokens.use.direct"), "{err}");
+        assert!(granted_scope(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn the_pkce_verifier_has_the_length_the_spec_requires() {
+        let sign_in = start(None, None, None).unwrap();
+        let n = sign_in.verifier.chars().count();
+        assert!((43..=128).contains(&n), "{n}");
+        assert!(sign_in.verifier.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c)));
+        assert!(audience_has(&json!("oaiapp_x"), "oaiapp_x"));
+        assert!(audience_has(&json!(["oaiapp_x", "other"]), "oaiapp_x"));
+        assert!(!audience_has(&json!("oaiapp_y"), "oaiapp_x"));
+    }
+
+    #[test]
+    fn a_refused_exchange_reports_the_endpoints_own_reason() {
+        let body = r#"{"error":"invalid_grant","error_description":"code expired"}"#;
+        let err = token_response("https://auth.example/token", 400, body).unwrap_err().to_string();
+        assert!(err.contains("HTTP 400") && err.contains("code expired"), "{err}");
+        let ok = token_response("https://auth.example/token", 200, r#"{"access_token":"a"}"#).unwrap();
+        assert_eq!(ok["access_token"], "a");
+        assert!(token_response("https://auth.example/token", 200, "not json").is_err());
+    }
 
     #[test]
     fn encodes_a_url_with_the_callback_and_challenge() {

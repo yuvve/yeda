@@ -165,7 +165,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
-    (":setup llm|webdav [name]", "add or change an LLM profile or WebDAV location in yeda.toml, testing it first"),
+    (":setup provider|llm|webdav [name]", "add or change a provider, an LLM profile or a WebDAV location in yeda.toml, testing it first"),
     (":setup openalex", "set the optional OpenAlex API key, testing it first"),
     (":setup web-search [keenable|exa|parallel|firecrawl|searxng]", "the search providers :discover uses, or one provider's optional key or SearXNG URL, testing it first"),
     (":setup proxy", "set the library proxies :fetch opens papers through"),
@@ -1645,15 +1645,50 @@ impl App {
                     }
                 }
                 Ok((section, setup::Setup::Untested)) => self.save_setup(section, ""),
+                Ok((section, s @ setup::Setup::Llm(..))) => {
+                    let (name, p) = match &s {
+                        setup::Setup::Llm(name, p) => (name.clone(), p.clone()),
+                        _ => unreachable!(),
+                    };
+                    let providers = self.lib.providers.clone();
+                    let found = setup::profile_credential(&providers, &name, &p, |account| match self.secrets.get(account) {
+                        Some(secret) => Ok(Some(secret.clone())),
+                        None => yeda_secrets::get(account),
+                    });
+                    let (bound, key) = match found {
+                        Ok(found) => found,
+                        Err(e) => {
+                            self.status = format!("{e:#}");
+                            return;
+                        }
+                    };
+                    let account = yeda_secrets::provider_account(&bound.provider, bound.url());
+                    let key = match bound.protocol() {
+                        yeda_core::llm::Protocol::OpenaiResponses => self.renewed_codex(&bound, account, key),
+                        _ => key,
+                    };
+                    let (tx, rx) = mpsc::channel();
+                    let probe = s.clone();
+                    std::thread::spawn(move || {
+                        // The profile has no account of its own; its provider's credential stays put.
+                        let _ = tx.send(setup::test(&providers, &probe, key.as_deref()).map(|_| None));
+                    });
+                    if let Some(form) = &mut self.setup {
+                        form.testing = true;
+                    }
+                    self.status = "testing the connection…".into();
+                    self.setup_job = Some(SetupJob { rx, section, setup: s });
+                }
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
                     let (probe, test_secret) = (setup.clone(), secret.clone());
                     let account = setup::account(&setup);
-                    // An empty field asks a Codex profile to sign in instead: stored credentials
+                    let providers = self.lib.providers.clone();
+                    // An empty field asks a Codex provider to sign in instead: stored credentials
                     // reauthorize with their own client and host id, a missing one registers anew.
                     let codex_empty = secret.is_none()
-                        && matches!(&setup, setup::Setup::Llm(_, p) if p.provider == yeda_core::llm::Provider::Codex);
+                        && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
                     if codex_empty {
                         let (issued, host, hint) = yeda_secrets::get(&account)
                             .ok()
@@ -1672,7 +1707,7 @@ impl App {
                                 Ok(credentials) => {
                                     // Stored before the test, so fixing the model does not ask for another sign-in.
                                     let _ = yeda_secrets::set(&account, &credentials);
-                                    setup::test(&probe, Some(&credentials)).map(|_| Some(credentials))
+                                    setup::test(&providers, &probe, Some(&credentials)).map(|_| Some(credentials))
                                 }
                                 Err(e) => Err(e),
                             });
@@ -1684,7 +1719,7 @@ impl App {
                         return;
                     }
                     std::thread::spawn(move || {
-                        let _ = tx.send(setup::test(&probe, test_secret.as_deref()).map(|_| test_secret.clone()));
+                        let _ = tx.send(setup::test(&providers, &probe, test_secret.as_deref()).map(|_| test_secret.clone()));
                     });
                     form.testing = true;
                     self.status = "testing the connection…".into();
@@ -1694,7 +1729,8 @@ impl App {
             },
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
             KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
-            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
+            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Provider && form.sel == 1 => form.cycle_provider(k.code == KeyCode::Left),
+            KeyCode::Right | KeyCode::Left if form.kind == setup::Kind::Llm && form.sel == 1 => form.cycle_bound_provider(k.code == KeyCode::Left, &self.lib),
             // A secret never goes to a file.
             KeyCode::Char('g') if ctrl && !form.masked(form.sel) => {
                 let sel = form.sel;
@@ -1705,7 +1741,7 @@ impl App {
             }
         }
         if let Some(form) = &mut self.setup {
-            if form.kind == setup::Kind::Llm && form.sel == 1 {
+            if form.kind == setup::Kind::Provider && form.sel == 1 {
                 form.provider_changed();
             }
             form.sync_columns();
@@ -1859,7 +1895,10 @@ impl App {
         };
         let kind = form.kind;
         let mut stored = String::new();
-        if let Some(secret) = secret {
+        // An LLM profile form tests with its provider's credential and has no account of its own.
+        if let Some(secret) = secret
+            && !setup::account(&job.setup).is_empty()
+        {
             let account = setup::account(&job.setup);
             if let Err(e) = yeda_secrets::set(&account, &secret) {
                 stored = format!(" (secret kept for this session only: {e:#})");
@@ -1922,7 +1961,8 @@ impl App {
         let name = form.name().to_string();
         // The keys a form leaves out when their field is empty.
         let (path, cleared): (Vec<&str>, &[&str]) = match form.kind {
-            setup::Kind::Llm => (vec!["llm", &name], &["base_url"]),
+            setup::Kind::Provider => (vec!["providers", &name], &[]),
+            setup::Kind::Llm => (vec!["llm", &name], &[]),
             setup::Kind::Table => (vec!["tables", &name], &["describe"]),
             setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
             _ => (vec!["locations", &name], &[]),
@@ -2407,6 +2447,7 @@ impl App {
                         return;
                     }
                     let kind = match kind {
+                        "provider" => setup::Kind::Provider,
                         "llm" => setup::Kind::Llm,
                         "webdav" => setup::Kind::Webdav,
                         "openalex" => setup::Kind::Openalex,
@@ -2418,7 +2459,7 @@ impl App {
                         "firecrawl" => setup::Kind::Firecrawl,
                         "searxng" => setup::Kind::Searxng,
                         _ => {
-                            self.status = "usage: :setup [llm|webdav|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
+                            self.status = "usage: :setup [provider|llm|webdav|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
                             return;
                         }
                     };
@@ -2565,27 +2606,28 @@ impl App {
 
     /// `args` is `[table] [llm profile]`; `all` covers every visible reference instead of the selected one.
     /// `command` is the whole command line, run again once a missing key is entered.
-    /// The API key or OAuth token stored for the profile `name`, else a prompt naming it, after which
-    /// `command` runs again. `None` while prompting.
-    fn llm_key(&mut self, name: &str, profile: &yeda_core::llm::Profile, command: &str) -> Option<Option<String>> {
-        let account = crate::setup::llm_account(name, profile);
-        let got = if profile.needs_key() {
-            let what = match profile.provider {
-                yeda_core::llm::Provider::Anthropic => "API key or OAuth token (from `claude setup-token`)",
-                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
+    /// The API key or OAuth credentials stored for `b`'s provider, else a prompt naming it, after
+    /// which `command` runs again. `None` while prompting.
+    fn llm_key(&mut self, b: &yeda_core::llm::Bound, command: &str) -> Option<Option<String>> {
+        let account = yeda_secrets::provider_account(&b.provider, b.url());
+        let got = if b.needs_key() {
+            let what = match (b.auth(), b.protocol()) {
+                (yeda_core::llm::Auth::Oauth, yeda_core::llm::Protocol::OpenaiResponses) => "OAuth credentials (the compacted `~/.codex/auth.json`)",
+                (yeda_core::llm::Auth::Oauth, _) => "OAuth token (from `claude setup-token`)",
                 _ => "API key",
             };
-            self.secret(&account, &format!("{what} for {name}, sent to {}", profile.url()), Retry::Command(command.into())).map(Some)
+            let prompt = format!("{what} for provider '{}', used by {}, sent to {}", b.provider, b.profile, b.url());
+            self.secret(&account, &prompt, Retry::Command(command.into())).map(Some)
         } else {
             Some(yeda_secrets::get(&account).ok().flatten())
         };
-        got.map(|key| self.renewed_codex(profile, account, key))
+        got.map(|key| self.renewed_codex(b, account, key))
     }
 
     /// Replaces Codex credentials that are about to expire; a failed renewal keeps the old ones,
     /// whose expiry the request reports.
-    fn renewed_codex(&mut self, profile: &yeda_core::llm::Profile, account: String, key: Option<String>) -> Option<String> {
-        if profile.provider != yeda_core::llm::Provider::Codex {
+    fn renewed_codex(&mut self, b: &yeda_core::llm::Bound, account: String, key: Option<String>) -> Option<String> {
+        if b.protocol() != yeda_core::llm::Protocol::OpenaiResponses {
             return key;
         }
         if !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
@@ -2619,7 +2661,7 @@ impl App {
             anyhow::bail!("usage: :discover <what to look for>, or select references first");
         }
         let (name, profile) = self.lib.llm_profile(llm)?;
-        let Some(key) = self.llm_key(&name, &profile, command) else { return Ok(()) };
+        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
         let from: Vec<Ref> = targets.iter().map(|&i| self.lib.refs[i].clone()).collect();
         let openalex = self.openalex_key();
         let settings = self.lib.web_search.clone();
@@ -2872,7 +2914,7 @@ impl App {
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
-        let Some(key) = self.llm_key(&profile_name, &profile, command) else { return Ok(()) };
+        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
         if !self.confirm_many(&format!("summarize into {table_name}"), jobs.len(), command) {
             return Ok(());
         }
@@ -3026,16 +3068,16 @@ impl App {
         for (name, dav) in &self.lib.remotes {
             items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
         }
-        for (name, profile) in &self.lib.llm {
-            let what = match profile.provider {
-                yeda_core::llm::Provider::Anthropic => "API key or OAuth token",
-                yeda_core::llm::Provider::Codex => "OAuth credentials (the compacted `~/.codex/auth.json`)",
-                _ if profile.needs_key() => "API key",
-                _ => "API key, optional",
+        for (name, p) in &self.lib.providers {
+            let what = match (p.auth, p.protocol) {
+                (yeda_core::llm::Auth::None, _) => "no credential",
+                (yeda_core::llm::Auth::Oauth, yeda_core::llm::Protocol::OpenaiResponses) => "OAuth credentials (the compacted `~/.codex/auth.json`)",
+                (yeda_core::llm::Auth::Oauth, _) => "OAuth token",
+                _ => "API key",
             };
-            let account = crate::setup::llm_account(name, profile);
-            let names: Vec<&str> = self.lib.llm.iter().filter(|(n, q)| crate::setup::llm_account(n, q) == account).map(|(n, _)| n.as_str()).collect();
-            items.push((account, format!("LLM {}: {what} for {}", names.join(", "), profile.url())));
+            let profiles: Vec<&str> = self.lib.llm.iter().filter(|(_, q)| q.provider == *name).map(|(n, _)| n.as_str()).collect();
+            let for_profiles = if profiles.is_empty() { String::new() } else { format!(", shared by {}", profiles.join(", ")) };
+            items.push((yeda_secrets::provider_account(name, p.url()), format!("Provider {name}: {what} for {}{for_profiles}", p.url())));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
         for (account, label) in [

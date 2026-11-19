@@ -537,12 +537,12 @@ fn graph(lib: &mut Library, dir: &Path, a: &Args) -> Result<()> {
     print_json(&json!({ "nodes": nodes, "edges": edges, "not_in_openalex": unknown }))
 }
 
-/// The API key or OAuth token for LLM profile `name`, from the secret store.
-fn llm_key(name: &str, profile: &yeda_core::llm::Profile) -> Result<Option<String>> {
-    let account = crate::setup::llm_account(name, profile);
+/// The API key or OAuth credentials for the profile's provider, from the secret store.
+fn llm_key(b: &yeda_core::llm::Bound) -> Result<Option<String>> {
+    let account = yeda_secrets::provider_account(&b.provider, b.url());
     let mut key = yeda_secrets::get(&account)?;
-    anyhow::ensure!(key.is_some() || !profile.needs_key(), "no key stored for LLM profile '{name}'; set it in yeda with :setup llm {name}");
-    if profile.provider == yeda_core::llm::Provider::Codex && key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+    anyhow::ensure!(key.is_some() || !b.needs_key(), "no credential stored for provider '{}'; set it in yeda with :setup provider {}", b.provider, b.provider);
+    if b.protocol() == yeda_core::llm::Protocol::OpenaiResponses && key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
         key = Some(yeda_net::llm::codex_refresh(key.as_deref().unwrap_or_default())?);
         yeda_secrets::set(&account, key.as_deref().unwrap_or_default())?;
     }
@@ -557,7 +557,7 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
     }
     anyhow::ensure!(!prompt.trim().is_empty() || !like.is_empty(), "describe what to look for, or name references with --like");
     let (name, profile) = lib.llm_profile(a.opt("llm"))?;
-    let key = llm_key(&name, &profile)?;
+    let key = llm_key(&profile)?;
     let from: Vec<Ref> = like.iter().filter_map(|k| lib.get(k)).cloned().collect();
     let mut keys = std::collections::HashMap::new();
     for (provider, account) in [
@@ -620,7 +620,7 @@ fn summarize(lib: &mut Library, dir: &Path, a: &Args) -> Result<()> {
         jobs.extend(tables::plan(lib, &table_name, &table, r, pdf.as_ref(), &annots, overwrite));
     }
     anyhow::ensure!(!jobs.is_empty(), "nothing to fill in '{table_name}' (--overwrite regenerates existing cells)");
-    let key = llm_key(&profile_name, &profile)?;
+    let key = llm_key(&profile)?;
     let (total, mut failed) = (jobs.len(), 0);
     for (n, job) in jobs.into_iter().enumerate() {
         let k = job.key.clone();
