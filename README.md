@@ -129,7 +129,7 @@ provider = "claude"
 model = "claude-opus-5-5"
 ```
 
-Use `:setup provider` to set up a provider and its credential, then `:setup llm` to add profiles that name a provider and a model. Profiles bound to one provider share its credential. Press Ctrl-Down on a field with known values (presets, providers, protocols, models, sorts, reference types) to open a fuzzy list: type to filter, ↓/↑ to move and Enter to use a value. Any typed value still works, including model names on servers without a model list.
+Use `:setup provider` to set up a provider and its credential, then `:setup llm` to add profiles that name a provider and a model. Profiles bound to one provider share its credential. Fields with known values (presets, providers, protocols, models, sorts, reference types) open a fuzzy list: type to filter, ↓/↑ to move and Enter to use a value. Any typed value still works, including model names on servers without a model list.
 
 A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
 

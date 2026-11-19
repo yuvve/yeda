@@ -120,7 +120,7 @@ fn auth_of(name: &str) -> Auth {
 /// The reference form's last fields, kept in `Ref::extra`.
 pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 
-const CHOICE_HINT: &str = "Ctrl-Down opens the list · type to filter · ↓/↑ pick · Enter use · Esc close · typed values work too";
+const CHOICE_HINT: &str = "type to filter · ↓/↑ pick · Enter use · Esc close · typed values work too";
 
 /// What the form saves, once its connection works.
 #[derive(Clone, Debug)]

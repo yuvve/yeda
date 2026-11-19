@@ -533,13 +533,10 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     }
     let area = popup(main, 76, height.max(5));
     f.render_widget(Clear, area);
-    let submit = if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table | crate::setup::Kind::Provider) { "save" } else { "test and save" };
     let footer = if app.combo.as_ref().is_some_and(|c| c.open) {
         " ↓/↑ pick · Enter use · Esc close ".into()
-    } else if form.choice(form.sel).is_some() {
-        format!(" Tab/↓ next · Ctrl-Down list · Enter {submit} · Esc cancel ")
     } else {
-        format!(" Tab/↓ next · Enter {submit} · Esc cancel ")
+        format!(" Tab/↓ next · Enter {} · Esc cancel ", if matches!(form.kind, crate::setup::Kind::Search | crate::setup::Kind::Reference | crate::setup::Kind::Proxy | crate::setup::Kind::Table | crate::setup::Kind::Provider) { "save" } else { "test and save" })
     };
     f.render_widget(Paragraph::new(lines).block(block(format!(" {what} ·{footer}"), true)), area);
     if let Some(c) = &app.combo
