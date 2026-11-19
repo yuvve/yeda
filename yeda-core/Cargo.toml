@@ -15,9 +15,9 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 hayagriva = "0.10.1"
 csv = "1.4.0"
-lopdf = "0.46.0"
+lopdf = "0.47.0"
 nucleo-matcher = "0.3.1"
-rusqlite = { version = "0.41.1", optional = true }
+rusqlite = { version = "0.43.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
