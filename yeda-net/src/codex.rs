@@ -37,7 +37,9 @@ pub fn start(issued_client_id: Option<&str>, host_id: Option<&str>, id_token_hin
     let listener = TcpListener::bind("127.0.0.1:0").context("binding the sign-in callback listener")?;
     let port = listener.local_addr()?.port();
     let id = || uuid::Uuid::new_v4().simple().to_string();
-    let (verifier, nonce, state) = (id(), id(), id());
+    // PKCE wants a 43-128 character verifier; one compact UUID is 32.
+    let verifier = format!("{}{}", id(), id());
+    let (nonce, state) = (id(), id());
     // A hyphenated UUID: OpenAI rejects the compact form.
     let host_id = host_id.map(String::from).unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -157,7 +159,7 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     if claims["iss"].as_str() != Some(ISSUER) {
         bail!("the sign-in's id token names another issuer");
     }
-    if claims["aud"].as_str() != Some(client_id) {
+    if !audience_has(&claims["aud"], client_id) {
         bail!("the sign-in's id token belongs to another client");
     }
     if claims["nonce"].as_str() != Some(nonce) {
@@ -193,6 +195,15 @@ fn jwt_claims(jwt: &str) -> Value {
         .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null)
+}
+
+/// `aud` is the client id, or an array that includes it.
+fn audience_has(aud: &Value, client_id: &str) -> bool {
+    match aud {
+        Value::String(a) => a == client_id,
+        Value::Array(a) => a.iter().any(|v| v.as_str() == Some(client_id)),
+        _ => false,
+    }
 }
 
 fn port_of(listener: &TcpListener) -> u16 {
@@ -246,6 +257,17 @@ fn percent_decode(v: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pkce_verifier_has_the_length_the_spec_requires() {
+        let sign_in = start(None, None, None).unwrap();
+        let n = sign_in.verifier.chars().count();
+        assert!((43..=128).contains(&n), "{n}");
+        assert!(sign_in.verifier.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c)));
+        assert!(audience_has(&json!("oaiapp_x"), "oaiapp_x"));
+        assert!(audience_has(&json!(["oaiapp_x", "other"]), "oaiapp_x"));
+        assert!(!audience_has(&json!("oaiapp_y"), "oaiapp_x"));
+    }
 
     #[test]
     fn a_refused_exchange_reports_the_endpoints_own_reason() {
