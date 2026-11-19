@@ -511,6 +511,12 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
     rows
 }
 
+/// The profile bound to the provider it names.
+pub fn bind(providers: &BTreeMap<String, Provider>, name: &str, p: &Profile) -> Result<Bound> {
+    let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider {}", p.provider, p.provider))?;
+    Ok(Bound::new(name, p, &p.provider, provider))
+}
+
 /// A profile bound to its provider, plus the credential a connection test sends: whatever the
 /// provider's account holds, or nothing when the provider takes no key.
 pub fn profile_credential(
@@ -519,8 +525,7 @@ pub fn profile_credential(
     p: &Profile,
     lookup: impl Fn(&str) -> Result<Option<String>>,
 ) -> Result<(Bound, Option<String>)> {
-    let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider {}", p.provider, p.provider))?;
-    let bound = Bound::new(name, p, &p.provider, provider);
+    let bound = bind(providers, name, p)?;
     let key = lookup(&yeda_secrets::provider_account(&bound.provider, bound.url()))?;
     if bound.needs_key() && key.is_none() {
         bail!("provider '{}' has no credential yet; set it with :setup provider {}", bound.provider, bound.provider);
@@ -533,8 +538,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
     match setup {
         Setup::Provider(..) => Ok(()),
         Setup::Llm(name, p) => {
-            let (bound, _) = profile_credential(providers, name, p, |_| Ok(None))?;
-            yeda_net::llm::ping(&bound, secret)
+            yeda_net::llm::ping(&bind(providers, name, p)?, secret)
         }
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
@@ -713,6 +717,19 @@ mod tests {
 
         let orphan = Library::parse(Some("[llm.x]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         assert!(profile_credential(&orphan.providers, "x", &orphan.llm["x"], |_| Ok(None)).unwrap_err().to_string().contains("no provider named 'nowhere'"));
+    }
+
+    #[test]
+    fn a_profile_test_sends_the_credential_it_is_given() {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        server.set_nonblocking(true).unwrap();
+        let provider = Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), protocol: Protocol::OpenaiResponses, auth: Auth::Oauth };
+        let providers = BTreeMap::from([("cx".to_string(), provider)]);
+        let setup = Setup::Llm("a".into(), Profile { provider: "cx".into(), model: "gpt-5.1".into() });
+        // Past the credential check, the plain-http address is what stops the request.
+        let err = test(&providers, &setup, Some("k")).unwrap_err().to_string();
+        assert!(err.contains("only go over https://") && !err.contains("credential"), "{err}");
+        assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
