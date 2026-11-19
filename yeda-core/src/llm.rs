@@ -188,6 +188,7 @@ mod tests {
             account_id: Some("acc".into()),
             host_id: Some("urn:uuid:1".into()),
             id_token: Some("id.jwt".into()),
+            scope: None,
             expires_at: Some(1_000),
         };
         assert!(cred.needs_refresh(600, 900));
@@ -220,6 +221,8 @@ pub struct CodexCredential {
     /// The stable host id yeda signed in with, and the id token for its next sign-in.
     pub host_id: Option<String>,
     pub id_token: Option<String>,
+    /// The scopes granted at sign-in, kept for the next reauthorization.
+    pub scope: Option<String>,
     /// Seconds since the epoch when the access token stops working.
     pub expires_at: Option<i64>,
 }
@@ -243,6 +246,7 @@ impl CodexCredential {
                 account_id: tokens["account_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 host_id: v["ext_agent_host_id"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 id_token: v["id_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
+                scope: v["scope"].as_str().filter(|s| !s.is_empty()).map(String::from),
                 expires_at: jwt_expires_at(access),
             })
         } else {
@@ -251,7 +255,7 @@ impl CodexCredential {
                 anyhow::bail!("no Codex OAuth token");
             }
             let expires_at = jwt_expires_at(&access);
-            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, host_id: None, id_token: None, expires_at })
+            Ok(CodexCredential { access_token: access, refresh_token: None, client_id: None, account_id: None, host_id: None, id_token: None, scope: None, expires_at })
         }
     }
 
@@ -264,12 +268,16 @@ impl CodexCredential {
                 "oauth_provenance": self.client_id.as_ref().map(|c| json!({"client_id": c})),
                 "account_id": self.account_id,
             });
-            json!({
+            let mut record = json!({
                 "client_id": self.client_id,
                 "ext_agent_host_id": self.host_id,
                 "id_token": self.id_token,
                 "tokens": tokens,
-            })
+            });
+            if let Some(scope) = &self.scope {
+                record["scope"] = json!(scope);
+            }
+            record
         } else {
             Value::String(access_token.into())
         };

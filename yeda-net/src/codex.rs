@@ -167,8 +167,9 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
     }
     // The signature is not checked: the token arrives straight from OpenAI over https and is only
     // used against OpenAI, so there is no third party to fool with a forged one.
+    let scope = granted_scope(&v)?;
     let account = claims["chatgpt_account_id"].as_str().filter(|s| !s.is_empty());
-    let json = json!({
+    let mut json = json!({
         "client_id": client_id,
         "ext_agent_host_id": host_id,
         "id_token": id_token,
@@ -179,11 +180,23 @@ fn exchange(code: &str, verifier: &str, client_id: &str, port: u16, nonce: &str,
             "account_id": account,
         },
     });
+    if !scope.is_empty() {
+        json["scope"] = json!(scope);
+    }
     serde_json::to_string(&json).context("serializing the signed-in credentials")
 }
 
 /// The token endpoint's answer, or its error body: OpenAI says in the body why it refused.
-fn token_response(url: &str, status: u16, text: &str) -> Result<Value> {
+/// Plan inference needs this scope; an identity-only sign-in is not enough.
+fn granted_scope(response: &Value) -> Result<String> {
+    let scope = response["scope"].as_str().unwrap_or_default();
+    if !scope.split_whitespace().any(|s| s == "chatgpt.tokens.use.direct") {
+        bail!("the sign-in did not grant chatgpt.tokens.use.direct; approve ChatGPT plan usage to use this provider");
+    }
+    Ok(scope.to_string())
+}
+
+pub(crate) fn token_response(url: &str, status: u16, text: &str) -> Result<Value> {
     if !(200..300).contains(&status) {
         bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
     }
@@ -257,6 +270,15 @@ fn percent_decode(v: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_without_plan_permission_is_refused() {
+        let ok = json!({"scope": "openid profile chatgpt.tokens.use.direct offline_access"});
+        assert_eq!(granted_scope(&ok).unwrap(), "openid profile chatgpt.tokens.use.direct offline_access");
+        let err = granted_scope(&json!({"scope": "openid email"})).unwrap_err().to_string();
+        assert!(err.contains("chatgpt.tokens.use.direct"), "{err}");
+        assert!(granted_scope(&Value::Null).is_err());
+    }
 
     #[test]
     fn the_pkce_verifier_has_the_length_the_spec_requires() {

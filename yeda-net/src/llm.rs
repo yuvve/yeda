@@ -65,6 +65,13 @@ fn openai_headers(b: &Bound, key: Option<&str>) -> Vec<(&'static str, String)> {
     headers
 }
 
+/// The credential in the secret store is the whole signed-in record; requests carry only its
+/// access token. A pasted bare token parses too.
+fn codex_headers(b: &Bound, key: &str) -> Result<Vec<(&'static str, String)>> {
+    let cred = CodexCredential::parse(key)?;
+    Ok(openai_headers(b, Some(&cred.access_token)))
+}
+
 fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
     // The key goes in a header, so only to https servers.
     yeda_core::require_https(url)?;
@@ -248,7 +255,7 @@ fn codex_body(b: &Bound, prompt: &Prompt, schema: Option<&Value>) -> Result<(Val
 
 fn codex(b: &Bound, prompt: &Prompt, key: &str) -> Result<Reply> {
     let (body, note) = codex_body(b, prompt, Some(&prompt.schema))?;
-    let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, Some(key)), &body)?;
+    let response = stream(&format!("{}/responses", b.url()), &codex_headers(b, key)?, &body)?;
     let text = response_text(&response)?;
     Ok(Reply { text, note })
 }
@@ -343,14 +350,17 @@ pub fn codex_refresh(key: &str) -> Result<String> {
 /// A form-encoded POST, for the token endpoint that only accepts one.
 fn post_form(url: &str, form: &str) -> Result<Value> {
     yeda_core::require_https(url)?;
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(60))).https_only(true).build().into();
+    // The endpoint's error body carries the machine-readable reason the refresh failed.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .http_status_as_error(false)
+        .https_only(true)
+        .build()
+        .into();
     let mut resp = agent.post(url).header("content-type", "application/x-www-form-urlencoded").send(form).with_context(|| url.to_string())?;
     let status = resp.status();
     let text = resp.body_mut().read_to_string()?;
-    if !status.is_success() {
-        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
-    }
-    serde_json::from_str(&text).with_context(|| format!("{url}: response is not JSON"))
+    crate::codex::token_response(url, status.as_u16(), &text)
 }
 
 /// A minimal request, to test the profile and its provider's credentials.
@@ -399,7 +409,7 @@ pub fn text(b: &Bound, system: &str, text: &str, key: Option<&str>) -> Result<St
         Protocol::OpenaiResponses => {
             let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
             let (body, _) = codex_body(b, &prompt, None)?;
-            let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, key), &body)?;
+            let response = stream(&format!("{}/responses", b.url()), &codex_headers(b, key.unwrap_or_default())?, &body)?;
             response_text(&response)
         }
         _ => {
@@ -423,7 +433,7 @@ pub fn search(b: &Bound, system: &str, text: &str, key: Option<&str>) -> Result<
         Protocol::OpenaiResponses => {
             let prompt = Prompt { system: system.into(), text: text.into(), paper: None, schema: Value::Null };
             let (body, _) = codex_body(b, &prompt, None)?;
-            let response = stream(&format!("{}/responses", b.url()), &openai_headers(b, key), &body)?;
+            let response = stream(&format!("{}/responses", b.url()), &codex_headers(b, key.unwrap_or_default())?, &body)?;
             response_text(&response)?
         }
         Protocol::Openai | Protocol::Openrouter | Protocol::OpencodeGo => {
@@ -531,6 +541,28 @@ mod tests {
         assert_eq!(body["text"]["format"]["schema"], schema);
         assert!(body.get("response_format").is_none());
         assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn responses_carries_the_access_token_not_the_whole_credential() {
+        let b = bound(Protocol::OpenaiResponses, Auth::Oauth);
+        let signed = json!({
+            "client_id": "oaiapp_x",
+            "id_token": "id.jwt",
+            "scope": "chatgpt.tokens.use.direct offline_access",
+            "tokens": {
+                "access_token": "eyJ-access",
+                "refresh_token": "r",
+                "oauth_provenance": {"client_id": "oaiapp_x"},
+                "account_id": "acc",
+            },
+        });
+        let headers = codex_headers(&b, &signed.to_string()).unwrap();
+        let token = header(&headers, "authorization").unwrap();
+        assert_eq!(token, "Bearer eyJ-access");
+        assert!(!token.contains('{'), "{token}");
+        assert_eq!(header(&codex_headers(&b, "pasted-token").unwrap(), "authorization"), Some("Bearer pasted-token"));
+        assert!(codex_headers(&b, "{\"tokens\":{}}").is_err());
     }
 
     #[test]
