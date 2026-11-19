@@ -556,8 +556,11 @@ impl Chooser {
 pub struct Combo {
     pub choice: setup::Choice,
     pub field: usize,
-    /// The field text the options were last built from.
-    pub query: String,
+    /// The field's value when it was focused; Esc puts it back.
+    original: String,
+    /// The typed filter. Empty on focus, so every option is visible at first.
+    query: String,
+    last_text: String,
     pub base: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
     pub sel: usize,
@@ -1637,22 +1640,42 @@ impl App {
                 .unwrap_or_default(),
             other => setup::choices(other, &self.lib),
         };
+        let mut fresh = false;
         match &mut self.combo {
             Some(c) if c.field == field && c.choice == choice => {
-                if c.query != text {
+                if c.last_text != text {
                     if c.choice == setup::Choice::BoundProviders {
                         self.model_job = None;
                         self.models_for = None;
                     }
+                    c.last_text = text.clone();
                     c.query = text;
-                    c.open = true;
-                    c.base = base;
                     c.sel = 0;
                 }
             }
-            _ => self.combo = Some(Combo { choice, field, query: text, base, options: Vec::new(), sel: 0, open: true, note: None }),
+            _ => {
+                self.combo = Some(Combo {
+                    choice,
+                    field,
+                    original: text.clone(),
+                    query: String::new(),
+                    last_text: text,
+                    base,
+                    options: Vec::new(),
+                    sel: 0,
+                    open: true,
+                    note: None,
+                });
+                fresh = true;
+            }
         }
         self.refresh_combo();
+        if fresh
+            && let Some(c) = &mut self.combo
+        {
+            let original = c.original.clone();
+            c.sel = c.options.iter().position(|(_, value)| value == &original).unwrap_or(0);
+        }
         if choice == setup::Choice::Models {
             self.ensure_models();
         }
@@ -1770,7 +1793,9 @@ impl App {
             self.models_for = None;
         }
         if let Some(c) = &mut self.combo {
-            c.query = value.clone();
+            c.original = value.clone();
+            c.last_text = value.clone();
+            c.query.clear();
             c.open = false;
             c.sel = 0;
         }
@@ -1790,7 +1815,17 @@ impl App {
         }
         match k.code {
             KeyCode::Esc => {
-                self.combo.as_mut().unwrap().open = false;
+                let Some((field, original)) = self.combo.as_ref().map(|c| (c.field, c.original.clone())) else { return false };
+                if let Some(c) = &mut self.combo {
+                    c.open = false;
+                    c.query.clear();
+                    c.last_text = original.clone();
+                }
+                if let Some(form) = &mut self.setup {
+                    form.values[field] = original;
+                }
+                self.cursor_back = 0;
+                self.refresh_combo();
                 true
             }
             KeyCode::Up | KeyCode::BackTab => {
@@ -1838,6 +1873,13 @@ impl App {
         if self.combo_key(k, ctrl) {
             return;
         }
+        let clear_on_type = self.combo.as_ref().is_some_and(|c| c.open)
+            && matches!(k.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete)
+            && self
+                .setup
+                .as_ref()
+                .zip(self.combo.as_ref())
+                .is_some_and(|(form, c)| form.values[form.sel] == c.original);
         let Some(form) = &mut self.setup else { return };
         let n = form.values.len();
         match k.code {
@@ -1971,6 +2013,10 @@ impl App {
                 self.edit_in_editor(TextTarget::Setup(sel));
             }
             code => {
+                if clear_on_type {
+                    form.values[form.sel].clear();
+                    self.cursor_back = 0;
+                }
                 edit_line(&mut form.values[form.sel], &mut self.cursor_back, code, ctrl);
             }
         }
@@ -4445,17 +4491,29 @@ mod tests {
         );
         app.mode = super::Mode::Setup;
         app.setup = Some(form);
-        app.sync_combo();
         let key = |code| ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
         use ratatui::crossterm::event::KeyCode;
 
+        app.sync_combo();
+        {
+            let c = app.combo.as_ref().unwrap();
+            assert!(c.open);
+            assert_eq!(c.options.len(), 7, "all options show on focus");
+            assert_eq!(c.options[c.sel].1, "codex", "the current value is highlighted");
+        }
         app.setup_key(key(KeyCode::Esc));
         assert!(!app.combo.as_ref().unwrap().open, "Esc closes the dropdown");
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "codex", "Esc keeps the old value");
         assert!(app.setup.is_some(), "Esc does not close the form yet");
 
-        app.setup.as_mut().unwrap().values[1] = "clau".into();
-        app.sync_combo();
-        assert!(app.combo.as_ref().unwrap().open, "typing reopens it");
+        app.setup_key(key(KeyCode::Tab));
+        app.setup_key(key(KeyCode::BackTab));
+        assert!(app.combo.as_ref().unwrap().open);
+        assert!(app.combo.as_ref().unwrap().query.is_empty(), "the filter starts empty");
+        for ch in "clau".chars() {
+            app.setup_key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "clau");
         assert_eq!(app.combo.as_ref().unwrap().options[0].1, "claude");
         app.setup_key(key(KeyCode::Enter));
         let form = app.setup.as_ref().unwrap();

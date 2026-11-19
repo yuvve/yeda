@@ -202,12 +202,13 @@ THE COMMAND LINE  ( : )
   searches, the filter form, :setup and the tag and collection pickers.
 
   In :setup, fields for presets, providers, protocols, auth, models, sorts and
-  reference types open a fuzzy list. Type to filter, Up/Down or Tab/shift-Tab
-  to move, Enter to put the value in the field, Esc to close the list. Typing a
-  value of your own always works. Esc closes the list first, then the form.
-  The model list is fetched from the bound provider when you focus Model;
-  changing Provider fetches it for the new one. If the server refuses, the
-  error shows in the list and the form still works.
+  reference types open a fuzzy list with every option shown and the current
+  value highlighted. Typing replaces the value and filters the list; Up/Down
+  or Tab/shift-Tab moves, Enter uses the highlighted value, Esc puts the old
+  value back and closes the list. A value of your own always works. Esc closes
+  the list first, then the form. The model list is fetched from the bound
+  provider when you focus Model; changing Provider fetches it for the new one.
+  If the server refuses, the error shows in the list and the form still works.
 
   Options are written --name value (or --name=value), anywhere in a
   command: :discover --llm gpt swarm robots. -- ends the options, so what
