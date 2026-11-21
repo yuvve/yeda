@@ -2916,7 +2916,7 @@ impl App {
         if b.protocol() != yeda_core::llm::Protocol::OpenaiResponses {
             return key;
         }
-        if !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+        if yeda_secrets::from_env(&account).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
             return key;
         }
         let key = key.unwrap();
@@ -3316,6 +3316,13 @@ impl App {
     /// The secret for `account`: from this session, else the secret store, else a prompt, after which
     /// `retry` runs again. `None` while prompting.
     fn secret(&mut self, account: &str, label: &str, retry: Retry) -> Option<String> {
+        if let Some(s) = yeda_secrets::from_env(account) {
+            if self.rejected.contains(account) {
+                self.status = Self::rejected_hint(account, "");
+                return None;
+            }
+            return Some(s);
+        }
         if let Some(s) = self.secrets.get(account) {
             return Some(s.clone());
         }
@@ -3333,6 +3340,15 @@ impl App {
         self.input.clear();
         self.mode = Mode::Prompt(Prompt::Secret);
         None
+    }
+
+    /// What to tell the user when the server turned down the secret of `account`. An environment
+    /// variable cannot be replaced from inside yeda, so it is named instead of asked for again.
+    fn rejected_hint(account: &str, command: &str) -> String {
+        match yeda_secrets::env_name(account).filter(|_| yeda_secrets::from_env(account).is_some()) {
+            Some(name) => format!("${name} was rejected by the server; fix or unset it and restart yeda"),
+            None => format!("run {command} again to enter it"),
+        }
     }
 
     /// Forgets a secret the server turned down, so the next attempt asks again.
@@ -3377,21 +3393,33 @@ impl App {
         }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
+        let mut sharing: HashMap<String, Vec<String>> = HashMap::new();
+        for (account, _) in &items {
+            if let Some(name) = yeda_secrets::env_name(account) {
+                sharing.entry(name).or_default().push(account.clone());
+            }
+        }
         self.secret_items = items
             .into_iter()
             .map(|(account, label)| {
-                let status = if self.secrets.contains_key(&account) {
-                    "this session".into()
-                } else {
-                    match yeda_secrets::get(&account) {
-                        Ok(Some(_)) => "in the secret store".into(),
-                        Ok(None) => "not set".into(),
-                        Err(e) => {
-                            self.status = format!("{e:#}");
-                            "secret store unavailable".into()
-                        }
+                let name = yeda_secrets::env_name(&account);
+                let in_env = yeda_secrets::from_env(&account).is_some();
+                let mut status: String = match yeda_secrets::stored(&account) {
+                    _ if in_env => format!("${} (overrides the secret store)", name.as_deref().unwrap_or_default()),
+                    _ if self.secrets.contains_key(&account) => "this session".into(),
+                    Ok(Some(_)) => "in the secret store".into(),
+                    Ok(None) => "not set".into(),
+                    Err(e) => {
+                        self.status = format!("{e:#}");
+                        "secret store unavailable".into()
                     }
                 };
+                if let Some(name) = name.filter(|_| !in_env) {
+                    status.push_str(&format!(", or set ${name}"));
+                }
+                if let Some(name) = yeda_secrets::env_name(&account).filter(|n| sharing[n].len() > 1) {
+                    status.push_str(&format!("; ${name} is shared by {} secrets on this server, so only one can use it", sharing[&name].len()));
+                }
                 SecretItem { account, label, status }
             })
             .collect();
@@ -3509,7 +3537,7 @@ impl App {
         self.status = match (finished, &job.error) {
             (false, _) => format!("caching PDFs: {}/{}…", job.done, job.total),
             (true, None) => format!("{} PDFs cached", job.total),
-            (true, Some(_)) if job.rejected => "the WebDAV password was rejected; run :cache again to enter it".into(),
+            (true, Some(_)) if job.rejected => format!("the WebDAV password was rejected; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), ":cache")),
             (true, Some(e)) => format!("{} of {} PDFs cached; {} failed: {e}", job.total - job.failed, job.total, job.failed),
         };
         if let Some(account) = rejected {
@@ -3596,7 +3624,8 @@ impl App {
                     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
                     self.reject(&account);
                 }
-                self.status = format!("{e:#}; run :attach again to enter the password");
+                let hint = self.lib.remotes.get(location).map_or_else(String::new, |dav| Self::rejected_hint(&yeda_secrets::webdav_account(&dav.user, &dav.url), ":attach"));
+                self.status = format!("{e:#}; {hint}");
             }
             Err(e) => self.status = format!("{e:#}"),
         }

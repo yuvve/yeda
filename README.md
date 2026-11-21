@@ -171,7 +171,19 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles on the same server share one API key, and each Anthropic or Codex profile keeps its own API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
+When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
+
+An environment variable overrides the secret store. Its name follows the server's host, uppercased, with `.` as `_` and `-` as `__`, and the port appended if there is one:
+
+| Secret | Variable |
+| --- | --- |
+| LLM provider at `https://api.anthropic.com/v1` | `YEDA_KEY_API_ANTHROPIC_COM` |
+| LLM provider at `https://my-llm.lan:8443` | `YEDA_KEY_MY__LLM_LAN_8443` |
+| WebDAV location at `https://dav.example.com/yeda/` | `YEDA_DAV_DAV_EXAMPLE_COM` |
+| OpenAlex | `YEDA_KEY_API_OPENALEX_ORG` |
+| Keenable, Exa, Parallel, Firecrawl | `YEDA_KEY_API_KEENABLE_AI`, `YEDA_KEY_API_EXA_AI`, `YEDA_KEY_API_PARALLEL_AI`, `YEDA_KEY_API_FIRECRAWL_DEV` |
+
+`:secrets` shows each variable and whether it is set. Two providers on the same host, or two WebDAV locations on one host, share one variable, so they cannot have different keys through the environment; keep one of them in the secret store. Codex credentials are not renewed while they come from a variable. A rejected variable is reported, not asked for again, and is only changed by restarting yeda. The server's host is in the name so that a shared `yeda.toml` pointing a provider elsewhere finds no variable to send there.
 
 ## Keys and commands
 
