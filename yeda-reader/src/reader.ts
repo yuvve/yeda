@@ -47,10 +47,10 @@ export function reportError(action: string) {
 }
 
 /** Shows the document the backend has open; `false` if none is. */
-export async function openReader(): Promise<boolean> {
+export async function openReader(onClose: () => void = noop): Promise<boolean> {
 	let reader: Reader | undefined;
 	let toggleColumns = noop;
-	const hookVimIntoView = installVim(() => reader, () => toggleColumns());
+	const hookVimIntoView = installVim(() => reader, () => toggleColumns(), onClose);
 	const store = new AnnotationStore();
 	const launch = await invoke<Launch | null>('launch');
 	if (!launch) return false;
