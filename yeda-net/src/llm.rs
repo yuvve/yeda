@@ -589,7 +589,7 @@ mod tests {
             Protocol::Openrouter => "https://openrouter.ai/api/v1",
             Protocol::OpencodeGo => "https://opencode.ai/inference/go/openai/v1",
         };
-        Provider { base_url: base_url.into(), protocol, auth }
+        Provider { base_url: base_url.into(), protocol, auth, alias: None }
     }
 
     fn bound(protocol: Protocol, auth: Auth) -> Bound {

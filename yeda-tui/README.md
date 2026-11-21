@@ -182,7 +182,17 @@ An environment variable overrides the secret store. Its name follows the server'
 | OpenAlex | `YEDA_KEY_API_OPENALEX_ORG` |
 | Keenable, Exa, Parallel, Firecrawl | `YEDA_KEY_API_KEENABLE_AI`, `YEDA_KEY_API_EXA_AI`, `YEDA_KEY_API_PARALLEL_AI`, `YEDA_KEY_API_FIRECRAWL_DEV` |
 
-`:secrets` shows each variable and whether it is set. Two providers on the same host, or two WebDAV locations on one host, share one variable, so they cannot have different keys through the environment; keep one of them in the secret store. Codex credentials are not renewed while they come from a variable. A rejected variable is reported, not asked for again, and is only changed by restarting yeda. The server's host is in the name so that a shared `yeda.toml` pointing a provider elsewhere finds no variable to send there.
+`:secrets` shows each variable and whether it is set. Providers and WebDAV locations on the same host share one variable. To give each its own, set an `alias` (letters and digits, unique per host) in `yeda.toml` or in the setup form; the variable `YEDA_KEY_<HOST>_ALIAS_<ALIAS>` then wins over the shared one:
+
+```toml
+[providers.work]
+base_url = "https://api.anthropic.com"
+protocol = "anthropic"
+auth     = "api-key"
+alias    = "work"        # YEDA_KEY_API_ANTHROPIC_COM_ALIAS_WORK
+```
+
+WebDAV locations take the same `alias`, as in `dav = { url = "…", user = "me", alias = "work" }`. Servers addressed by an IP number get no variable. Codex credentials are not renewed while they come from a variable. A rejected variable is reported, not asked for again, and is only changed by restarting yeda. The server's host is in the name so that a shared `yeda.toml` pointing a provider elsewhere finds no variable to send there.
 
 ## Keys and commands
 

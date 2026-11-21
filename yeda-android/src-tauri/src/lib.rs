@@ -486,7 +486,7 @@ async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, ur
         return Err("give a name, an https:// URL, the user name and the password".into());
     }
     yeda_core::require_https(&url).map_err(err)?;
-    let dav = library::Dav { url, user };
+    let dav = library::Dav { url, user, alias: None };
     let login = dav.clone();
     let pw = password.clone();
     tauri::async_runtime::spawn_blocking(move || yeda_net::webdav::login(&login, &pw)).await.map_err(|e| e.to_string())?.map_err(err)?;
@@ -533,7 +533,7 @@ async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: 
 fn dav_password(dav: &library::Dav, rejected: bool) -> Result<String, OpenRef> {
     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
     let label = format!("{}@{}", dav.user, dav.url);
-    match yeda_secrets::get(&account) {
+    match yeda_secrets::get_as(&account, dav.alias.as_deref()) {
         Ok(Some(p)) if !rejected => Ok(p),
         _ => Err(OpenRef::NeedsPassword { account, label, rejected }),
     }

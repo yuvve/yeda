@@ -9,4 +9,4 @@ Keeps secrets (WebDAV passwords, LLM API keys and OAuth tokens) in the system's 
 
 Entries have service `yeda`, and an account of `webdav:<user>@<url>`, `provider:<name>:<url>`, `git:<remote url>` or `api:<service>`.
 
-An environment variable `YEDA_KEY_<HOST>` (`YEDA_DAV_<HOST>` for WebDAV) overrides the stored secret; the root README lists the names.
+An environment variable `YEDA_KEY_<HOST>` (`YEDA_DAV_<HOST>` for WebDAV), or `…_ALIAS_<ALIAS>` for a provider or location with an `alias`, overrides the stored secret; the root README lists the names.

@@ -59,6 +59,9 @@ pub struct Provider {
     pub base_url: String,
     pub protocol: Protocol,
     pub auth: Auth,
+    /// Distinguishes this provider's environment variable from others on the same server.
+    #[serde(default)]
+    pub alias: Option<String>,
 }
 
 impl Provider {

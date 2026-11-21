@@ -322,7 +322,7 @@ fn zotero_webdav() -> Option<library::Dav> {
     }
     // Zotero keeps its files in a `zotero` folder under the configured URL.
     let url = format!("{}://{}/zotero", pref("scheme").unwrap_or_else(|| "https".into()), pref("url")?.trim_end_matches('/'));
-    Some(library::Dav { url, user: pref("username")? })
+    Some(library::Dav { url, user: pref("username")?, alias: None })
 }
 
 /// The WebDAV password for `dav`, from the secret store or asked for in the terminal.
@@ -331,7 +331,7 @@ fn dav_password(dav: &library::Dav) -> Result<String> {
     if let Some(p) = KNOWN_PASSWORDS.lock().unwrap().get(&account) {
         return Ok(p.clone());
     }
-    if let Ok(Some(p)) = yeda_secrets::get(&account) {
+    if let Ok(Some(p)) = yeda_secrets::get_as(&account, dav.alias.as_deref()) {
         return Ok(p);
     }
     let p = ask_password(&format!("{}@{}", dav.user, dav.url))?;

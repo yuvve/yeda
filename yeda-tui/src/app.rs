@@ -1718,7 +1718,7 @@ impl App {
         let profile = yeda_core::llm::Profile { provider: provider.clone(), model: String::new() };
         let found = setup::profile_credential(&providers, &name, &profile, |account| match self.secrets.get(account) {
             Some(secret) => Ok(Some(secret.clone())),
-            None => yeda_secrets::get(account),
+            None => yeda_secrets::get_as(account, self.alias_of(account).as_deref()),
         });
         let (bound, secret) = match found {
             Ok(found) => found,
@@ -1931,7 +1931,7 @@ impl App {
                     let providers = self.lib.providers.clone();
                     let found = setup::profile_credential(&providers, &name, &p, |account| match self.secrets.get(account) {
                         Some(secret) => Ok(Some(secret.clone())),
-                        None => yeda_secrets::get(account),
+                        None => yeda_secrets::get_as(account, self.alias_of(account).as_deref()),
                     });
                     let (bound, key) = match found {
                         Ok(found) => found,
@@ -1968,7 +1968,7 @@ impl App {
                     let codex_empty = secret.is_none()
                         && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
                     if codex_empty {
-                        let (issued, host, hint) = yeda_secrets::get(&account)
+                        let (issued, host, hint) = yeda_secrets::stored(&account)
                             .ok()
                             .flatten()
                             .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
@@ -2905,7 +2905,7 @@ impl App {
             let prompt = format!("{what} for provider '{}', used by {}, sent to {}", b.provider, b.profile, b.url());
             self.secret(&account, &prompt, Retry::Command(command.into())).map(Some)
         } else {
-            Some(yeda_secrets::get(&account).ok().flatten())
+            Some(yeda_secrets::get_as(&account, b.settings.alias.as_deref()).ok().flatten())
         };
         got.map(|key| self.renewed_codex(b, account, key))
     }
@@ -2916,7 +2916,7 @@ impl App {
         if b.protocol() != yeda_core::llm::Protocol::OpenaiResponses {
             return key;
         }
-        if yeda_secrets::from_env(&account).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+        if yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
             return key;
         }
         let key = key.unwrap();
@@ -3316,9 +3316,10 @@ impl App {
     /// The secret for `account`: from this session, else the secret store, else a prompt, after which
     /// `retry` runs again. `None` while prompting.
     fn secret(&mut self, account: &str, label: &str, retry: Retry) -> Option<String> {
-        if let Some(s) = yeda_secrets::from_env(account) {
+        let alias = self.alias_of(account);
+        if let Some(s) = yeda_secrets::from_env(account, alias.as_deref()) {
             if self.rejected.contains(account) {
-                self.status = Self::rejected_hint(account, "");
+                self.status = Self::rejected_hint(account, alias.as_deref(), "");
                 return None;
             }
             return Some(s);
@@ -3327,7 +3328,7 @@ impl App {
             return Some(s.clone());
         }
         if !self.rejected.contains(account) {
-            match yeda_secrets::get(account) {
+            match yeda_secrets::stored(account) {
                 Ok(Some(s)) => {
                     self.secrets.insert(account.into(), s.clone());
                     return Some(s);
@@ -3342,11 +3343,17 @@ impl App {
         None
     }
 
+    /// The alias of the provider or WebDAV location whose secret is `account`.
+    fn alias_of(&self, account: &str) -> Option<String> {
+        let provider = self.lib.providers.iter().find(|(n, p)| yeda_secrets::provider_account(n, p.url()) == account).and_then(|(_, p)| p.alias.clone());
+        provider.or_else(|| self.lib.remotes.values().find(|d| yeda_secrets::webdav_account(&d.user, &d.url) == account).and_then(|d| d.alias.clone()))
+    }
+
     /// What to tell the user when the server turned down the secret of `account`. An environment
     /// variable cannot be replaced from inside yeda, so it is named instead of asked for again.
-    fn rejected_hint(account: &str, command: &str) -> String {
-        match yeda_secrets::env_name(account).filter(|_| yeda_secrets::from_env(account).is_some()) {
-            Some(name) => format!("${name} was rejected by the server; fix or unset it and restart yeda"),
+    fn rejected_hint(account: &str, alias: Option<&str>, command: &str) -> String {
+        match yeda_secrets::env_hit(account, alias) {
+            Some((name, _)) => format!("${name} was rejected by the server; fix or unset it and restart yeda"),
             None => format!("run {command} again to enter it"),
         }
     }
@@ -3393,32 +3400,38 @@ impl App {
         }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
-        let mut sharing: HashMap<String, Vec<String>> = HashMap::new();
-        for (account, _) in &items {
-            if let Some(name) = yeda_secrets::env_name(account) {
-                sharing.entry(name).or_default().push(account.clone());
+        let aliases: Vec<Option<String>> = items.iter().map(|(account, _)| self.alias_of(account)).collect();
+        let mut sharing: HashMap<String, usize> = HashMap::new();
+        for ((account, _), alias) in items.iter().zip(&aliases) {
+            if let (None, Some(base)) = (alias, yeda_secrets::env_names(account, None).pop()) {
+                *sharing.entry(base).or_default() += 1;
             }
         }
         self.secret_items = items
             .into_iter()
-            .map(|(account, label)| {
-                let name = yeda_secrets::env_name(&account);
-                let in_env = yeda_secrets::from_env(&account).is_some();
-                let mut status: String = match yeda_secrets::stored(&account) {
-                    _ if in_env => format!("${} (overrides the secret store)", name.as_deref().unwrap_or_default()),
+            .zip(aliases)
+            .map(|((account, label), alias)| {
+                let names = yeda_secrets::env_names(&account, alias.as_deref());
+                let hit = yeda_secrets::env_hit(&account, alias.as_deref());
+                let stored = yeda_secrets::stored(&account);
+                let mut status: String = match (&hit, &stored) {
+                    (Some((name, _)), Ok(Some(_))) => format!("${name} (overrides the secret store)"),
+                    (Some((name, _)), _) => format!("${name}"),
                     _ if self.secrets.contains_key(&account) => "this session".into(),
-                    Ok(Some(_)) => "in the secret store".into(),
-                    Ok(None) => "not set".into(),
-                    Err(e) => {
+                    (None, Ok(Some(_))) => "in the secret store".into(),
+                    (None, Ok(None)) => "not set".into(),
+                    (None, Err(e)) => {
                         self.status = format!("{e:#}");
                         "secret store unavailable".into()
                     }
                 };
-                if let Some(name) = name.filter(|_| !in_env) {
-                    status.push_str(&format!(", or set ${name}"));
+                if hit.is_none() && !names.is_empty() {
+                    status.push_str(&format!(", or set {}", names.iter().map(|n| format!("${n}")).collect::<Vec<_>>().join(" or ")));
                 }
-                if let Some(name) = yeda_secrets::env_name(&account).filter(|n| sharing[n].len() > 1) {
-                    status.push_str(&format!("; ${name} is shared by {} secrets on this server, so only one can use it", sharing[&name].len()));
+                if alias.is_none()
+                    && let Some(base) = names.last().filter(|n| sharing.get(*n).is_some_and(|c| *c > 1))
+                {
+                    status.push_str(&format!("; ${base} is shared by {} secrets on this server: give each an alias in yeda.toml to tell them apart", sharing[base]));
                 }
                 SecretItem { account, label, status }
             })
@@ -3537,7 +3550,7 @@ impl App {
         self.status = match (finished, &job.error) {
             (false, _) => format!("caching PDFs: {}/{}…", job.done, job.total),
             (true, None) => format!("{} PDFs cached", job.total),
-            (true, Some(_)) if job.rejected => format!("the WebDAV password was rejected; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), ":cache")),
+            (true, Some(_)) if job.rejected => format!("the WebDAV password was rejected; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), self.alias_of(rejected.as_deref().unwrap_or_default()).as_deref(), ":cache")),
             (true, Some(e)) => format!("{} of {} PDFs cached; {} failed: {e}", job.total - job.failed, job.total, job.failed),
         };
         if let Some(account) = rejected {
@@ -3624,7 +3637,7 @@ impl App {
                     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
                     self.reject(&account);
                 }
-                let hint = self.lib.remotes.get(location).map_or_else(String::new, |dav| Self::rejected_hint(&yeda_secrets::webdav_account(&dav.user, &dav.url), ":attach"));
+                let hint = self.lib.remotes.get(location).map_or_else(String::new, |dav| Self::rejected_hint(&yeda_secrets::webdav_account(&dav.user, &dav.url), dav.alias.as_deref(), ":attach"));
                 self.status = format!("{e:#}; {hint}");
             }
             Err(e) => self.status = format!("{e:#}"),
@@ -4512,7 +4525,7 @@ mod tests {
     fn combo_keys_are_nested_inside_the_setup_form() {
         let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "codex", &lib);
-        assert_eq!(form.values, [""; 6], "the provider form starts empty");
+        assert_eq!(form.values, [""; 7], "the provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,

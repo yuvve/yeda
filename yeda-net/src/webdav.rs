@@ -118,7 +118,7 @@ mod tests {
     fn never_sends_the_password_over_plain_http() {
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let dav = Dav { url: format!("http://{}/dav", server.local_addr().unwrap()), user: "me".into() };
+        let dav = Dav { url: format!("http://{}/dav", server.local_addr().unwrap()), user: "me".into(), alias: None };
         let err = login(&dav, "pw").unwrap_err().to_string();
         assert!(err.contains("only go over https://"), "{err}");
         assert!(upload(&dav, "pw", "a/b.pdf", b"%PDF").is_err());
