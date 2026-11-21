@@ -641,7 +641,7 @@ fn draw_envvars(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, width.max(48) + 2, height + 2);
     f.render_widget(Clear, area);
     f.render_stateful_widget(
-        List::new(items).block(block(" Environment variables · j/k move · Esc close ".into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        List::new(items).block(block(" Environment variables · Enter copy name · Esc close ".into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.secret_sel)),
     );

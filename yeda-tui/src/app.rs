@@ -3466,8 +3466,23 @@ impl App {
         self.mode = Mode::Envvars;
     }
 
+    /// The variable `:envvars` highlights: the first name listed for the selected secret.
+    fn selected_envvar(&self) -> Option<String> {
+        let item = self.secret_items.get(self.secret_sel)?;
+        item.status.lines().find_map(|l| l.strip_prefix('$')).map(String::from)
+    }
+
     fn envvars_key(&mut self, k: KeyEvent) {
         match k.code {
+            KeyCode::Enter => {
+                self.status = match self.selected_envvar() {
+                    Some(name) => match self.copy(&name) {
+                        Ok(()) => format!("copied {name} to the clipboard"),
+                        Err(e) => format!("clipboard: {e}"),
+                    },
+                    None => "no variable for this secret".into(),
+                };
+            }
             KeyCode::Char('j') | KeyCode::Down => self.secret_sel = (self.secret_sel + 1).min(self.secret_items.len().saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => self.secret_sel = self.secret_sel.saturating_sub(1),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
@@ -4571,6 +4586,10 @@ mod tests {
         assert!(text("b").contains("needs an alias"));
         assert_eq!(text("c"), "$YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C\n$YEDA_KEY_OTHER_EXAMPLE_COM_443");
         assert!(text("d").starts_with("needs an alias: without one"), "{}", text("d"));
+        app.secret_sel = app.secret_items.iter().position(|i| i.label.starts_with("Provider c:")).unwrap();
+        assert_eq!(app.selected_envvar().as_deref(), Some("YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C"));
+        app.secret_sel = app.secret_items.iter().position(|i| i.label.starts_with("Provider d:")).unwrap();
+        assert_eq!(app.selected_envvar(), None);
     }
 
     #[test]
