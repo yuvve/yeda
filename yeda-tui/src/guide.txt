@@ -260,6 +260,7 @@ THE READER  ( o, yeda read )
     dd c y                 delete the selected annotation / edit its comment /
                            copy the selected text
     C                      column mode (also a toolbar button)
+    q                      close the reader
 
   Column mode is for two-column papers: each column fills the window's
   width and is read a screen at a time, left column then right. The

@@ -36,7 +36,7 @@ function scrollContainer(): HTMLElement | undefined {
  * Routes keydown events from the main window and the PDF iframe through the vim keymap.
  * Must run before the reader is created so its capture listener fires ahead of the reader's own.
  */
-export function installVim(getReader: () => VimReader | undefined, toggleColumns: () => void) {
+export function installVim(getReader: () => VimReader | undefined, toggleColumns: () => void, close: () => void) {
 	let pending = '';
 	let count = '';
 
@@ -133,6 +133,7 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 			case 'c': editComment(reader); return true;
 			case 'y': reader.copy(); return true;
 			case 'C': toggleColumns(); return true;
+			case 'q': close(); return true;
 			case 'Escape':
 				reader.setTool({ type: 'pointer' });
 				// The reader also handles Escape, e.g. to clear the selection.
