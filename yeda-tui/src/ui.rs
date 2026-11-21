@@ -435,6 +435,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::PdfPick => draw_pdf_pick(f, app, main),
         Mode::History => draw_history(f, app, main),
         Mode::Secrets => draw_secrets(f, app, main),
+        Mode::Envvars => draw_envvars(f, app, main),
         Mode::Help(page) => draw_help(f, app, main, page),
         _ => {}
     }
@@ -617,6 +618,30 @@ fn draw_secrets(f: &mut Frame, app: &App, main: Rect) {
         List::new(items)
             .block(block(" Secrets · Enter set · d remove · Esc close ".into(), true))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(app.secret_sel)),
+    );
+}
+
+fn draw_envvars(f: &mut Frame, app: &App, main: Rect) {
+    let items: Vec<ListItem> = app
+        .secret_items
+        .iter()
+        .map(|s| {
+            let mut lines = vec![Line::raw(s.label.clone())];
+            lines.extend(s.status.lines().map(|l| {
+                let style = if l.starts_with('$') { Style::new().fg(Color::Green) } else { Style::new().fg(Color::Yellow) };
+                Line::from(Span::styled(format!("  {l}"), style))
+            }));
+            ListItem::new(Text::from(lines))
+        })
+        .collect();
+    let width = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
+    let height = items.iter().map(ListItem::height).sum::<usize>() as u16;
+    let area = popup(main, width.max(48) + 2, height + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items).block(block(" Environment variables · Enter copy name · Esc close ".into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.secret_sel)),
     );

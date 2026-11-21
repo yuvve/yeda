@@ -7,4 +7,4 @@ Keeps secrets (WebDAV passwords, LLM API keys and OAuth tokens) in the system's 
 - **Linux:** the Secret Service, as served by GNOME Keyring, KWallet or KeePassXC. yeda only uses a provider that is already running; it never lets D-Bus start one, so no keyring prompt appears unasked.
 - **Android:** the Keystore.
 
-Entries have service `yeda`, and an account of `webdav:<user>@<url>`, `llm:<ENV_VAR>`, `git:<remote url>` or `api:openalex`.
+Entries have service `yeda`, and an account of `webdav:<user>@<url>`, `provider:<name>:<url>`, `git:<remote url>` or `api:<service>`.

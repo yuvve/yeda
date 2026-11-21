@@ -38,6 +38,8 @@ pub enum Mode {
     Confirm,
     /// The `:secrets` menu.
     Secrets,
+    /// The `:envvars` list.
+    Envvars,
     Filter,
     /// The `:setup` form.
     Setup,
@@ -172,6 +174,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":setup table [name]", "add or change a literature table: its columns and what each holds"),
     (":config [library|device]", "edit yeda.toml, or this device's config.toml, in $EDITOR"),
     (":secrets", "every password, API key and OAuth token the config uses: where each is set; set, replace or remove them"),
+    (":envvars", "the environment variable that sets each secret, and which ones need an alias to tell them apart"),
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
     (":table close", "close the table"),
@@ -1057,6 +1060,7 @@ impl App {
         match self.mode {
             Mode::Normal => self.normal_key(k),
             Mode::Secrets => self.secrets_key(k),
+            Mode::Envvars => self.envvars_key(k),
             Mode::Confirm => {
                 self.mode = Mode::Normal;
                 let pending = self.confirming.take();
@@ -1718,7 +1722,7 @@ impl App {
         let profile = yeda_core::llm::Profile { provider: provider.clone(), model: String::new() };
         let found = setup::profile_credential(&providers, &name, &profile, |account| match self.secrets.get(account) {
             Some(secret) => Ok(Some(secret.clone())),
-            None => yeda_secrets::get(account),
+            None => yeda_secrets::get_as(account, self.alias_of(account).as_deref()),
         });
         let (bound, secret) = match found {
             Ok(found) => found,
@@ -1931,7 +1935,7 @@ impl App {
                     let providers = self.lib.providers.clone();
                     let found = setup::profile_credential(&providers, &name, &p, |account| match self.secrets.get(account) {
                         Some(secret) => Ok(Some(secret.clone())),
-                        None => yeda_secrets::get(account),
+                        None => yeda_secrets::get_as(account, self.alias_of(account).as_deref()),
                     });
                     let (bound, key) = match found {
                         Ok(found) => found,
@@ -1968,7 +1972,7 @@ impl App {
                     let codex_empty = secret.is_none()
                         && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
                     if codex_empty {
-                        let (issued, host, hint) = yeda_secrets::get(&account)
+                        let (issued, host, hint) = yeda_secrets::stored(&account)
                             .ok()
                             .flatten()
                             .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
@@ -2695,6 +2699,7 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
+                ("envvars", _) => self.open_envvars(),
                 (cmd @ ("discover" | "discover!"), args) => {
                     let fresh = cmd.ends_with('!');
                     if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text, fresh)) {
@@ -2905,7 +2910,7 @@ impl App {
             let prompt = format!("{what} for provider '{}', used by {}, sent to {}", b.provider, b.profile, b.url());
             self.secret(&account, &prompt, Retry::Command(command.into())).map(Some)
         } else {
-            Some(yeda_secrets::get(&account).ok().flatten())
+            Some(yeda_secrets::get_as(&account, b.settings.alias.as_deref()).ok().flatten())
         };
         got.map(|key| self.renewed_codex(b, account, key))
     }
@@ -2916,7 +2921,7 @@ impl App {
         if b.protocol() != yeda_core::llm::Protocol::OpenaiResponses {
             return key;
         }
-        if !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+        if yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
             return key;
         }
         let key = key.unwrap();
@@ -3316,11 +3321,19 @@ impl App {
     /// The secret for `account`: from this session, else the secret store, else a prompt, after which
     /// `retry` runs again. `None` while prompting.
     fn secret(&mut self, account: &str, label: &str, retry: Retry) -> Option<String> {
+        let alias = self.alias_of(account);
+        if let Some(s) = yeda_secrets::from_env(account, alias.as_deref()) {
+            if self.rejected.contains(account) {
+                self.status = Self::rejected_hint(account, alias.as_deref(), "");
+                return None;
+            }
+            return Some(s);
+        }
         if let Some(s) = self.secrets.get(account) {
             return Some(s.clone());
         }
         if !self.rejected.contains(account) {
-            match yeda_secrets::get(account) {
+            match yeda_secrets::stored(account) {
                 Ok(Some(s)) => {
                     self.secrets.insert(account.into(), s.clone());
                     return Some(s);
@@ -3333,6 +3346,21 @@ impl App {
         self.input.clear();
         self.mode = Mode::Prompt(Prompt::Secret);
         None
+    }
+
+    /// The alias of the provider or WebDAV location whose secret is `account`.
+    fn alias_of(&self, account: &str) -> Option<String> {
+        let provider = self.lib.providers.iter().find(|(n, p)| yeda_secrets::provider_account(n, p.url()) == account).and_then(|(_, p)| p.alias.clone());
+        provider.or_else(|| self.lib.remotes.values().find(|d| yeda_secrets::webdav_account(&d.user, &d.url) == account).and_then(|d| d.alias.clone()))
+    }
+
+    /// What to tell the user when the server turned down the secret of `account`. An environment
+    /// variable cannot be replaced from inside yeda, so it is named instead of asked for again.
+    fn rejected_hint(account: &str, alias: Option<&str>, command: &str) -> String {
+        match yeda_secrets::env_hit(account, alias) {
+            Some((name, _)) => format!("${name} was rejected by the server; fix or unset it and restart yeda"),
+            None => format!("run {command} again to enter it"),
+        }
     }
 
     /// Forgets a secret the server turned down, so the next attempt asks again.
@@ -3349,8 +3377,8 @@ impl App {
         }
     }
 
-    /// Every secret the configuration can use, with where each is set.
-    fn open_secrets(&mut self) {
+    /// Every secret the configuration can use, as (account, label).
+    fn secret_accounts(&self) -> Vec<(String, String)> {
         let mut items: Vec<(String, String)> = Vec::new();
         for (name, dav) in &self.lib.remotes {
             items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
@@ -3377,19 +3405,24 @@ impl App {
         }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
+        items
+    }
+
+    /// Every secret the configuration can use, with where each is set.
+    fn open_secrets(&mut self) {
+        let items = self.secret_accounts();
         self.secret_items = items
             .into_iter()
             .map(|(account, label)| {
-                let status = if self.secrets.contains_key(&account) {
-                    "this session".into()
-                } else {
-                    match yeda_secrets::get(&account) {
-                        Ok(Some(_)) => "in the secret store".into(),
-                        Ok(None) => "not set".into(),
-                        Err(e) => {
-                            self.status = format!("{e:#}");
-                            "secret store unavailable".into()
-                        }
+                let alias = self.alias_of(&account);
+                let status = match yeda_secrets::stored(&account) {
+                    _ if yeda_secrets::from_env(&account, alias.as_deref()).is_some() => "envvar".into(),
+                    _ if self.secrets.contains_key(&account) => "session".into(),
+                    Ok(Some(_)) => "secret service".into(),
+                    Ok(None) => "not set".into(),
+                    Err(e) => {
+                        self.status = format!("{e:#}");
+                        "secret service unavailable".into()
                     }
                 };
                 SecretItem { account, label, status }
@@ -3397,6 +3430,64 @@ impl App {
             .collect();
         self.secret_sel = self.secret_sel.min(self.secret_items.len() - 1);
         self.mode = Mode::Secrets;
+    }
+
+    /// Every secret with the environment variables that can set it, and a note where it has to
+    /// be given an alias first.
+    fn open_envvars(&mut self) {
+        let accounts = self.secret_accounts();
+        let aliases: Vec<Option<String>> = accounts.iter().map(|(account, _)| self.alias_of(account)).collect();
+        let mut sharing: HashMap<String, usize> = HashMap::new();
+        for ((account, _), alias) in accounts.iter().zip(&aliases) {
+            if let (None, Some(base)) = (alias, yeda_secrets::env_names(account, None).pop()) {
+                *sharing.entry(base).or_default() += 1;
+            }
+        }
+        self.secret_items = accounts
+            .into_iter()
+            .zip(aliases)
+            .map(|((account, label), alias)| {
+                let names = yeda_secrets::env_names(&account, alias.as_deref());
+                let mut lines: Vec<String> = names.iter().map(|n| format!("${n}")).collect();
+                if alias.is_none() {
+                    let shared = names.last().and_then(|n| sharing.get(n)).copied().unwrap_or(1);
+                    if names.is_empty() && !yeda_secrets::env_names(&account, Some("a")).is_empty() {
+                        lines.push("needs an alias: without one its name could be another server's".into());
+                    } else if names.is_empty() {
+                        lines.push("no variable for this server".into());
+                    } else if shared > 1 {
+                        lines.push(format!("needs an alias: {shared} secrets on this server share this variable"));
+                    }
+                }
+                SecretItem { account, label, status: lines.join("\n") }
+            })
+            .collect();
+        self.secret_sel = self.secret_sel.min(self.secret_items.len().saturating_sub(1));
+        self.mode = Mode::Envvars;
+    }
+
+    /// The variable `:envvars` highlights: the first name listed for the selected secret.
+    fn selected_envvar(&self) -> Option<String> {
+        let item = self.secret_items.get(self.secret_sel)?;
+        item.status.lines().find_map(|l| l.strip_prefix('$')).map(String::from)
+    }
+
+    fn envvars_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Enter => {
+                self.status = match self.selected_envvar() {
+                    Some(name) => match self.copy(&name) {
+                        Ok(()) => format!("copied {name} to the clipboard"),
+                        Err(e) => format!("clipboard: {e}"),
+                    },
+                    None => "no variable for this secret".into(),
+                };
+            }
+            KeyCode::Char('j') | KeyCode::Down => self.secret_sel = (self.secret_sel + 1).min(self.secret_items.len().saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => self.secret_sel = self.secret_sel.saturating_sub(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
     }
 
     fn secrets_key(&mut self, k: KeyEvent) {
@@ -3509,7 +3600,7 @@ impl App {
         self.status = match (finished, &job.error) {
             (false, _) => format!("caching PDFs: {}/{}…", job.done, job.total),
             (true, None) => format!("{} PDFs cached", job.total),
-            (true, Some(_)) if job.rejected => "the WebDAV password was rejected; run :cache again to enter it".into(),
+            (true, Some(_)) if job.rejected => format!("the WebDAV password was rejected; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), self.alias_of(rejected.as_deref().unwrap_or_default()).as_deref(), ":cache")),
             (true, Some(e)) => format!("{} of {} PDFs cached; {} failed: {e}", job.total - job.failed, job.total, job.failed),
         };
         if let Some(account) = rejected {
@@ -3596,7 +3687,8 @@ impl App {
                     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
                     self.reject(&account);
                 }
-                self.status = format!("{e:#}; run :attach again to enter the password");
+                let hint = self.lib.remotes.get(location).map_or_else(String::new, |dav| Self::rejected_hint(&yeda_secrets::webdav_account(&dav.user, &dav.url), dav.alias.as_deref(), ":attach"));
+                self.status = format!("{e:#}; {hint}");
             }
             Err(e) => self.status = format!("{e:#}"),
         }
@@ -4480,10 +4572,31 @@ mod tests {
     }
 
     #[test]
+    fn envvars_name_the_variables_and_the_secrets_needing_an_alias() {
+        let toml = "[providers.a]\nbase_url = \"https://api.example.com/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
+                    [providers.b]\nbase_url = \"https://api.example.com/v2\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
+                    [providers.c]\nbase_url = \"https://other.example.com\"\nprotocol = \"openai\"\nauth = \"api-key\"\nalias = \"c\"\n\
+                    [providers.d]\nbase_url = \"https://x.alias\"\nprotocol = \"openai\"\nauth = \"api-key\"\n";
+        let lib = yeda_core::library::Library::parse(Some(toml), None, [], None).unwrap();
+        let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        app.open_envvars();
+        let text = |name: &str| app.secret_items.iter().find(|i| i.label.starts_with(&format!("Provider {name}:"))).unwrap().status.clone();
+        assert!(matches!(app.mode, super::Mode::Envvars));
+        assert_eq!(text("a"), "$YEDA_KEY_API_EXAMPLE_COM_443\nneeds an alias: 2 secrets on this server share this variable");
+        assert!(text("b").contains("needs an alias"));
+        assert_eq!(text("c"), "$YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C\n$YEDA_KEY_OTHER_EXAMPLE_COM_443");
+        assert!(text("d").starts_with("needs an alias: without one"), "{}", text("d"));
+        app.secret_sel = app.secret_items.iter().position(|i| i.label.starts_with("Provider c:")).unwrap();
+        assert_eq!(app.selected_envvar().as_deref(), Some("YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C"));
+        app.secret_sel = app.secret_items.iter().position(|i| i.label.starts_with("Provider d:")).unwrap();
+        assert_eq!(app.selected_envvar(), None);
+    }
+
+    #[test]
     fn combo_keys_are_nested_inside_the_setup_form() {
         let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "codex", &lib);
-        assert_eq!(form.values, [""; 6], "the provider form starts empty");
+        assert_eq!(form.values, [""; 7], "the provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,

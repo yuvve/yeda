@@ -120,6 +120,7 @@ fn auth_of(name: &str) -> Auth {
 /// The reference form's last fields, kept in `Ref::extra`.
 pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 
+const ALIAS_HINT: &str = "optional; names the environment variable for this secret when several share a server: YEDA_…_ALIAS_<ALIAS>";
 const CHOICE_HINT: &str = "all options shown · type to filter · ↓/↑ pick · Enter use · Esc restores · free text works";
 
 /// What the form saves, once its connection works.
@@ -144,11 +145,11 @@ impl SetupForm {
     /// forms start empty: the preset or provider the user picks fills the rest of the form.
     pub fn new(kind: Kind, name: &str, lib: &Library) -> SetupForm {
         let values = match kind {
-            Kind::Provider => vec![String::new(); 6],
+            Kind::Provider => vec![String::new(); 7],
             Kind::Llm => vec![String::new(); 3],
             Kind::Webdav => match lib.remotes.get(name) {
-                Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), String::new()],
-                None => vec![name.into(), String::new(), String::new(), String::new()],
+                Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), d.alias.clone().unwrap_or_default(), String::new()],
+                None => vec![name.into(), String::new(), String::new(), String::new(), String::new()],
             },
             Kind::Search => {
                 let s = lib.searches.get(name);
@@ -254,6 +255,7 @@ impl SetupForm {
                     ("Base URL", "filled in by the preset; any https server for openai-compatible"),
                     ("Protocol", CHOICE_HINT),
                     ("Auth", CHOICE_HINT),
+                    ("Alias", ALIAS_HINT),
                     ("Key / token", token),
                 ]
             }
@@ -266,6 +268,7 @@ impl SetupForm {
                 ("Name", "used as pdf.location and in :attach"),
                 ("URL", "the folder PDFs go in, e.g. https://dav.example.com/pdfs/"),
                 ("User", ""),
+                ("Alias", ALIAS_HINT),
                 ("Password", "kept in the secret store"),
             ],
             Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
@@ -349,10 +352,16 @@ impl SetupForm {
                 t.insert("base_url".into(), v[2].trim_end_matches('/').into());
                 t.insert("protocol".into(), v[3].to_lowercase().into());
                 t.insert("auth".into(), v[4].to_lowercase().into());
+                if !v[5].is_empty() {
+                    t.insert("alias".into(), v[5].into());
+                }
                 let p = Provider::deserialize(toml::Value::Table(t.clone())).map_err(|_| {
                     anyhow::anyhow!("the protocol is one of anthropic, openai, mistral, openrouter, opencode-go, openai-responses, and the auth api-key, oauth or none")
                 })?;
                 p.check()?;
+                if let Some(alias) = &p.alias {
+                    yeda_core::check_alias(alias)?;
+                }
                 // Codex signs in when the field is empty; every other credential has to be pasted,
                 // since its key is bound to this URL and a new one has none yet.
                 if p.auth == Auth::ApiKey && self.secret().is_none() {
@@ -383,6 +392,10 @@ impl SetupForm {
                 }
                 t.insert("url".into(), v[1].into());
                 t.insert("user".into(), v[2].into());
+                if !v[3].is_empty() {
+                    yeda_core::check_alias(v[3])?;
+                    t.insert("alias".into(), v[3].into());
+                }
                 Setup::Webdav(Dav::deserialize(toml::Value::Table(t.clone()))?)
             }
             Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
@@ -669,11 +682,11 @@ mod tests {
     fn builds_providers_from_presets() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "codex", &lib);
-        assert_eq!(f.values, [""; 6], "the provider form starts empty");
+        assert_eq!(f.values, [""; 7], "the provider form starts empty");
         f.values[0] = "codex".into();
         f.values[1] = "codex".into();
         f.provider_changed();
-        assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", ""]);
+        assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", "", ""]);
         // Codex signs in with an empty field, so the section builds without a credential.
         let (t, s) = f.section().unwrap();
         assert_eq!(t.to_string(), "base_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n");
@@ -683,7 +696,7 @@ mod tests {
         f.provider_changed();
         assert_eq!(f.values[2..5], ["https://api.anthropic.com", "anthropic", "oauth"]);
         assert!(f.section().unwrap_err().to_string().contains("claude setup-token"));
-        f.values[5] = "sk-ant-oat01-x".into();
+        f.values[6] = "sk-ant-oat01-x".into();
         let (_, s) = f.section().unwrap();
         assert_eq!(account(&s), "provider:codex:https://api.anthropic.com");
 
@@ -691,13 +704,13 @@ mod tests {
         f.values[1] = "mistral".into();
         f.provider_changed();
         f.values[2] = "https://mistral.example.edu/v1".into();
-        f.values[5] = "k".into();
+        f.values[6] = "k".into();
         let (t, _) = f.section().unwrap();
         assert_eq!(t["base_url"].as_str(), Some("https://mistral.example.edu/v1"));
         assert_eq!(t["protocol"].as_str(), Some("mistral"));
         let saved = Library::parse(Some(&format!("[providers.mistral]\n{t}")), None, [], None).unwrap();
         let edited = SetupForm::new(Kind::Provider, "mistral", &saved);
-        assert_eq!(edited.values, [""; 6], "editing also starts empty");
+        assert_eq!(edited.values, [""; 7], "editing also starts empty");
 
         let mut g = SetupForm::new(Kind::Provider, "local", &lib);
         g.values[0] = "local".into();
@@ -784,7 +797,7 @@ mod tests {
     fn a_profile_test_sends_the_credential_it_is_given() {
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let provider = Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), protocol: Protocol::OpenaiResponses, auth: Auth::Oauth };
+        let provider = Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), protocol: Protocol::OpenaiResponses, auth: Auth::Oauth, alias: None };
         let providers = BTreeMap::from([("cx".to_string(), provider)]);
         let setup = Setup::Llm("a".into(), Profile { provider: "cx".into(), model: "gpt-5.1".into() });
         // Past the credential check, the plain-http address is what stops the request.
@@ -809,9 +822,13 @@ mod tests {
     fn builds_and_checks_sections() {
         let lib = Library::parse(Some("[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n"), None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Webdav, "dav", &lib);
-        f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "pw".into()]);
+        f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "work".into(), "pw".into()]);
         let (t, s) = f.section().unwrap();
         assert!(!t.contains_key("password"));
+        assert_eq!(t["alias"].as_str(), Some("work"));
+        f.values[3] = "my-work".into();
+        assert!(f.section().unwrap_err().to_string().contains("letters and digits"));
+        f.values[3] = "work".into();
         f.values[1] = "http://nas.local/pdfs".into();
         assert!(f.section().unwrap_err().to_string().contains("only go over https://"));
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");

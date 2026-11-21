@@ -69,6 +69,9 @@ impl Default for Ref {
 pub struct Dav {
     pub url: String,
     pub user: String,
+    /// Distinguishes this location's environment variable from others on the same server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 impl Dav {
@@ -281,6 +284,8 @@ impl Library {
         for (name, p) in &lib.providers {
             p.check().with_context(|| format!("providers.{name}"))?;
         }
+        crate::check_aliases(lib.providers.iter().map(|(n, p)| (n.as_str(), p.url(), p.alias.as_deref()))).context("providers")?;
+        crate::check_aliases(lib.remotes.iter().map(|(n, d)| (n.as_str(), d.url.as_str(), d.alias.as_deref()))).context("locations")?;
         for (key, text) in refs {
             match parse_ref(key.clone(), &text) {
                 Ok(r) => lib.refs.push(r),

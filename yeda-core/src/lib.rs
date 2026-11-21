@@ -44,9 +44,69 @@ pub fn require_https(url: &str) -> anyhow::Result<()> {
     anyhow::bail!("{url}: passwords and keys only go over https://")
 }
 
+/// The part of an environment variable's name that identifies the server of `url`: its host
+/// uppercased, `.` as `_` and `-` as `__`, then `_<port>` (443 if the URL has none). The port is
+/// always there so that a host's last label cannot pass for one. `None` where the name would not
+/// identify one server: no `https://`, userinfo, an IPv6 address, or a label that is empty or
+/// starts or ends with `-`.
+pub fn env_host(url: &str) -> Option<String> {
+    let authority = url.strip_prefix("https://")?.split(['/', '?', '#']).next()?;
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, port),
+        Some(_) => return None,
+        None => (authority, "443"),
+    };
+    let label = |l: &str| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !host.split('.').all(label) {
+        return None;
+    }
+    Some(format!("{}_{port}", host.to_ascii_uppercase().replace('.', "_").replace('-', "__")))
+}
+
+/// Refuses an alias that cannot be part of an environment variable's name.
+pub fn check_alias(alias: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!alias.is_empty() && alias.bytes().all(|b| b.is_ascii_alphanumeric()), "alias '{alias}': use only letters and digits");
+    Ok(())
+}
+
+/// Refuses an alias used twice for one server, since both would read the same variable.
+pub fn check_aliases<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str, Option<&'a str>)>) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashMap::new();
+    for (name, url, alias) in entries {
+        let Some(alias) = alias else { continue };
+        check_alias(alias).map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+        let Some(host) = env_host(url) else { continue };
+        if let Some(other) = seen.insert((host, alias.to_ascii_uppercase()), name) {
+            anyhow::bail!("{name} and {other} both use alias '{alias}' on {url}");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::require_https;
+    use super::{check_aliases, env_host, require_https};
+
+    #[test]
+    fn env_host_names_one_server() {
+        assert_eq!(env_host("https://api.anthropic.com/v1").as_deref(), Some("API_ANTHROPIC_COM_443"));
+        assert_eq!(env_host("https://api.anthropic.com:443").as_deref(), Some("API_ANTHROPIC_COM_443"));
+        assert_eq!(env_host("https://my-llm.lan:8443").as_deref(), Some("MY__LLM_LAN_8443"));
+        assert_eq!(env_host("https://10.0.0.1").as_deref(), Some("10_0_0_1_443"));
+        assert_ne!(env_host("https://h.80"), env_host("https://h:80"));
+        for bad in ["http://a.example", "https://u@a.example", "https://[::1]:1", "https://a..b", "https://h.", "https://-a.b", "https://a-.b", "https://a.example:"] {
+            assert_eq!(env_host(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_alias_is_unique_per_server() {
+        let a = "https://api.example.com/v1";
+        let other = "https://other.example.com";
+        assert!(check_aliases([("a", a, Some("work")), ("b", other, Some("Work")), ("c", a, None)]).is_ok());
+        assert!(check_aliases([("a", a, Some("work")), ("b", "https://api.example.com/v2", Some("WORK"))]).is_err());
+        assert!(check_aliases([("a", a, Some("my-work"))]).is_err());
+    }
 
     #[test]
     fn only_https_carries_secrets() {

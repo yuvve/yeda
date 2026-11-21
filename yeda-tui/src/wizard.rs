@@ -148,7 +148,7 @@ impl Form {
                     return Err("give the WebDAV URL (https://…), user and password".into());
                 }
                 yeda_core::require_https(url).map_err(|e| format!("{e:#}"))?;
-                let dav = Dav { url: url.into(), user: user.into() };
+                let dav = Dav { url: url.into(), user: user.into(), alias: None };
                 yeda_net::webdav::login(&dav, &password).map_err(|e| format!("{e:#}"))?;
                 Some((dav, password))
             }

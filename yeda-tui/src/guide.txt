@@ -217,6 +217,37 @@ THE COMMAND LINE  ( : )
   command: :discover --llm gpt swarm robots. -- ends the options, so what
   follows is text even if it starts with --.
 
+SECRETS  ( :secrets, :envvars )
+
+  Passwords, API keys and tokens are kept in the system secret store, never
+  in a file. :secrets lists each one and where it comes from: envvar,
+  session (entered this run, not saved), secret service, or not set. Enter
+  sets one, d removes the stored one.
+
+  An environment variable overrides the secret store. Its name is made from
+  the server's host, so a yeda.toml that points a provider somewhere else
+  finds no variable to send there:
+
+    YEDA_KEY_<HOST>_<PORT>   LLM providers, OpenAlex, web search keys
+    YEDA_DAV_<HOST>_<PORT>   WebDAV locations
+
+  The host is uppercase, "." becomes "_" and "-" becomes "__"; the port is
+  443 unless the address gives one. https://api.anthropic.com is
+  YEDA_KEY_API_ANTHROPIC_COM_443.
+
+  Providers, or WebDAV locations, on the same host share one variable. Give
+  each an alias (letters and digits, unique per host) in yeda.toml or in
+  :setup, and YEDA_KEY_<HOST>_<PORT>_ALIAS_<ALIAS> is theirs alone; it wins
+  over the shared one:
+
+    [providers.work]
+    alias = "work"
+
+  :envvars lists the names for every secret, and marks the ones that need an
+  alias. If a server rejects a key that came from a variable, yeda says so
+  and does not ask again; fix the variable and restart yeda. Codex
+  credentials from a variable are not renewed.
+
 UNDO  ( u, Ctrl-R )
 
   u takes back what the last command changed in the library (references,
