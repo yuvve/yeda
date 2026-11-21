@@ -38,6 +38,8 @@ pub enum Mode {
     Confirm,
     /// The `:secrets` menu.
     Secrets,
+    /// The `:envvars` list.
+    Envvars,
     Filter,
     /// The `:setup` form.
     Setup,
@@ -172,6 +174,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":setup table [name]", "add or change a literature table: its columns and what each holds"),
     (":config [library|device]", "edit yeda.toml, or this device's config.toml, in $EDITOR"),
     (":secrets", "every password, API key and OAuth token the config uses: where each is set; set, replace or remove them"),
+    (":envvars", "the environment variable that sets each secret, and which ones need an alias to tell them apart"),
     (":graph close", "close the graph shown"),
     (":table [name]", "a table of the selected or marked references; without a name, pick one (:help explains it)"),
     (":table close", "close the table"),
@@ -1057,6 +1060,7 @@ impl App {
         match self.mode {
             Mode::Normal => self.normal_key(k),
             Mode::Secrets => self.secrets_key(k),
+            Mode::Envvars => self.envvars_key(k),
             Mode::Confirm => {
                 self.mode = Mode::Normal;
                 let pending = self.confirming.take();
@@ -2695,6 +2699,7 @@ impl App {
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
+                ("envvars", _) => self.open_envvars(),
                 (cmd @ ("discover" | "discover!"), args) => {
                     let fresh = cmd.ends_with('!');
                     if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text, fresh)) {
@@ -3372,8 +3377,8 @@ impl App {
         }
     }
 
-    /// Every secret the configuration can use, with where each is set.
-    fn open_secrets(&mut self) {
+    /// Every secret the configuration can use, as (account, label).
+    fn secret_accounts(&self) -> Vec<(String, String)> {
         let mut items: Vec<(String, String)> = Vec::new();
         for (name, dav) in &self.lib.remotes {
             items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
@@ -3400,6 +3405,12 @@ impl App {
         }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
+        items
+    }
+
+    /// Every secret the configuration can use, with where each is set.
+    fn open_secrets(&mut self) {
+        let items = self.secret_accounts();
         self.secret_items = items
             .into_iter()
             .map(|(account, label)| {
@@ -3419,6 +3430,49 @@ impl App {
             .collect();
         self.secret_sel = self.secret_sel.min(self.secret_items.len() - 1);
         self.mode = Mode::Secrets;
+    }
+
+    /// Every secret with the environment variables that can set it, and a note where it has to
+    /// be given an alias first.
+    fn open_envvars(&mut self) {
+        let accounts = self.secret_accounts();
+        let aliases: Vec<Option<String>> = accounts.iter().map(|(account, _)| self.alias_of(account)).collect();
+        let mut sharing: HashMap<String, usize> = HashMap::new();
+        for ((account, _), alias) in accounts.iter().zip(&aliases) {
+            if let (None, Some(base)) = (alias, yeda_secrets::env_names(account, None).pop()) {
+                *sharing.entry(base).or_default() += 1;
+            }
+        }
+        self.secret_items = accounts
+            .into_iter()
+            .zip(aliases)
+            .map(|((account, label), alias)| {
+                let names = yeda_secrets::env_names(&account, alias.as_deref());
+                let mut lines: Vec<String> = names.iter().map(|n| format!("${n}")).collect();
+                if alias.is_none() {
+                    let shared = names.last().and_then(|n| sharing.get(n)).copied().unwrap_or(1);
+                    if names.is_empty() && !yeda_secrets::env_names(&account, Some("a")).is_empty() {
+                        lines.push("needs an alias: without one its name could be another server's".into());
+                    } else if names.is_empty() {
+                        lines.push("no variable for this server".into());
+                    } else if shared > 1 {
+                        lines.push(format!("needs an alias: {shared} secrets on this server share this variable"));
+                    }
+                }
+                SecretItem { account, label, status: lines.join("\n") }
+            })
+            .collect();
+        self.secret_sel = self.secret_sel.min(self.secret_items.len().saturating_sub(1));
+        self.mode = Mode::Envvars;
+    }
+
+    fn envvars_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => self.secret_sel = (self.secret_sel + 1).min(self.secret_items.len().saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => self.secret_sel = self.secret_sel.saturating_sub(1),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
     }
 
     fn secrets_key(&mut self, k: KeyEvent) {
@@ -4500,6 +4554,23 @@ mod tests {
         key(End, false);
         key(Char('!'), false);
         assert_eq!((buf.as_str(), back), ("l!", 0));
+    }
+
+    #[test]
+    fn envvars_name_the_variables_and_the_secrets_needing_an_alias() {
+        let toml = "[providers.a]\nbase_url = \"https://api.example.com/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
+                    [providers.b]\nbase_url = \"https://api.example.com/v2\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
+                    [providers.c]\nbase_url = \"https://other.example.com\"\nprotocol = \"openai\"\nauth = \"api-key\"\nalias = \"c\"\n\
+                    [providers.d]\nbase_url = \"https://x.alias\"\nprotocol = \"openai\"\nauth = \"api-key\"\n";
+        let lib = yeda_core::library::Library::parse(Some(toml), None, [], None).unwrap();
+        let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        app.open_envvars();
+        let text = |name: &str| app.secret_items.iter().find(|i| i.label.starts_with(&format!("Provider {name}:"))).unwrap().status.clone();
+        assert!(matches!(app.mode, super::Mode::Envvars));
+        assert_eq!(text("a"), "$YEDA_KEY_API_EXAMPLE_COM_443\nneeds an alias: 2 secrets on this server share this variable");
+        assert!(text("b").contains("needs an alias"));
+        assert_eq!(text("c"), "$YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C\n$YEDA_KEY_OTHER_EXAMPLE_COM_443");
+        assert!(text("d").starts_with("needs an alias: without one"), "{}", text("d"));
     }
 
     #[test]
