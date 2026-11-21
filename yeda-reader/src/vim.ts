@@ -1,5 +1,7 @@
-export interface VimReader {
-	_state: { selectedAnnotationIDs: string[]; sidebarOpen: boolean; sidebarView: string };
+import { JumpReader, showAnnotations, showToc } from './jump';
+
+export interface VimReader extends JumpReader {
+	_state: JumpReader['_state'] & { selectedAnnotationIDs: string[]; sidebarOpen: boolean; sidebarView: string };
 	_keyboardManager: { handleViewKeyDown(event: KeyboardEvent): void };
 	navigate(location: { pageIndex: number }): void;
 	navigateToFirstPage(): void;
@@ -39,17 +41,6 @@ function scrollContainer(): HTMLElement | undefined {
 export function installVim(getReader: () => VimReader | undefined, toggleColumns: () => void, close: () => void) {
 	let pending = '';
 	let count = '';
-
-	const toggleSidebarView = (reader: VimReader, view: string) => {
-		const { sidebarOpen, sidebarView } = reader._state;
-		if (sidebarOpen && sidebarView === view) {
-			reader.toggleSidebar(false);
-		}
-		else {
-			reader.setSidebarView(view);
-			reader.toggleSidebar(true);
-		}
-	};
 
 	const editComment = (reader: VimReader) => {
 		const [id] = reader._state.selectedAnnotationIDs;
@@ -127,8 +118,8 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 			case '+': reader.zoomIn(); return true;
 			case '-': reader.zoomOut(); return true;
 			case '=': reader.zoomReset(); return true;
-			case 'o': toggleSidebarView(reader, 'outline'); return true;
-			case 'a': toggleSidebarView(reader, 'annotations'); return true;
+			case 'og': showToc(reader); return true;
+			case 'ag': showAnnotations(reader); return true;
 			case 'dd': reader.deleteAnnotations(reader._state.selectedAnnotationIDs); return true;
 			case 'c': editComment(reader); return true;
 			case 'y': reader.copy(); return true;
@@ -140,6 +131,8 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 				return false;
 			case 'g':
 			case 'd':
+			case 'o':
+			case 'a':
 				pending = seq;
 				return true;
 		}
