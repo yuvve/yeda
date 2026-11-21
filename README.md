@@ -173,7 +173,7 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
-An environment variable overrides the secret store; `:secrets` shows the name to set for each secret. Give providers or WebDAV locations on the same server an `alias` to tell their variables apart.
+An environment variable overrides the secret store: `YEDA_KEY_<HOST>_<PORT>`, or `YEDA_DAV_<HOST>_<PORT>` for WebDAV, with `.` as `_` and `-` as `__` (`https://api.anthropic.com` is `YEDA_KEY_API_ANTHROPIC_COM_443`). Give providers or WebDAV locations on the same server an `alias`, and `…_ALIAS_<ALIAS>` is theirs alone. `:secrets` shows where each secret comes from.
 
 ## Keys and commands
 

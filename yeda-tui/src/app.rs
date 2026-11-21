@@ -3400,39 +3400,20 @@ impl App {
         }
         let mut seen = HashSet::new();
         items.retain(|(account, _)| seen.insert(account.clone()));
-        let aliases: Vec<Option<String>> = items.iter().map(|(account, _)| self.alias_of(account)).collect();
-        let mut sharing: HashMap<String, usize> = HashMap::new();
-        for ((account, _), alias) in items.iter().zip(&aliases) {
-            if let (None, Some(base)) = (alias, yeda_secrets::env_names(account, None).pop()) {
-                *sharing.entry(base).or_default() += 1;
-            }
-        }
         self.secret_items = items
             .into_iter()
-            .zip(aliases)
-            .map(|((account, label), alias)| {
-                let names = yeda_secrets::env_names(&account, alias.as_deref());
-                let hit = yeda_secrets::env_hit(&account, alias.as_deref());
-                let stored = yeda_secrets::stored(&account);
-                let mut status: String = match (&hit, &stored) {
-                    (Some((name, _)), Ok(Some(_))) => format!("${name} (overrides the secret store)"),
-                    (Some((name, _)), _) => format!("${name}"),
-                    _ if self.secrets.contains_key(&account) => "this session".into(),
-                    (None, Ok(Some(_))) => "in the secret store".into(),
-                    (None, Ok(None)) => "not set".into(),
-                    (None, Err(e)) => {
+            .map(|(account, label)| {
+                let alias = self.alias_of(&account);
+                let status = match yeda_secrets::stored(&account) {
+                    _ if yeda_secrets::from_env(&account, alias.as_deref()).is_some() => "envvar".into(),
+                    _ if self.secrets.contains_key(&account) => "session".into(),
+                    Ok(Some(_)) => "secret service".into(),
+                    Ok(None) => "not set".into(),
+                    Err(e) => {
                         self.status = format!("{e:#}");
-                        "secret store unavailable".into()
+                        "secret service unavailable".into()
                     }
                 };
-                if hit.is_none() && !names.is_empty() {
-                    status.push_str(&format!(", or set {}", names.iter().map(|n| format!("${n}")).collect::<Vec<_>>().join(" or ")));
-                }
-                if alias.is_none()
-                    && let Some(base) = names.last().filter(|n| sharing.get(*n).is_some_and(|c| *c > 1))
-                {
-                    status.push_str(&format!("; ${base} is shared by {} secrets on this server: give each an alias in yeda.toml to tell them apart", sharing[base]));
-                }
                 SecretItem { account, label, status }
             })
             .collect();
