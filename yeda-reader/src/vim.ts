@@ -1,3 +1,4 @@
+import { showHelp } from './help';
 import { JumpReader, showAnnotations, showToc } from './jump';
 
 export interface VimReader extends JumpReader {
@@ -22,6 +23,14 @@ export interface VimReader extends JumpReader {
 	focusView(): void;
 }
 
+export interface Binding {
+	keys?: string[];
+	label?: string;
+	help: string;
+	/** Returning false leaves the key for the reader to handle too. */
+	run?: (reader: VimReader, shift: boolean) => boolean | void;
+}
+
 const TOOLS = ['highlight', 'underline', 'note', 'text', 'image', 'ink', 'eraser'];
 const LINE = 60;
 
@@ -39,7 +48,7 @@ function scrollContainer(): HTMLElement | undefined {
  * Must run before the reader is created so its capture listener fires ahead of the reader's own.
  */
 export function installVim(getReader: () => VimReader | undefined, toggleColumns: () => void, close: () => void) {
-	let pending = '';
+	let pending: string[] = [];
 	let count = '';
 
 	const editComment = (reader: VimReader) => {
@@ -61,6 +70,53 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 			window.getSelection()?.addRange(range);
 		});
 	};
+
+	const scrollHalf = (direction: number) => {
+		const container = scrollContainer();
+		container?.scrollBy({ top: direction * 0.5 * container.clientHeight });
+	};
+
+	const table: Binding[] = [
+		{ keys: ['j'], help: 'Scroll down', run: () => scrollContainer()?.scrollBy({ top: LINE }) },
+		{ keys: ['k'], help: 'Scroll up', run: () => scrollContainer()?.scrollBy({ top: -LINE }) },
+		{ keys: ['C-d'], help: 'Scroll half a page down', run: () => scrollHalf(1) },
+		{ keys: ['C-u'], help: 'Scroll half a page up', run: () => scrollHalf(-1) },
+		{ keys: ['J'], help: 'Next page', run: r => r.navigateToNextPage() },
+		{ keys: ['K'], help: 'Previous page', run: r => r.navigateToPreviousPage() },
+		{
+			keys: [' '],
+			label: 'Space / Shift-Space',
+			help: 'Next / previous page',
+			run: (r, shift) => (shift ? r.navigateToPreviousPage() : r.navigateToNextPage()),
+		},
+		{ keys: ['g', 'g'], help: 'First page', run: r => r.navigateToFirstPage() },
+		{ keys: ['G'], help: 'Last page', run: r => r.navigateToLastPage() },
+		{ label: 'NG', help: 'Go to page N' },
+		{ keys: ['/'], help: 'Search', run: r => r.toggleFindPopup({ open: true }) },
+		{ keys: ['n'], help: 'Next search result', run: r => r.findNext() },
+		{ keys: ['N'], help: 'Previous search result', run: r => r.findPrevious() },
+		{ keys: ['+'], help: 'Zoom in', run: r => r.zoomIn() },
+		{ keys: ['-'], help: 'Zoom out', run: r => r.zoomOut() },
+		{ keys: ['='], help: 'Reset zoom', run: r => r.zoomReset() },
+		{ keys: ['o', 'g'], help: 'Jump to a section', run: r => showToc(r) },
+		{ keys: ['a', 'g'], help: 'Jump to an annotation', run: r => showAnnotations(r) },
+		{ label: 'Nt', help: 'Select tool N: highlight, underline, note, text, image, ink, eraser' },
+		{
+			keys: ['Escape'],
+			help: 'Back to selection',
+			// The reader also handles Escape, e.g. to clear the selection.
+			run: (r) => {
+				r.setTool({ type: 'pointer' });
+				return false;
+			},
+		},
+		{ keys: ['d', 'd'], help: 'Delete the selected annotation', run: r => r.deleteAnnotations(r._state.selectedAnnotationIDs) },
+		{ keys: ['c'], help: 'Edit the selected annotation\'s comment', run: r => editComment(r) },
+		{ keys: ['y'], help: 'Copy the selected text', run: r => r.copy() },
+		{ keys: ['C'], help: 'Column mode', run: () => toggleColumns() },
+		{ keys: ['?'], help: 'Show this help', run: r => showHelp(r, table) },
+		{ keys: ['q'], help: 'Close the reader', run: () => close() },
+	];
 
 	/** Returns true when the key was consumed. */
 	const handle = (event: KeyboardEvent): boolean => {
@@ -92,52 +148,27 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 			return true;
 		}
 
-		const seq = pending + key;
-		pending = '';
+		const seq = [...pending, key];
+		pending = [];
+		const id = seq.join(' ');
 
-		switch (seq) {
-			case 'j': scrollContainer()?.scrollBy({ top: LINE }); return true;
-			case 'k': scrollContainer()?.scrollBy({ top: -LINE }); return true;
-			case 'C-d':
-			case 'C-u': {
-				const container = scrollContainer();
-				container?.scrollBy({ top: (key === 'C-d' ? 0.5 : -0.5) * container.clientHeight });
-				return true;
-			}
-			case 'J': reader.navigateToNextPage(); return true;
-			case 'K': reader.navigateToPreviousPage(); return true;
-			case ' ':
-				if (event.shiftKey) reader.navigateToPreviousPage();
-				else reader.navigateToNextPage();
-				return true;
-			case 'gg': reader.navigateToFirstPage(); return true;
-			case 'G': reader.navigateToLastPage(); return true;
-			case '/': reader.toggleFindPopup({ open: true }); return true;
-			case 'n': reader.findNext(); return true;
-			case 'N': reader.findPrevious(); return true;
-			case '+': reader.zoomIn(); return true;
-			case '-': reader.zoomOut(); return true;
-			case '=': reader.zoomReset(); return true;
-			case 'og': showToc(reader); return true;
-			case 'ag': showAnnotations(reader); return true;
-			case 'dd': reader.deleteAnnotations(reader._state.selectedAnnotationIDs); return true;
-			case 'c': editComment(reader); return true;
-			case 'y': reader.copy(); return true;
-			case 'C': toggleColumns(); return true;
-			case 'q': close(); return true;
-			case 'Escape':
-				reader.setTool({ type: 'pointer' });
-				// The reader also handles Escape, e.g. to clear the selection.
-				return false;
-			case 'g':
-			case 'd':
-			case 'o':
-			case 'a':
-				pending = seq;
-				return true;
+		const binding = bindings.get(id);
+		if (binding) return binding.run!(reader, event.shiftKey) !== false;
+		if (prefixes.has(id)) {
+			pending = seq;
+			return true;
 		}
 		return false;
 	};
+
+	const bindings = new Map<string, Binding>();
+	const prefixes = new Set<string>();
+	for (const binding of table) {
+		if (!binding.run) continue;
+		const keys = binding.keys!;
+		bindings.set(keys.join(' '), binding);
+		for (let i = 1; i < keys.length; i++) prefixes.add(keys.slice(0, i).join(' '));
+	}
 
 	window.addEventListener('keydown', (event) => {
 		if (handle(event)) {

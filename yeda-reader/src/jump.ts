@@ -20,8 +20,9 @@ export interface JumpReader {
 	focusView(): void;
 }
 
-interface Entry {
+export interface Entry {
 	label: string;
+	search?: string;
 	detail: string;
 	color?: string;
 	indent: number;
@@ -80,7 +81,7 @@ function annotationEntries(reader: JumpReader): Entry[] {
 
 let open = false;
 
-function showPopup(reader: JumpReader, title: string, entries: Entry[], empty: string) {
+export function showPopup(reader: JumpReader, title: string, entries: Entry[], empty: string) {
 	if (open) return;
 	open = true;
 
@@ -134,7 +135,7 @@ function showPopup(reader: JumpReader, title: string, entries: Entry[], empty: s
 		const query = input.value.trim();
 		shown = query
 			? entries
-				.map(entry => ({ entry, score: fuzzyScore(query, entry.label) }))
+				.map(entry => ({ entry, score: fuzzyScore(query, entry.search ?? entry.label) }))
 				.filter(m => m.score >= 0)
 				.sort((a, b) => b.score - a.score)
 				.map(m => m.entry)
