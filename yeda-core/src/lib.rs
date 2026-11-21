@@ -45,26 +45,22 @@ pub fn require_https(url: &str) -> anyhow::Result<()> {
 }
 
 /// The part of an environment variable's name that identifies the server of `url`: its host
-/// uppercased, `.` as `_` and `-` as `__`, then `_<port>` if there is one. `None` where the name
-/// would not identify one server: no `https://`, userinfo, an IP address, or a label `alias`, which
-/// would let a host impersonate an aliased variable.
+/// uppercased, `.` as `_` and `-` as `__`, then `_<port>` (443 if the URL has none). The port is
+/// always there so that a host's last label cannot pass for one. `None` where the name would not
+/// identify one server: no `https://`, userinfo, an IPv6 address, or a label that is empty or
+/// starts or ends with `-`.
 pub fn env_host(url: &str) -> Option<String> {
     let authority = url.strip_prefix("https://")?.split(['/', '?', '#']).next()?;
     let (host, port) = match authority.split_once(':') {
-        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, Some(port)),
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => (host, port),
         Some(_) => return None,
-        None => (authority, None),
+        None => (authority, "443"),
     };
-    let valid = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
-    let last = host.rsplit('.').next().unwrap_or_default();
-    if !valid || last.bytes().all(|b| b.is_ascii_digit()) || host.split('.').any(|l| l.eq_ignore_ascii_case("alias")) {
+    let label = |l: &str| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !host.split('.').all(label) {
         return None;
     }
-    let host = host.to_ascii_uppercase().replace('.', "_").replace('-', "__");
-    Some(match port {
-        Some(port) => format!("{host}_{port}"),
-        None => host,
-    })
+    Some(format!("{}_{port}", host.to_ascii_uppercase().replace('.', "_").replace('-', "__")))
 }
 
 /// Refuses an alias that cannot be part of an environment variable's name.
@@ -93,9 +89,12 @@ mod tests {
 
     #[test]
     fn env_host_names_one_server() {
-        assert_eq!(env_host("https://api.anthropic.com/v1").as_deref(), Some("API_ANTHROPIC_COM"));
+        assert_eq!(env_host("https://api.anthropic.com/v1").as_deref(), Some("API_ANTHROPIC_COM_443"));
+        assert_eq!(env_host("https://api.anthropic.com:443").as_deref(), Some("API_ANTHROPIC_COM_443"));
         assert_eq!(env_host("https://my-llm.lan:8443").as_deref(), Some("MY__LLM_LAN_8443"));
-        for bad in ["http://a.example", "https://u@a.example", "https://[::1]:1", "https://10.0.0.1", "https://h.80", "https://x.alias.work", "https://a.example:"] {
+        assert_eq!(env_host("https://10.0.0.1").as_deref(), Some("10_0_0_1_443"));
+        assert_ne!(env_host("https://h.80"), env_host("https://h:80"));
+        for bad in ["http://a.example", "https://u@a.example", "https://[::1]:1", "https://a..b", "https://h.", "https://-a.b", "https://a-.b", "https://a.example:"] {
             assert_eq!(env_host(bad), None, "{bad}");
         }
     }

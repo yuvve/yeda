@@ -173,15 +173,15 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
-An environment variable overrides the secret store. Its name follows the server's host, uppercased, with `.` as `_` and `-` as `__`, and the port appended if there is one:
+An environment variable overrides the secret store. Its name follows the server's host, uppercased, with `.` as `_` and `-` as `__`, and the port appended (443 unless the URL gives one):
 
 | Secret | Variable |
 | --- | --- |
-| LLM provider at `https://api.anthropic.com/v1` | `YEDA_KEY_API_ANTHROPIC_COM` |
+| LLM provider at `https://api.anthropic.com/v1` | `YEDA_KEY_API_ANTHROPIC_COM_443` |
 | LLM provider at `https://my-llm.lan:8443` | `YEDA_KEY_MY__LLM_LAN_8443` |
-| WebDAV location at `https://dav.example.com/yeda/` | `YEDA_DAV_DAV_EXAMPLE_COM` |
-| OpenAlex | `YEDA_KEY_API_OPENALEX_ORG` |
-| Keenable, Exa, Parallel, Firecrawl | `YEDA_KEY_API_KEENABLE_AI`, `YEDA_KEY_API_EXA_AI`, `YEDA_KEY_API_PARALLEL_AI`, `YEDA_KEY_API_FIRECRAWL_DEV` |
+| WebDAV location at `https://dav.example.com/yeda/` | `YEDA_DAV_DAV_EXAMPLE_COM_443` |
+| OpenAlex | `YEDA_KEY_API_OPENALEX_ORG_443` |
+| Keenable, Exa, Parallel, Firecrawl | `YEDA_KEY_API_KEENABLE_AI_443`, `YEDA_KEY_API_EXA_AI_443`, `YEDA_KEY_API_PARALLEL_AI_443`, `YEDA_KEY_API_FIRECRAWL_DEV_443` |
 
 `:secrets` shows each variable and whether it is set. Providers and WebDAV locations on the same host share one variable. To give each its own, set an `alias` (letters and digits, unique per host) in `yeda.toml` or in the setup form; the variable `YEDA_KEY_<HOST>_ALIAS_<ALIAS>` then wins over the shared one:
 
@@ -190,10 +190,10 @@ An environment variable overrides the secret store. Its name follows the server'
 base_url = "https://api.anthropic.com"
 protocol = "anthropic"
 auth     = "api-key"
-alias    = "work"        # YEDA_KEY_API_ANTHROPIC_COM_ALIAS_WORK
+alias    = "work"        # YEDA_KEY_API_ANTHROPIC_COM_443_ALIAS_WORK
 ```
 
-WebDAV locations take the same `alias`, as in `dav = { url = "…", user = "me", alias = "work" }`. Servers addressed by an IP number get no variable. Codex credentials are not renewed while they come from a variable. A rejected variable is reported, not asked for again, and is only changed by restarting yeda. The server's host is in the name so that a shared `yeda.toml` pointing a provider elsewhere finds no variable to send there.
+WebDAV locations take the same `alias`, as in `dav = { url = "…", user = "me", alias = "work" }`. A server whose host ends in a label `alias` gets a variable only with an alias; IPv6 addresses get none. Codex credentials are not renewed while they come from a variable. A rejected variable is reported, not asked for again, and is only changed by restarting yeda. The server's host is in the name so that a shared `yeda.toml` pointing a provider elsewhere finds no variable to send there.
 
 ## Keys and commands
 

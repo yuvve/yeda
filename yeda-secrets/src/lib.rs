@@ -61,7 +61,9 @@ pub fn env_names(account: &str, alias: Option<&str>) -> Vec<String> {
     let Some(host) = yeda_core::env_host(url) else { return Vec::new() };
     let base = format!("YEDA_{prefix}_{host}");
     let alias = alias.filter(|a| yeda_core::check_alias(a).is_ok());
-    alias.map(|a| format!("{base}_ALIAS_{}", a.to_ascii_uppercase())).into_iter().chain([base]).collect()
+    // A host whose last label is `alias` would read the variable of another host with an alias.
+    let impersonates = base.rsplit_once("_ALIAS_").is_some_and(|(_, tail)| !tail.contains('_'));
+    alias.map(|a| format!("{base}_ALIAS_{}", a.to_ascii_uppercase())).into_iter().chain([base].into_iter().filter(|_| !impersonates)).collect()
 }
 
 /// The first of `account`'s environment variables that is set and not empty, with its value.
@@ -142,14 +144,24 @@ mod tests {
     fn env_names_follow_the_host() {
         let names = |a: &str, alias| super::env_names(a, alias);
         let claude = super::provider_account("claude", "https://api.anthropic.com/v1");
-        assert_eq!(names(&claude, None), ["YEDA_KEY_API_ANTHROPIC_COM"]);
-        assert_eq!(names(&claude, Some("work")), ["YEDA_KEY_API_ANTHROPIC_COM_ALIAS_WORK", "YEDA_KEY_API_ANTHROPIC_COM"]);
-        assert_eq!(names(&claude, Some("my-work")), ["YEDA_KEY_API_ANTHROPIC_COM"]);
-        assert_eq!(names(&super::webdav_account("me", "https://dav.example.com/yeda/"), Some("a")), ["YEDA_DAV_DAV_EXAMPLE_COM_ALIAS_A", "YEDA_DAV_DAV_EXAMPLE_COM"]);
-        assert_eq!(names(super::OPENALEX, None), ["YEDA_KEY_API_OPENALEX_ORG"]);
-        assert_eq!(names(super::FIRECRAWL, None), ["YEDA_KEY_API_FIRECRAWL_DEV"]);
+        assert_eq!(names(&claude, None), ["YEDA_KEY_API_ANTHROPIC_COM_443"]);
+        assert_eq!(names(&claude, Some("work")), ["YEDA_KEY_API_ANTHROPIC_COM_443_ALIAS_WORK", "YEDA_KEY_API_ANTHROPIC_COM_443"]);
+        assert_eq!(names(&claude, Some("my-work")), ["YEDA_KEY_API_ANTHROPIC_COM_443"]);
+        assert_eq!(names(&super::webdav_account("me", "https://dav.example.com/yeda/"), Some("a")), ["YEDA_DAV_DAV_EXAMPLE_COM_443_ALIAS_A", "YEDA_DAV_DAV_EXAMPLE_COM_443"]);
+        assert_eq!(names(super::OPENALEX, None), ["YEDA_KEY_API_OPENALEX_ORG_443"]);
+        assert_eq!(names(super::FIRECRAWL, None), ["YEDA_KEY_API_FIRECRAWL_DEV_443"]);
         assert!(names(&super::git_account("https://github.com/a/b"), None).is_empty());
         assert!(names(&super::provider_account("x", "http://plain.example"), None).is_empty());
+    }
+
+    #[test]
+    fn an_aliased_name_cannot_be_another_hosts() {
+        let account = |url| super::provider_account("p", url);
+        // x.5.alias:443 would read the variable of host x, port 5, alias 443.
+        assert!(super::env_names(&account("https://x.5.alias"), None).is_empty());
+        assert_eq!(super::env_names(&account("https://x.5.alias"), Some("w")), ["YEDA_KEY_X_5_ALIAS_443_ALIAS_W"]);
+        assert_eq!(super::env_names(&account("https://x.alias.work"), None), ["YEDA_KEY_X_ALIAS_WORK_443"]);
+        assert_eq!(super::env_names(&account("https://x:5"), Some("443")), ["YEDA_KEY_X_5_ALIAS_443", "YEDA_KEY_X_5"]);
     }
 
     #[test]
@@ -157,9 +169,9 @@ mod tests {
         let account = super::provider_account("a", "https://env-test.example");
         // SAFETY: no other test reads these variables.
         unsafe {
-            std::env::set_var("YEDA_KEY_ENV__TEST_EXAMPLE", "shared");
+            std::env::set_var("YEDA_KEY_ENV__TEST_EXAMPLE_443", "shared");
             assert_eq!(super::from_env(&account, Some("one")).as_deref(), Some("shared"));
-            std::env::set_var("YEDA_KEY_ENV__TEST_EXAMPLE_ALIAS_ONE", "own");
+            std::env::set_var("YEDA_KEY_ENV__TEST_EXAMPLE_443_ALIAS_ONE", "own");
         }
         assert_eq!(super::from_env(&account, Some("one")).as_deref(), Some("own"));
         assert_eq!(super::from_env(&account, Some("two")).as_deref(), Some("shared"));
