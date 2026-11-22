@@ -14,8 +14,17 @@ interface JumpAnnotation {
 	comment?: string;
 }
 
+interface OutlineView {
+	_updateOutlineData(): void;
+	_documentData: {
+		setOutlineActive(active: boolean): void;
+		_resolveOutline(): Promise<unknown> | null;
+	};
+}
+
 export interface JumpReader {
 	_state: { outline: OutlineItem[] | null; annotations: JumpAnnotation[] };
+	initializedPromise: Promise<unknown>;
 	navigate(location: object, options?: object): void;
 	focusView(): void;
 }
@@ -81,9 +90,11 @@ function annotationEntries(reader: JumpReader): Entry[] {
 
 let open = false;
 
+/** Returns a function that replaces the entries while the popup is open; undefined when one already is. */
 export function showPopup(reader: JumpReader, title: string, entries: Entry[], empty: string) {
 	if (open) return;
 	open = true;
+	let closed = false;
 
 	const overlay = document.createElement('div');
 	overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;justify-content:center;align-items:flex-start;padding-top:10vh;background:rgba(0,0,0,.3)';
@@ -147,6 +158,7 @@ export function showPopup(reader: JumpReader, title: string, entries: Entry[], e
 	const close = () => {
 		overlay.remove();
 		open = false;
+		closed = true;
 		reader.focusView();
 	};
 	const choose = (entry: Entry) => {
@@ -177,11 +189,35 @@ export function showPopup(reader: JumpReader, title: string, entries: Entry[], e
 	document.body.append(overlay);
 	filter();
 	input.focus();
+
+	return (newEntries: Entry[], newEmpty: string) => {
+		if (closed) return;
+		entries = newEntries;
+		empty = newEmpty;
+		filter();
+	};
+}
+
+// The reader only loads the outline while the sidebar shows it, and cancels the load when the sidebar changes.
+async function loadOutline(reader: JumpReader) {
+	await reader.initializedPromise;
+	const view = (reader as unknown as { _primaryView: OutlineView })._primaryView;
+	view._updateOutlineData = () => view._documentData.setOutlineActive(true);
+	view._updateOutlineData();
+	await view._documentData._resolveOutline();
 }
 
 export function showToc(reader: JumpReader) {
-	const empty = reader._state.outline === null ? 'Loading the table of contents…' : 'This PDF has no table of contents';
-	showPopup(reader, 'Jump to section', tocEntries(reader), empty);
+	const none = 'This PDF has no table of contents';
+	if (reader._state.outline !== null) {
+		showPopup(reader, 'Jump to section', tocEntries(reader), none);
+		return;
+	}
+	const update = showPopup(reader, 'Jump to section', [], 'Loading the table of contents…');
+	if (!update) return;
+	loadOutline(reader)
+		.catch(console.error)
+		.finally(() => update(tocEntries(reader), none));
 }
 
 export function showAnnotations(reader: JumpReader) {
