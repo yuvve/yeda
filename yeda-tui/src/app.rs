@@ -51,6 +51,8 @@ pub enum Mode {
     Discover,
     /// The papers `:discover` found.
     Found,
+    /// The plan `:do` made, waiting to be approved.
+    Plan,
     /// git's output from `:sync` or `:git-init`.
     Git,
     /// `:diff`: the changes since the last commit.
@@ -383,10 +385,15 @@ struct GraphJob {
     focus: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Batch {
     step: undo::Step,
     /// The collection new references go into.
     collection: Option<String>,
+    /// Whether references already in the library join `collection` too (`:add --to`).
+    join_existing: bool,
+    /// Mark what the batch added or found, so the next command of a `:do` plan acts on it.
+    mark_result: bool,
     todo: std::collections::VecDeque<String>,
     total: usize,
     added: Vec<String>,
@@ -554,6 +561,11 @@ pub struct App {
     /// The next `action` call was confirmed already.
     confirmed: bool,
     discover_job: Option<Receiver<crate::discover::Msg>>,
+    assist_job: Option<Receiver<Result<String, String>>>,
+    /// The plan `:do` made, shown until approved or cancelled.
+    pub plan: Option<yeda_core::assist::Plan>,
+    /// Commands of an approved plan still to run, each once the one before is done.
+    plan_queue: std::collections::VecDeque<String>,
     /// How the last :discover answered, if the user should know (no web search).
     pub found_note: Option<String>,
     pub found: Vec<Candidate>,
@@ -694,6 +706,9 @@ impl App {
             confirming: None,
             confirmed: false,
             discover_job: None,
+            assist_job: None,
+            plan: None,
+            plan_queue: Default::default(),
             discover_form: None,
             found_note: None,
             found: Vec::new(),
@@ -972,6 +987,7 @@ impl App {
             Mode::WebSearch => self.websearch_key(k),
             Mode::Discover => self.discover_form_key(k),
             Mode::Found => self.found_key(k),
+            Mode::Plan => self.plan_key(k),
             Mode::Git => self.git_key(k),
             Mode::Diff => self.diff_key(k),
             Mode::Sort => self.sort_key(k),
@@ -1280,7 +1296,13 @@ impl App {
             "close-or-quit" if self.right == RightView::Annotations => self.back_to_details(),
             "close-or-quit" => self.quit = true,
             "add" if args.is_empty() => self.mode = Mode::Prompt(Prompt::Add),
-            "add" => self.submit(Prompt::Add, args),
+            "add" => match options(args, &["to"], &[]) {
+                Ok((opts, rest)) => match opts.get("to").and_then(|v| v.last()) {
+                    Some(to) => self.add_to(to, &rest),
+                    None => self.submit(Prompt::Add, args),
+                },
+                Err(e) => self.status = format!("{e:#}"),
+            },
             _ => return false,
         }
         true
@@ -2522,7 +2544,7 @@ impl App {
                         self.mode = back;
                         let todo: std::collections::VecDeque<String> = ids::split_ids(&text).into_iter().map(Into::into).collect();
                         self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
-                        self.job = Some(Job::Fetch(Batch { step: self.step.clone(), collection, total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
+                        self.job = Some(Job::Fetch(Batch { step: self.step.clone(), collection, join_existing: false, mark_result: !self.plan_queue.is_empty(), total: todo.len(), todo, added: vec![], existed: vec![], failed: vec![] }));
                     }
                     (PickKind::Tags, Pick::Unfile) => {}
                 }
@@ -2602,6 +2624,11 @@ impl App {
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
                 ("envvars", _) => self.open_envvars(),
+                ("do", args) => {
+                    if let Err(e) = self.assist(args, text) {
+                        self.status = format!("{e:#}");
+                    }
+                }
                 (cmd @ ("discover" | "discover!"), args) => {
                     if let Err(e) = self.discover(args, text, cmd.ends_with('!')) {
                         self.status = format!("{e:#}");
@@ -3047,6 +3074,69 @@ impl App {
         };
     }
 
+    /// `:do`: asks the LLM for a plan for `args`; the plan is shown for approval when it arrives.
+    fn assist(&mut self, args: &str, command: &str) -> anyhow::Result<()> {
+        let (opts, request) = options(args, &["llm"], &[])?;
+        anyhow::ensure!(!request.trim().is_empty(), "usage: :do [--llm <profile>] <request>");
+        anyhow::ensure!(self.assist_job.is_none() && self.plan.is_none() && self.plan_queue.is_empty(), "a plan is already pending or running");
+        let (name, profile) = self.lib.llm_profile(opts.get("llm").and_then(|v| v.last()).copied())?;
+        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        let marked = !self.marked.is_empty();
+        let targets: Vec<&Ref> = self.targets().into_iter().map(|i| &self.lib.refs[i]).collect();
+        let usage: Vec<(String, &str)> = COMMANDS.iter().map(|(u, m)| (u.to_string(), *m)).chain(ACTIONS.iter().map(|(a, m)| (a.to_string(), *m))).collect();
+        let usage: Vec<(&str, &str)> = usage.iter().map(|(u, m)| (u.as_str(), *m)).collect();
+        let text = yeda_core::assist::request(&usage, &self.lib, &targets, marked, &request);
+        self.status = format!("asking {name} at {} for a plan…", profile.url());
+        self.assist_job = Some(crate::assist::spawn(profile, key, text));
+        Ok(())
+    }
+
+    pub fn poll_assist(&mut self) {
+        let Some(rx) = &self.assist_job else { return };
+        let answer = match rx.try_recv() {
+            Ok(answer) => answer,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the request stopped".into()),
+        };
+        self.assist_job = None;
+        match answer.map_err(anyhow::Error::msg).and_then(|a| yeda_core::assist::parse_plan(&a)) {
+            Ok(plan) if plan.steps.is_empty() => self.status = plan.reply,
+            Ok(plan) => {
+                self.plan = Some(plan);
+                self.mode = Mode::Plan;
+            }
+            Err(e) => self.status = format!("do: {e:#}"),
+        }
+    }
+
+    fn plan_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Enter => {
+                self.plan_queue = self.plan.take().map(|p| p.steps.into_iter().map(|s| s.command).collect()).unwrap_or_default();
+                self.mode = Mode::Normal;
+                self.status = format!("running {} steps…", self.plan_queue.len());
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.plan = None;
+                self.mode = Mode::Normal;
+                self.status = "cancelled".into();
+            }
+            _ => {}
+        }
+    }
+
+    /// Runs the approved plan's next command once the one before has finished; called from the event loop.
+    pub fn poll_plan(&mut self) {
+        if self.mode != Mode::Normal || self.job.is_some() || !self.busy().is_empty() {
+            return;
+        }
+        let Some(command) = self.plan_queue.pop_front() else { return };
+        self.log.write(&format!("do: {command}"));
+        self.confirmed = true;
+        self.submit(Prompt::Command, &command);
+        self.confirmed = false;
+    }
+
     pub fn poll_discover(&mut self) {
         let Some(rx) = &self.discover_job else { return };
         loop {
@@ -3201,6 +3291,7 @@ impl App {
     pub fn busy(&self) -> Vec<&'static str> {
         [
             (self.discover_job.is_some(), "discover"),
+            (self.assist_job.is_some(), "plan"),
             (self.summarizer.is_some(), "summarize"),
             (self.fetch_job.is_some(), "fetch"),
             (self.setup_job.is_some(), "connection test"),
@@ -3723,11 +3814,39 @@ impl App {
         }
     }
 
+    /// `:add --to <collection> ids`: adds without the collection picker.
+    fn add_to(&mut self, collection: &str, ids_text: &str) {
+        let todo: std::collections::VecDeque<String> = ids::split_ids(ids_text).into_iter().map(Into::into).collect();
+        if todo.is_empty() || collection.trim().is_empty() {
+            self.status = "usage: :add --to <collection> <DOI, arXiv ID or ISBN …>".into();
+            return;
+        }
+        self.status = format!("fetching 1/{}: {}…", todo.len(), todo[0]);
+        let batch = Batch {
+            step: self.step.clone(),
+            collection: Some(collection.trim().to_string()),
+            join_existing: true,
+            mark_result: !self.plan_queue.is_empty(),
+            total: todo.len(),
+            todo,
+            added: vec![],
+            existed: vec![],
+            failed: vec![],
+        };
+        self.job = Some(Job::Fetch(batch));
+    }
+
     /// Fetches and saves one identifier; returns its key and whether it was already in the library.
-    fn add_one(&mut self, input: &str, collection: Option<&String>, step: &undo::Step) -> anyhow::Result<(String, bool)> {
+    fn add_one(&mut self, input: &str, collection: Option<&String>, join_existing: bool, step: &undo::Step) -> anyhow::Result<(String, bool)> {
         let mut r = wand::fetch(input)?;
         if let Some(x) = r.doi.as_deref().and_then(|d| self.lib.find_doi(d)) {
-            return Ok((x.key.clone(), true));
+            let mut x = x.clone();
+            if let Some(c) = collection.filter(|c| join_existing && !x.collections.contains(c)) {
+                x.collections.push(c.clone());
+                self.write(step, vec![self.lib.save(&x)?])?;
+                self.reload();
+            }
+            return Ok((x.key, true));
         }
         r.key = self.lib.unique_key(&r);
         r.collections = collection.into_iter().cloned().collect();
@@ -3739,7 +3858,7 @@ impl App {
     /// Adds the batch's next identifier, then queues the rest so the status line shows progress.
     fn add_next(&mut self, mut batch: Batch) {
         let Some(input) = batch.todo.pop_front() else { return self.finish_batch(batch) };
-        match self.add_one(&input, batch.collection.as_ref(), &batch.step) {
+        match self.add_one(&input, batch.collection.as_ref(), batch.join_existing, &batch.step) {
             Ok((key, true)) => batch.existed.push(key),
             Ok((key, false)) => batch.added.push(key),
             Err(e) => batch.failed.push((input, format!("{e:#}"))),
@@ -3754,6 +3873,12 @@ impl App {
     }
 
     fn finish_batch(&mut self, batch: Batch) {
+        if batch.mark_result {
+            self.marked = batch.added.iter().chain(&batch.existed).cloned().collect();
+            if self.marked.is_empty() {
+                self.plan_queue.clear();
+            }
+        }
         let mut parts = Vec::new();
         if !batch.added.is_empty() {
             parts.push(format!("added {}", batch.added.join(", ")));
@@ -4502,6 +4627,58 @@ mod tests {
         assert_eq!(super::discover_status(&found, Some(note)), format!("discover: 1 papers, 0 found in OpenAlex ({note})"));
         assert_eq!(super::discover_status(&found, None), "discover: 1 papers, 0 found in OpenAlex");
         assert_eq!(super::discover_status(&[], Some(note)), format!("discover: no papers found ({note})"));
+    }
+
+    use ratatui::crossterm::event::KeyCode;
+
+    fn plain_app() -> super::App {
+        let lib = yeda_core::library::Library::parse(None, None, [("a".to_string(), "title = \"A\"\n".to_string())], None).unwrap();
+        super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap())
+    }
+
+    #[test]
+    fn add_to_queues_the_ids_for_a_collection_existing_references_join() {
+        let mut app = plain_app();
+        app.submit(super::Prompt::Command, "add --to PhD 10.1145/3442188.3445922 arXiv:2401.00001");
+        let Some(super::Job::Fetch(batch)) = app.job.take() else { panic!("no add job") };
+        assert_eq!((batch.collection.as_deref(), batch.join_existing, batch.todo.len()), (Some("PhD"), true, 2));
+        app.submit(super::Prompt::Command, "add --to PhD");
+        assert!(app.job.is_none() && app.status.starts_with("usage: :add --to"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_plan_runs_one_step_at_a_time_and_marks_what_add_found() {
+        let mut app = plain_app();
+        app.plan = Some(yeda_core::assist::Plan {
+            steps: vec![
+                yeda_core::assist::Step { command: "add --to PhD 10.1/x".into(), reason: String::new() },
+                yeda_core::assist::Step { command: "fetch".into(), reason: String::new() },
+            ],
+            reply: String::new(),
+        });
+        app.mode = super::Mode::Plan;
+        app.plan_key(ratatui::crossterm::event::KeyEvent::from(KeyCode::Enter));
+        app.poll_plan();
+        let Some(super::Job::Fetch(mut batch)) = app.job.take() else { panic!("no add job") };
+        assert!(batch.mark_result);
+        app.job = Some(super::Job::Fetch(super::Batch { todo: Default::default(), ..batch.clone() }));
+        app.poll_plan();
+        assert_eq!(app.plan_queue.len(), 1, "the next step waits for the add to finish");
+        app.job = None;
+        batch.existed.push("a".into());
+        app.finish_batch(batch);
+        assert_eq!(app.marked.iter().collect::<Vec<_>>(), ["a"]);
+        assert_eq!(app.plan_queue.len(), 1);
+    }
+
+    #[test]
+    fn a_plan_stops_when_add_finds_nothing() {
+        let mut app = plain_app();
+        app.plan_queue = ["fetch".to_string()].into();
+        app.submit(super::Prompt::Command, "add --to PhD 10.1/x");
+        let Some(super::Job::Fetch(batch)) = app.job.take() else { panic!("no add job") };
+        app.finish_batch(batch);
+        assert!(app.plan_queue.is_empty());
     }
 
     #[test]

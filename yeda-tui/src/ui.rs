@@ -447,6 +447,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Discover => draw_discover(f, app, main),
         Mode::Found => draw_found(f, app, main),
         Mode::Git => draw_git(f, app, main),
+        Mode::Plan => draw_plan(f, app, main),
         Mode::Diff => draw_diff(f, app, main),
         Mode::Sort => draw_sort(f, app, main),
         Mode::TablePick => draw_table_pick(f, app, main),
@@ -877,6 +878,20 @@ fn draw_git(f: &mut Frame, app: &App, main: Rect) {
     f.render_widget(Clear, area);
     let title = format!(" :{} · {} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
     f.render_widget(Paragraph::new(lines.split_off(scroll_to_newest)).wrap(Wrap { trim: false }).block(block(title, true)), area);
+}
+
+fn draw_plan(f: &mut Frame, app: &App, main: Rect) {
+    let Some(plan) = &app.plan else { return };
+    let mut lines = Vec::new();
+    for (i, step) in plan.steps.iter().enumerate() {
+        lines.push(Line::from(vec![Span::raw(format!("{}. ", i + 1)), Span::styled(format!(":{}", step.command), Style::new().bold())]));
+        lines.push(Line::raw(format!("   {}", step.reason)).dim());
+    }
+    let width = main.width.saturating_sub(4).min(110);
+    let height = (lines.len() as u16 + 2).min(main.height.saturating_sub(2));
+    let area = popup(main, width, height);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(" :do · Enter runs · Esc cancels ".into(), true)), area);
 }
 
 fn draw_diff(f: &mut Frame, app: &App, main: Rect) {

@@ -1,4 +1,5 @@
 mod app;
+mod assist;
 mod citations;
 mod cli;
 mod cluster;
@@ -463,6 +464,8 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_fetch();
         app.poll_setup();
         app.poll_discover();
+        app.poll_assist();
+        app.poll_plan();
         app.poll_git();
         app.poll_text();
         app.poll_cache();

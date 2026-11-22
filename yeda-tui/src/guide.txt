@@ -310,6 +310,21 @@ THE READER  ( o, yeda read )
   the whole page, and C after that carries on where you were. It is
   remembered per paper.
 
+RUNNING COMMANDS FROM A REQUEST  ( :do [--llm <profile>] <request> )
+
+  :do asks the LLM for the commands that do what you wrote, such as
+  :do add 10.1145/3442188.3445922 to a collection called PhD and fetch
+  its pdf. A popup lists them, each with a reason; Enter runs them one
+  after another, Esc cancels. u afterwards undoes all of them. After an
+  add step the references it added, or found already in the library, are
+  marked, so the next steps act on them. A plan holds only :add, :fetch,
+  :summarize, :discover, :cache, :extract, :cite, :table, :graph,
+  :export, :save and :sync. :add --to <collection> files into that
+  collection without asking, and adds it to references already in the
+  library too. The request, the collection, tag, table and location
+  names, and the titles of the marked (else selected) references go to
+  the LLM server.
+
 FINDING PAPERS  ( :discover[!] [--like] [--llm <profile>] [what] )
 
   :discover asks the default LLM profile, or the one --llm names, for

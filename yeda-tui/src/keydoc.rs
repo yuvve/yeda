@@ -66,7 +66,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
 ];
 
 pub const COMMANDS: &[(&str, &str)] = &[
-    (":add [DOI, arXiv ID or ISBN …]", "add these, or the ones typed in a prompt"),
+    (":add [--to <collection>] [DOI, arXiv ID or ISBN …]", "add these, or the ones typed in a prompt; with --to, into that collection without asking, and references already in the library join it too"),
+    (":do [--llm <profile>] <request>", "have the LLM turn a request into commands, such as add, fetch and summarize; you approve the plan before it runs, and undo takes it all back"),
     (":save <name>", "save the current search"),
     (":summarize[!] [table] [--llm <profile>]", "fill the reference's table row with an LLM; ! overwrites"),
     (":cancel", "stop summarizing after the current paper"),
