@@ -12,6 +12,7 @@
 
 ## Interface
 - A command acts on the selected reference, or on the marked ones when there are any. Don't add a separate command for every reference (like the former `:summarize-all`): marking the whole list (`V G`) covers it.
+- A command that needs references acts on the marked ones, else the selected one. A command where references are optional (`:discover`) uses only the marked ones, so the user marks first (`v`, `V`) and then calls it.
 
 ## Testing
 - `cargo test --workspace`; `npx tsc --noEmit` in yeda-android.

@@ -306,8 +306,8 @@ FINDING PAPERS  ( :discover[!] [--like] [--llm <profile>] [what] )
 
   :discover asks the default LLM profile, or the one --llm names, for
   papers from what you give it: a description (:discover swarm
-  exploration under comms loss) and, with --like, the marked references,
-  else the selected one. Nothing else goes along. Without either,
+  exploration under comms loss) and, with --like, the marked references.
+  The selected one never goes along. Without either,
   :discover opens a form that starts with the marked papers: a adds a
   paper, or edits the text under "Looking for", d removes one, ←/→ picks
   the LLM, Enter searches and ! searches without cached results. The
