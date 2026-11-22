@@ -15,6 +15,7 @@ interface JumpAnnotation {
 }
 
 interface OutlineView {
+	initializedPromise: Promise<unknown>;
 	_updateOutlineData(): void;
 	_documentData: {
 		setOutlineActive(active: boolean): void;
@@ -24,7 +25,6 @@ interface OutlineView {
 
 export interface JumpReader {
 	_state: { outline: OutlineItem[] | null; annotations: JumpAnnotation[] };
-	initializedPromise: Promise<unknown>;
 	navigate(location: object, options?: object): void;
 	focusView(): void;
 }
@@ -200,8 +200,9 @@ export function showPopup(reader: JumpReader, title: string, entries: Entry[], e
 
 // The reader only loads the outline while the sidebar shows it, and cancels the load when the sidebar changes.
 async function loadOutline(reader: JumpReader) {
-	await reader.initializedPromise;
+	// The reader's own initializedPromise never resolves; the view's does.
 	const view = (reader as unknown as { _primaryView: OutlineView })._primaryView;
+	await view.initializedPromise;
 	view._updateOutlineData = () => view._documentData.setOutlineActive(true);
 	view._updateOutlineData();
 	await view._documentData._resolveOutline();
