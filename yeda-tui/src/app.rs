@@ -165,7 +165,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover[!] [--like] [--llm <profile>] [what]", "ask the LLM for papers like the marked or selected ones (--like), or as described, searching the web and arXiv; with neither it opens a form; ! skips cached results; v marks, a adds"),
+    (":discover[!] [--like] [--llm <profile>] [what]", "ask the LLM for papers like the marked ones (--like), or as described, searching the web and arXiv; with neither it opens a form; ! skips cached results; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
@@ -2974,9 +2974,8 @@ impl App {
             return Ok(());
         }
         let from: Vec<Ref> = if like {
-            let targets = self.targets();
-            anyhow::ensure!(!targets.is_empty(), "--like needs a marked or selected reference");
-            targets.iter().map(|&i| self.lib.refs[i].clone()).collect()
+            anyhow::ensure!(!self.marked.is_empty(), "--like needs marked references (v, V)");
+            self.lib.refs.iter().filter(|r| self.marked.contains(&r.key)).cloned().collect()
         } else {
             Vec::new()
         };
