@@ -12,13 +12,14 @@ I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the 
 yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder.
 
 From one terminal window, with vim keys, you can:
-- add references by DOI, arXiv ID or ISBN, type them in, or import your whole Zotero library;
-- organize them with collections, tags, reading status, search and saved searches;
-- read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes;
-- find PDFs, open access or through your library's proxy;
-- explore citation graphs of what a paper cites and what cites it;
-- compare papers in literature tables an LLM fills in, and find related papers;
-- cite as BibTeX or in a citation style.
+- add references by DOI, arXiv ID or ISBN (`:add`), type them in (`:new`), or import your whole Zotero library (`yeda import`);
+- organize them with collections, tags, reading status, search and saved searches (`:save`);
+- read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes (`o`, `n`);
+- find PDFs, open access or through your library's proxy (`:fetch`);
+- explore citation graphs of what a paper cites and what cites it (`:graph`);
+- compare papers in literature tables an LLM fills in (`:summarize`, `:table`), and find related papers (`:discover`);
+- cite as BibTeX or in a citation style (`:cite`);
+- sync the library with git (`:sync`).
 
 An Android app reads and annotates the same library.
 
@@ -65,13 +66,13 @@ yeda            # open it
 
 ![Main window](screenshots/main.png)
 
-Three columns: the library (collections, tags and saved searches), the list of references, and a details column that can also show annotations, a literature table or a citation graph. References show their reading status (new, to read, in progress, read) and a dot per coloured tag. Several references can be marked to act on together. A narrow terminal hides the details column, then the library. Alternate rows are shaded a little lighter than the terminal's background, on terminals that report it.
+Three columns: the library (collections, tags and saved searches), the list of references, and a details column that can also show annotations, a literature table or a citation graph. References show their reading status (new, to read, in progress, read) and a dot per coloured tag. Several references can be marked to act on together (`v`). The details column also shows annotations (`A`), a literature table (`:table`) or a citation graph (`:graph`). A narrow terminal hides the details column, then the library. Alternate rows are shaded a little lighter than the terminal's background, on terminals that report it.
 
 ## Reading and annotating
 
-References open in yeda's own PDF reader, controlled with vim keys. It highlights, underlines, and adds notes, text, image areas and ink. Annotations are saved in the library next to the paper, so the Android app shows them too. The reader has fuzzy-searchable lists of the PDF's sections, its annotations and its own keys.
+References open in yeda's own PDF reader (`o`), controlled with vim keys. It highlights, underlines, and adds notes, text, image areas and ink. Annotations are saved in the library next to the paper, so the Android app shows them too. `A` lists them, and `x` extracts the ones embedded in the PDF. The reader has fuzzy-searchable lists of the PDF's sections, its annotations and its own keys.
 
-Column mode reads a two-column paper one column at a time, each as wide as the window, a screen per page turn. The columns' position is set by dragging a crop box and the gutter over the page, and a new paper starts with the last ones set.
+Column mode (`C`) reads a two-column paper one column at a time, each as wide as the window, a screen per page turn. The columns' position is set by dragging a crop box and the gutter over the page, and a new paper starts with the last ones set.
 
 ![Reader](screenshots/reader.png)
 
@@ -89,18 +90,18 @@ pdfs = "/mnt/papers"
 
 `reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF.
 
-LLM providers and profiles, WebDAV locations, the OpenAlex key, web search, library proxies and tables are set up in forms inside yeda and stored in the library's `yeda.toml`.
+`:setup` sets up LLM providers and profiles, WebDAV locations, the OpenAlex key, web search, library proxies and tables in forms, stored in the library's `yeda.toml`. `:config` edits `yeda.toml` or `config.toml` directly.
 
 ## Graphs
 
-A citation graph of a paper, or of several marked ones, with years as rows and the newest at the top:
+`:graph` draws a citation graph of a paper, or of several marked ones, with years as rows and the newest at the top:
 
 ![Citation graph](screenshots/graph.png)
 
 - ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
 - yellow lines go to papers the selected one cites, magenta lines come from papers citing it
 
-A paper in the graph can be opened to grow the graph from it, or added to the library. Papers can also be grouped by their tags or by a literature table column. Data comes from OpenAlex and is cached.
+A paper in the graph can be opened to grow the graph from it, or added to the library. `:graph tags` and `:graph col <column>` group papers by their tags or by a literature table column instead. Data comes from OpenAlex and is cached.
 
 ## LLM features
 
@@ -135,15 +136,15 @@ group = "The topic it works on: a short label many papers share."
 subproblem = "The problem it tackles and why earlier work falls short."
 ```
 
-The LLM reads each selected paper and fills in its row. It also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
+`:summarize` has the LLM read each selected paper and fill in its row. It also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
 
-Cells can be read in full, edited, sorted and filtered. A table exports to CSV and imports back, and the graph can cluster papers by a column's values.
+Cells can be read in full, edited, sorted and filtered. A table exports to CSV (`:export`) and imports back (`yeda import-table`), and the graph can cluster papers by a column's values.
 
 ![Literature table](screenshots/table.png)
 
 ### Finding papers
 
-Discovery finds papers that are not in the library. Given some seed papers (the marked ones), a description of what to look for and an LLM, yeda searches the web and arXiv, and the model ranks what it finds. Results can be added to the library. The search providers are configurable.
+`:discover` finds papers that are not in the library. Given some seed papers (the marked ones), a description of what to look for and an LLM, yeda searches the web and arXiv, and the model ranks what it finds. Results can be added to the library. The search providers are configurable (`:setup web-search`).
 
 ```toml
 [web_search]
@@ -159,15 +160,15 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 ## Secrets
 
-Passwords and API keys are stored in the system secret store (GNOME Keyring, KWallet or KeePassXC); yeda asks for a missing one and offers to save it. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by discovery. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
+Passwords and API keys are stored in the system secret store (GNOME Keyring, KWallet or KeePassXC); yeda asks for a missing one and offers to save it, and `:secrets` lists and changes them. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by discovery. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
-Environment variables can serve as a fallback or an alternative to the secret store, and override it.
+Environment variables can serve as a fallback or an alternative to the secret store, and override it (`:envvars` lists the names).
 
 ## Keys and commands
 
 ![The ? key list](screenshots/keys.png)
 
-Every action is a command, bound to keys that can be changed in `config.toml`. A built-in key list and guide are available inside yeda.
+Every action is a command, bound to keys that can be changed in `config.toml`. [Every key and command](KEYS.md) and [the reader's keys](../yeda-reader/KEYS.md) are listed, generated from the code at build time. Inside yeda, `?` shows the key list and `:help` the guide.
 
 ## Scripting
 

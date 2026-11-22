@@ -6,6 +6,7 @@ mod complete;
 mod discover;
 mod discoverform;
 mod fetch;
+mod keydoc;
 mod keys;
 mod log;
 mod ops;
