@@ -290,6 +290,6 @@ mod tests {
         let all = query_request("robots", &keywords, &[&r], 2);
         assert!(all.contains("robots") && all.contains("<untrusted-keywords>") && all.contains("<untrusted-titles>"));
         assert!(ranking_request("", &[], &[], 3).starts_with("\n<untrusted-candidates>"));
-        assert!(ranking_request("robots", &keywords, &[], 3).contains("Keywords: swarm, comms>"));
+        assert!(ranking_request("robots", &keywords, &[], 3).contains("Keywords: swarm, comms-keywords>"));
     }
 }
