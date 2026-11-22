@@ -12,7 +12,7 @@ I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the 
 yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder.
 
 From one terminal window, with vim keys, you can:
-- add references by DOI, arXiv ID or ISBN, type them in (`:new`), or import your whole Zotero library;
+- add references by DOI, arXiv ID or ISBN, type them in, or import your whole Zotero library;
 - organize them with collections, tags, reading status, search and saved searches;
 - read and annotate PDFs in the built-in reader, a modified version of Zotero's PDF reader that supports Zotero annotations, and keep Markdown notes;
 - find PDFs, open access or through your library's proxy;
@@ -34,7 +34,7 @@ To run it:
 - WebKitGTK 4.1, for the PDF reader;
 - poppler (`pdftotext`, `pdftoppm`), for full-text search, annotation extraction and summaries;
 - a running Secret Service provider (GNOME Keyring, KWallet or KeePassXC) to save passwords and API keys;
-- git, for `:sync`;
+- git, for syncing the library;
 - glibc 2.34 or later, for the release binary.
 
 ## Usage
@@ -53,32 +53,25 @@ yeda            # open it
 
 `yeda <library dir>` opens a specific library. Without one, yeda opens the current folder if it is a library, else the default library.
 
-> **Inside yeda, press `?` for every key and command, and type `:help` for the full guide.**
+> **yeda has a built-in key list and a full guide.**
 
 ## Getting started
 
 `yeda init` creates an empty library. A form asks for its folder, where its PDFs go (a local folder, a WebDAV folder, or none yet), and whether it becomes the default library. The library is ready for git and Syncthing.
 
-`yeda import` creates a library from Zotero's; run it instead of `yeda init`. The same form also asks for Zotero's data folder. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
+`yeda import` creates a library from Zotero's instead. It imports the items, annotations, notes, tag colours and saved searches, and copies every PDF to the chosen place, whether Zotero stored it, linked it, or only has it on its WebDAV server. Zotero can stay open; it is only read.
 
 ## Main window
 
 ![Main window](screenshots/main.png)
 
-- **Library**: pick a collection, tag or saved search to filter the list.
-- **References**: your papers, with their reading status (✦ new, ○ to read, ◐ in progress, ● read; `r` changes it) and a dot per coloured tag. `/` searches, `s` sorts, `v` marks papers to act on together.
-- **Right column**: details of the selected paper by default; `:graph`, `A` (annotations) and `T` (table) show something else there.
-- **Bottom line**: messages, and what you type after `:` or `/`.
-
-`h`/`l` or `Tab` move between columns, `j`/`k` move within one, and `c` shows the current column alone. A narrow terminal hides the right column, then the library.
-
-Every other row of the reference list and of a literature table is shaded a little lighter than the terminal's own background, so a line is easy to follow across the window. A terminal that does not report its background gets plain rows.
+Three columns: the library (collections, tags and saved searches), the list of references, and a details column that can also show annotations, a literature table or a citation graph. References show their reading status (new, to read, in progress, read) and a dot per coloured tag. Several references can be marked to act on together. A narrow terminal hides the details column, then the library. Alternate rows are shaded a little lighter than the terminal's background, on terminals that report it.
 
 ## Reading and annotating
 
-`o` opens the selected paper's PDF in yeda's reader, which you control with vim keys. There you highlight, underline, and add notes, text, image areas and ink. Annotations are saved in the library, next to the paper, so the Android app shows them too. `A` lists them in the right column.
+References open in yeda's own PDF reader, controlled with vim keys. It highlights, underlines, and adds notes, text, image areas and ink. Annotations are saved in the library next to the paper, so the Android app shows them too. The reader has fuzzy-searchable lists of the PDF's sections, its annotations and its own keys.
 
-Column mode (`C`, or the two-columns button in the reader's toolbar) reads a two-column paper one column at a time, each as wide as the window, a screen per page turn. The button next to it sets where the columns are, by dragging a crop box and the gutter over the page; a new paper starts with the last ones set.
+Column mode reads a two-column paper one column at a time, each as wide as the window, a screen per page turn. The columns' position is set by dragging a crop box and the gutter over the page, and a new paper starts with the last ones set.
 
 ![Reader](screenshots/reader.png)
 
@@ -94,22 +87,20 @@ reader = "default"               # yeda's own PDF reader
 pdfs = "/mnt/papers"
 ```
 
-`reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF, through `x`.
+`reader` can name another command, run as `<command> <pdf> --annotations <dir>`. yeda then sees only the annotations that reader saves in the PDF.
 
-`:setup` lists what it sets (LLM providers and profiles, WebDAV locations, the OpenAlex key, web search, library proxies, tables) as they are now; `Enter` opens one's form. `:config` opens yeda.toml in `$EDITOR`, `:config device` this device's config.toml.
+LLM providers and profiles, WebDAV locations, the OpenAlex key, web search, library proxies and tables are set up in forms inside yeda and stored in the library's `yeda.toml`.
 
 ## Graphs
 
-`:graph` draws a citation graph of the selected paper, or of the marked ones (`v`, `V`). Rows are years, newest at the top:
+A citation graph of a paper, or of several marked ones, with years as rows and the newest at the top:
 
 ![Citation graph](screenshots/graph.png)
 
 - ⊚ the papers you graphed, ◎ other library papers linked to them, ○ papers outside the library cited by or citing them most
 - yellow lines go to papers the selected one cites, magenta lines come from papers citing it
 
-In the graph, `Enter` opens a paper and grows the graph from it, and `a` adds it to the library.
-
-`:graph tags` and `:graph col <column>` group papers by their tags or by a literature table column instead. Data comes from OpenAlex and is cached. `:help` has the full guide.
+A paper in the graph can be opened to grow the graph from it, or added to the library. Papers can also be grouped by their tags or by a literature table column. Data comes from OpenAlex and is cached.
 
 ## LLM features
 
@@ -128,13 +119,11 @@ provider = "claude"
 model = "claude-opus-5-5"
 ```
 
-Use `:setup provider` to set up a provider and its credential, then `:setup llm` to add profiles that name a provider and a model. Profiles bound to one provider share its credential.
-
-A command uses `default_llm` unless it names another profile: `:discover --llm gpt swarm robots`.
+Profiles bound to one provider share its credential. A command uses `default_llm` unless it names another profile.
 
 ### Literature tables
 
-A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. `:setup table` defines its columns, each with an optional description of what it should hold; in `yeda.toml` they look like this:
+A literature table compares papers side by side: one row per paper, one column per question you ask of every paper. Each column has an optional description of what it should hold; in `yeda.toml` they look like this:
 
 ```toml
 [tables.lit]
@@ -146,15 +135,15 @@ group = "The topic it works on: a short label many papers share."
 subproblem = "The problem it tackles and why earlier work falls short."
 ```
 
-`:summarize` has the LLM read each selected paper and fill in its row. The LLM also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
+The LLM reads each selected paper and fills in its row. It also sees the values other papers already have in each column and reuses one when it fits, so a column like `group` sorts papers into shared topics.
 
-`:table` shows the rows of the selected papers. Cells can be read in full, edited, sorted and filtered; `:export` writes the table to CSV, `yeda import-table` reads one back, and `:graph col group` clusters papers by a column's values.
+Cells can be read in full, edited, sorted and filtered. A table exports to CSV and imports back, and the graph can cluster papers by a column's values.
 
 ![Literature table](screenshots/table.png)
 
 ### Finding papers
 
-`:discover` opens a form to find papers that are not in the library: add papers (the marked ones are already there), write what to look for, and pick the LLM. yeda searches the web and arXiv, and the model ranks what it finds. In the results, `v` marks papers and `a` adds them. `:setup web-search` chooses the search providers.
+Discovery finds papers that are not in the library. Given some seed papers (the marked ones), a description of what to look for and an LLM, yeda searches the web and arXiv, and the model ranks what it finds. Results can be added to the library. The search providers are configurable.
 
 ```toml
 [web_search]
@@ -170,25 +159,19 @@ Fallbacks run only if every "always" provider fails. Without an API key a provid
 
 ## Secrets
 
-When a password or API key is missing, yeda asks for it and offers to save it in the secret store; `:secrets` lists and changes them. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by `:discover`. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
+Passwords and API keys are stored in the system secret store (GNOME Keyring, KWallet or KeePassXC); yeda asks for a missing one and offers to save it. LLM profiles bound to the same provider share one API key or OAuth credentials. Web search provider keys are optional and only used by discovery. Keys are stored with their server's address, so a key is only sent to the server it was entered for. Passwords, API keys and tokens only go to `https://` servers, local ones included: LLM servers, WebDAV locations, web search providers and library proxies with a plain `http://` address are refused.
 
-An environment variable overrides the secret store: `YEDA_KEY_<HOST>_<PORT>`, or `YEDA_DAV_<HOST>_<PORT>` for WebDAV, with `.` as `_` and `-` as `__` (`https://api.anthropic.com` is `YEDA_KEY_API_ANTHROPIC_COM_443`). Give providers or WebDAV locations on the same server an `alias`, and `…_ALIAS_<ALIAS>` is theirs alone. `:secrets` shows where each secret comes from, `:envvars` the variable names and which secrets need an alias.
+Environment variables can serve as a fallback or an alternative to the secret store, and override it.
 
 ## Keys and commands
 
 ![The ? key list](screenshots/keys.png)
 
-Every key runs a command, and every action is a command (`:annotations` is the same as `A`). Options go anywhere in a command as `--name value`, and `--` ends them. `?` lists the keys and commands in effect; `:help` is the guide to searching, tables, graphs, fetching and the reader. Keys are rebound in `config.toml` under `[keys.<context>]`:
-
-```toml
-[keys.normal]
-"F" = "cite ieee"
-"x" = ""                         # unbinds x
-```
+Every action is a command, bound to keys that can be changed in `config.toml`. A built-in key list and guide are available inside yeda.
 
 ## Scripting
 
-yeda is used through its TUI, but most commands can also run without it, for scripts and agents. Each subcommand takes references by key (or `-` to read keys from stdin), and prints keys or tab-separated lines (`--json` gives more):
+Most commands also run without the TUI, for scripts and agents. Each subcommand takes references by key (or `-` to read keys from stdin), and prints keys or tab-separated lines (`--json` gives more):
 
 ```sh
 yeda search tag:review --sort -year               # key, year, authors, title
@@ -198,5 +181,5 @@ yeda graph lecun2015 > graph.json
 yeda discover "swarm exploration under comms loss" --json   # queries and notes go to stderr
 ```
 
-`yeda help` lists them all. They use the library's settings and the secrets saved from the TUI.
+They use the library's settings and the secrets saved from the TUI.
 <!-- /embed -->
