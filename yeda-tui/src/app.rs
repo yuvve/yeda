@@ -47,6 +47,8 @@ pub enum Mode {
     SetupMenu,
     /// `:setup web-search`: the provider groups and the discover limits.
     WebSearch,
+    /// `:discover` without arguments: what to search from and which LLM to ask.
+    Discover,
     /// The papers `:discover` found.
     Found,
     /// git's output from `:sync` or `:git-init`.
@@ -163,7 +165,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover[!] [--llm <profile>] [what]", "ask the LLM for papers like the selected or marked ones, or as described, searching the web and arXiv; ! skips cached results; v marks, a adds"),
+    (":discover[!] [--like] [--llm <profile>] [what]", "ask the LLM for papers like the marked or selected ones (--like), or as described, searching the web and arXiv; with neither it opens a form; ! skips cached results; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
@@ -267,7 +269,7 @@ pub enum Prompt {
 
 /// Applies an editing key to `buf` with its cursor `back` characters from the end; false for
 /// keys it doesn't handle.
-fn edit_line(buf: &mut String, back: &mut usize, code: KeyCode, ctrl: bool) -> bool {
+pub(crate) fn edit_line(buf: &mut String, back: &mut usize, code: KeyCode, ctrl: bool) -> bool {
     let len = buf.chars().count();
     *back = (*back).min(len);
     let at = buf.char_indices().nth(len - *back).map_or(buf.len(), |(i, _)| i);
@@ -683,6 +685,7 @@ pub struct App {
     pub setup_menu_sel: usize,
     /// The `:setup web-search` popup, staged until Enter.
     pub web_search: Option<crate::websearch::WebSearchForm>,
+    pub discover_form: Option<crate::discoverform::DiscoverForm>,
     /// A setup form opened from `:setup web-search`, which it returns to.
     setup_from_web_search: bool,
     setup_job: Option<SetupJob>,
@@ -812,6 +815,7 @@ impl App {
             confirming: None,
             confirmed: false,
             discover_job: None,
+            discover_form: None,
             found_note: None,
             found: Vec::new(),
             found_sel: 0,
@@ -1087,6 +1091,7 @@ impl App {
             Mode::Setup => self.setup_key(k),
             Mode::SetupMenu => self.setup_menu_key(k),
             Mode::WebSearch => self.websearch_key(k),
+            Mode::Discover => self.discover_form_key(k),
             Mode::Found => self.found_key(k),
             Mode::Git => self.git_key(k),
             Mode::Diff => self.diff_key(k),
@@ -2687,10 +2692,10 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
-                (cmd @ ("summarize" | "summarize!"), args) => match options(args, &["llm"]) {
+                (cmd @ ("summarize" | "summarize!"), args) => match options(args, &["llm"], &[]) {
                     Ok((_, rest)) if rest.is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, args.trim()),
                     Ok((opts, rest)) => {
-                        if let Err(e) = self.summarize(&rest, opts.get("llm").copied(), cmd.ends_with('!'), text) {
+                        if let Err(e) = self.summarize(&rest, opts.get("llm").and_then(|v| v.last()).copied(), cmd.ends_with('!'), text) {
                             self.status = format!("{e:#}");
                         }
                     }
@@ -2701,8 +2706,7 @@ impl App {
                 ("secrets", _) => self.open_secrets(),
                 ("envvars", _) => self.open_envvars(),
                 (cmd @ ("discover" | "discover!"), args) => {
-                    let fresh = cmd.ends_with('!');
-                    if let Err(e) = options(args, &["llm"]).and_then(|(opts, rest)| self.discover(&rest, opts.get("llm").copied(), text, fresh)) {
+                    if let Err(e) = self.discover(args, text, cmd.ends_with('!')) {
                         self.status = format!("{e:#}");
                     }
                 }
@@ -2941,19 +2945,68 @@ impl App {
         }
     }
 
-    /// `:discover [what]`: asks the LLM profile `llm`, else the default one, for papers like the selected or marked ones, or as described.
-    fn discover(&mut self, prompt: &str, llm: Option<&str>, command: &str, fresh: bool) -> anyhow::Result<()> {
+    /// `:discover`: runs with the papers and description it names, or opens the form when it names none.
+    fn discover(&mut self, args: &str, command: &str, fresh: bool) -> anyhow::Result<()> {
+        let (opts, prompt) = options(args, &["llm"], &["like"])?;
+        let llm = opts.get("llm").and_then(|v| v.last()).copied();
+        let like = opts.contains_key("like");
+        if prompt.trim().is_empty() && !like {
+            self.open_discover(llm);
+            return Ok(());
+        }
+        let from: Vec<Ref> = if like {
+            let targets = self.targets();
+            anyhow::ensure!(!targets.is_empty(), "--like needs a marked or selected reference");
+            targets.iter().map(|&i| self.lib.refs[i].clone()).collect()
+        } else {
+            Vec::new()
+        };
+        self.start_discover(llm, prompt, from, command, fresh)
+    }
+
+    fn open_discover(&mut self, llm: Option<&str>) {
+        let marked: Vec<&Ref> = self.lib.refs.iter().filter(|r| self.marked.contains(&r.key)).collect();
+        self.discover_form = Some(crate::discoverform::DiscoverForm::new(&self.lib, &marked, llm));
+        self.mode = Mode::Discover;
+    }
+
+    fn discover_form_key(&mut self, k: KeyEvent) {
+        use crate::discoverform::Outcome;
+        let Some(form) = &mut self.discover_form else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let fresh = match form.key(k, &self.lib.refs) {
+            Outcome::Stay => return,
+            Outcome::Close => {
+                self.discover_form = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            Outcome::Search { fresh } => fresh,
+        };
+        let from: Vec<Ref> = form.papers.iter().filter_map(|p| self.lib.get(&p.key).cloned()).collect();
+        let (prompt, llm) = (form.text.trim().to_string(), form.llm_name().map(String::from));
+        if from.is_empty() && prompt.is_empty() {
+            return self.status = "add a paper or write what to look for first".into();
+        }
+        let command = if fresh { "discover!" } else { "discover" };
+        match self.start_discover(llm.as_deref(), prompt, from, command, fresh) {
+            Ok(()) => {
+                self.discover_form = None;
+                self.mode = Mode::Normal;
+            }
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    /// Asks the LLM profile `llm`, else the default one, for papers from what is given.
+    fn start_discover(&mut self, llm: Option<&str>, prompt: String, from: Vec<Ref>, command: &str, fresh: bool) -> anyhow::Result<()> {
         if self.discover_job.is_some() {
             anyhow::bail!("already searching");
         }
-        // With a description, only marked references go along, not whichever one happens to be selected.
-        let targets = if prompt.trim().is_empty() || !self.marked.is_empty() { self.targets() } else { Vec::new() };
-        if prompt.trim().is_empty() && targets.is_empty() {
-            anyhow::bail!("usage: :discover <what to look for>, or select references first");
-        }
         let (name, profile) = self.lib.llm_profile(llm)?;
         let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
-        let from: Vec<Ref> = targets.iter().map(|&i| self.lib.refs[i].clone()).collect();
         let openalex = self.openalex_key();
         let settings = self.lib.web_search.clone();
         let mut keys = HashMap::new();
@@ -2969,8 +3022,16 @@ impl App {
         }
         // The server is named, since a shared yeda.toml decides where the text goes.
         let server = profile.url().to_string();
-        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt: prompt.into(), from: from.clone(), openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
-        self.status = format!("asking {name} at {server} for papers{}…", if from.is_empty() { String::new() } else { format!(" like {} references", from.len()) });
+        let plural = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+        let mut used = Vec::new();
+        if !from.is_empty() {
+            used.push(plural(from.len(), "paper"));
+        }
+        if !prompt.trim().is_empty() {
+            used.push("a description".into());
+        }
+        self.status = format!("asking {name} at {server} with {}…", used.join(", "));
+        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt, from, openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
         Ok(())
     }
 
@@ -4497,9 +4558,10 @@ fn reap(mut child: std::process::Child) {
 }
 
 /// Splits a command's `--name value` and `--name=value` options, which may come anywhere, from the
-/// rest of its arguments; `--` ends the options. Only `known` names are accepted.
-fn options<'a>(args: &'a str, known: &[&str]) -> anyhow::Result<(HashMap<&'a str, &'a str>, String)> {
-    let (mut opts, mut rest) = (HashMap::new(), Vec::new());
+/// rest of its arguments; `--` ends the options. Only `known` names are accepted, and `flags` take no
+/// value. A name given twice keeps every value, in order.
+fn options<'a>(args: &'a str, known: &[&str], flags: &[&str]) -> anyhow::Result<(HashMap<&'a str, Vec<&'a str>>, String)> {
+    let (mut opts, mut rest): (HashMap<&str, Vec<&str>>, _) = (HashMap::new(), Vec::new());
     let mut words = args.split_whitespace();
     while let Some(word) = words.next() {
         let Some(name) = word.strip_prefix("--") else {
@@ -4510,11 +4572,16 @@ fn options<'a>(args: &'a str, known: &[&str]) -> anyhow::Result<(HashMap<&'a str
             rest.extend(words);
             break;
         }
+        if flags.contains(&name) {
+            opts.entry(name).or_default();
+            continue;
+        }
         let (name, value) = name.split_once('=').map_or_else(|| (name, words.next()), |(n, v)| (n, Some(v)));
         if !known.contains(&name) {
-            anyhow::bail!("unknown option --{name}; this command takes {}", known.iter().map(|k| format!("--{k}")).collect::<Vec<_>>().join(", "));
+            let all = known.iter().chain(flags).map(|k| format!("--{k}")).collect::<Vec<_>>().join(", ");
+            anyhow::bail!("unknown option --{name}; this command takes {all}");
         }
-        opts.insert(name, value.filter(|v| !v.is_empty()).ok_or_else(|| anyhow::anyhow!("--{name} needs a value"))?);
+        opts.entry(name).or_default().push(value.filter(|v| !v.is_empty()).ok_or_else(|| anyhow::anyhow!("--{name} needs a value"))?);
     }
     Ok((opts, rest.join(" ")))
 }
@@ -4545,12 +4612,14 @@ mod tests {
 
     #[test]
     fn splits_options_from_text() {
-        let (opts, rest) = super::options("swarm --llm claude robots", &["llm"]).unwrap();
-        assert_eq!((opts["llm"], rest.as_str()), ("claude", "swarm robots"));
-        let (opts, rest) = super::options("--llm=gpt -- --not an option", &["llm"]).unwrap();
-        assert_eq!((opts["llm"], rest.as_str()), ("gpt", "--not an option"));
-        assert!(super::options("--llm", &["llm"]).is_err());
-        assert!(super::options("--model x", &["llm"]).is_err());
+        let (opts, rest) = super::options("swarm --llm claude robots", &["llm"], &[]).unwrap();
+        assert_eq!((opts["llm"].as_slice(), rest.as_str()), (&["claude"][..], "swarm robots"));
+        let (opts, rest) = super::options("--llm=gpt -- --not an option", &["llm"], &[]).unwrap();
+        assert_eq!((opts["llm"].as_slice(), rest.as_str()), (&["gpt"][..], "--not an option"));
+        assert!(super::options("--llm", &["llm"], &[]).is_err());
+        assert!(super::options("--model x", &["llm"], &[]).is_err());
+        let (opts, rest) = super::options("--like --llm a swarm --llm=b", &["llm"], &["like"]).unwrap();
+        assert_eq!((opts["llm"].as_slice(), opts.contains_key("like"), rest.as_str()), (&["a", "b"][..], true, "swarm"));
     }
 
     #[test]

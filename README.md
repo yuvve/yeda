@@ -155,7 +155,7 @@ subproblem = "The problem it tackles and why earlier work falls short."
 
 ### Finding papers
 
-`:discover` asks the LLM for papers related to the selected ones, or to a description you give (`:discover swarm exploration under comms loss`). The model writes several queries; yeda searches the enabled web providers and arXiv in parallel, matches the hits to OpenAlex works, drops what is not a paper, and has the model rank the rest. `:setup web-search` chooses the providers (`keenable`, `exa`, `parallel`, `firecrawl`, `searxng`, or the LLM provider's own search) and their optional keys; arXiv is always searched. `:discover!` skips cached results. Marked papers are kept and sorted last, `v` marks, and `a` adds.
+`:discover` asks the LLM for papers from what you give it: a description (`:discover swarm exploration under comms loss`) and, with `--like`, the marked or selected papers; it uses nothing else. Without either it opens a form to add papers (the marked ones to start with), write what to look for and pick the LLM. The text is free: the model reads it when it writes the queries and when it ranks the papers, so it can also say `must have "decentralized" in the title`. The model writes several queries; yeda searches the enabled web providers and arXiv in parallel, matches the hits to OpenAlex works, drops what is not a paper, and has the model rank the rest. `:setup web-search` chooses the providers (`keenable`, `exa`, `parallel`, `firecrawl`, `searxng`, or the LLM provider's own search) and their optional keys; arXiv is always searched. `:discover!` skips cached results. Marked papers are kept and sorted last, `v` marks, and `a` adds.
 
 ```toml
 [web_search]

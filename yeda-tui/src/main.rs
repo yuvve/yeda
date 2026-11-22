@@ -4,6 +4,7 @@ mod cli;
 mod cluster;
 mod complete;
 mod discover;
+mod discoverform;
 mod fetch;
 mod keys;
 mod log;
