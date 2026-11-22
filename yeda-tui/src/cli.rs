@@ -28,7 +28,7 @@ Commands for scripts and agents (each takes --lib <dir>; <key>… may be - to re
        yeda cache [key…]
        yeda extract <key>…
        yeda graph <key>… [--refresh | --tags | --column <column>]
-       yeda discover [description] [--like <key>]… [--llm <profile>] [--json]
+       yeda discover [description] [--like <key>]… [--keyword <word>]… [--llm <profile>] [--json]
        yeda summarize <key>… [--table <name>] [--llm <profile>] [--overwrite]
        yeda sync";
 
@@ -47,7 +47,7 @@ const COMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("cache", &[], &[]),
     ("extract", &[], &[]),
     ("graph", &["column"], &["refresh", "tags"]),
-    ("discover", &["like", "llm"], &["json"]),
+    ("discover", &["like", "keyword", "llm"], &["json"]),
     ("summarize", &["table", "llm"], &["overwrite"]),
     ("sync", &[], &[]),
 ];
@@ -555,7 +555,8 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
     for k in &like {
         ops::ref_index(lib, k)?;
     }
-    anyhow::ensure!(!prompt.trim().is_empty() || !like.is_empty(), "describe what to look for, or name references with --like");
+    let keywords: Vec<String> = a.all("keyword").into_iter().map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+    anyhow::ensure!(!prompt.trim().is_empty() || !like.is_empty() || !keywords.is_empty(), "describe what to look for, or name references with --like or words with --keyword");
     let (name, profile) = lib.llm_profile(a.opt("llm"))?;
     let key = llm_key(&profile)?;
     let from: Vec<Ref> = like.iter().filter_map(|k| lib.get(k)).cloned().collect();
@@ -575,6 +576,7 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
         profile,
         key,
         prompt,
+        keywords,
         from,
         openalex_key: yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten(),
         settings: lib.web_search.clone(),

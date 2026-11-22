@@ -270,12 +270,18 @@ THE READER  ( o, yeda read )
   the whole page, and C after that carries on where you were. It is
   remembered per paper.
 
-FINDING PAPERS  ( :discover[!] [--llm <profile>] [what] )
+FINDING PAPERS  ( :discover[!] [--like] [--keyword <word>]... [--llm <profile>] [what] )
 
   :discover asks the default LLM profile, or the one --llm names, for
-  papers like the selected or marked references; with a description (:discover swarm exploration
-  under comms loss) it looks for that, with the marked references as
-  context. The model writes several queries; yeda searches the web
+  papers from what you give it: a description (:discover swarm
+  exploration under comms loss), keywords (--keyword swarm, as often as
+  you like) and, with --like, the marked references, else the selected
+  one. Nothing else goes along. With none of these :discover opens a
+  form: space uses or skips a listed paper, a adds a paper, a keyword or
+  the description, d removes one, ←/→ picks the LLM, Enter searches and
+  ! searches without cached results.
+
+  The model writes several queries; yeda searches the web
   providers and arXiv in parallel, matches the hits to OpenAlex works,
   drops what is not a paper, and has the model rank the rest. Every
   suggestion is in OpenAlex: ✓ found, ◎ already in the library. v marks

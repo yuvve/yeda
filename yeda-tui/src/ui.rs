@@ -427,6 +427,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Setup => draw_setup(f, app, main),
         Mode::SetupMenu => draw_setup_menu(f, app, main),
         Mode::WebSearch => draw_web_search(f, app, main),
+        Mode::Discover => draw_discover(f, app, main),
         Mode::Found => draw_found(f, app, main),
         Mode::Git => draw_git(f, app, main),
         Mode::Diff => draw_diff(f, app, main),
@@ -667,6 +668,59 @@ fn draw_web_search(f: &mut Frame, app: &App, main: Rect) {
     let footer = " a always · f fallback · d disabled · ←/→ cycle · e edit ";
     let mut frame = block(title.into(), true);
     frame = frame.title_bottom(Line::styled(footer.to_string(), Style::new().fg(Color::Yellow)));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(frame), area);
+}
+
+fn draw_discover(f: &mut Frame, app: &App, main: Rect) {
+    use crate::discoverform::Row;
+    let Some(form) = &app.discover_form else { return };
+    let typing = |edit: &crate::discoverform::Edit| -> Vec<Span<'static>> {
+        let chars: Vec<char> = edit.buf.chars().collect();
+        let at = chars.len() - edit.back.min(chars.len());
+        let (before, after): (String, String) = (chars[..at].iter().collect(), chars[at..].iter().collect());
+        let mut rest = after.chars();
+        let under = rest.next().map_or(" ".to_string(), String::from);
+        vec![Span::raw(before), Span::raw(under).reversed(), Span::raw(rest.collect::<String>())]
+    };
+    let rows = form.rows();
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let editing = form.edit.as_ref().filter(|_| i == form.sel);
+        let line = match row {
+            Row::Header(text) => Line::raw(*text).dim(),
+            Row::Paper(p) => {
+                let paper = &form.papers[*p];
+                Line::raw(format!("[{}] {}", if paper.on { "x" } else { " " }, paper.title))
+            }
+            Row::Keyword(k) => Line::raw(format!("  {}", form.keywords[*k])),
+            Row::AddPaper | Row::AddKeyword => match editing {
+                Some(edit) => Line::from([vec![Span::raw("  + ")], typing(edit)].concat()),
+                None => Line::raw(if *row == Row::AddPaper { "  + add a paper" } else { "  + add a keyword" }).dim(),
+            },
+            Row::Description => match editing {
+                Some(edit) => Line::from([vec![Span::raw("  ")], typing(edit)].concat()),
+                None if form.text.is_empty() => Line::raw("  (none)").dim(),
+                None => Line::raw(format!("  {}", form.text)),
+            },
+            Row::Llm => Line::raw(format!("  ◂ {} ▸", form.llm_name().unwrap_or("no llm profile"))),
+        };
+        lines.push(if i == form.sel && editing.is_none() { line.reversed() } else { line });
+        if editing.is_some() && *row == Row::AddPaper {
+            for (n, r) in form.matches(&app.lib.refs).iter().enumerate() {
+                let year = r.year.map(|y| format!(" ({y})")).unwrap_or_default();
+                let line = Line::raw(format!("    {}{year}", r.title));
+                lines.push(if n == form.edit.as_ref().map_or(0, |e| e.pick) { line.reversed() } else { line });
+            }
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::raw(form.summary()).bold());
+    let height = (lines.len() as u16 + 2).min(main.height);
+    let area = popup(main, 76.min(main.width), height);
+    let title = " Discover · Enter search · ! search fresh · Esc close ";
+    let footer = if form.edit.is_some() { " Enter accept · Esc cancel · ↑/↓ pick " } else { " a add · d remove · space use paper · ←/→ model " };
+    let frame = block(title.into(), true).title_bottom(Line::styled(footer.to_string(), Style::new().fg(Color::Yellow)));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(frame), area);
 }
@@ -1282,6 +1336,23 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn draws_the_discover_form_with_what_it_uses() {
+        let lib = yeda_core::library::Library::parse(Some("[providers.p]\nbase_url = \"https://x.org\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let seed = yeda_core::library::Ref { key: "seed".into(), title: "Seed paper".into(), ..Default::default() };
+        let mut app = crate::app::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let mut form = crate::discoverform::DiscoverForm::new(&app.lib, &[&seed], None);
+        form.keywords.push("swarm".into());
+        app.discover_form = Some(form);
+        app.mode = crate::app::Mode::Discover;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| super::draw(f, &mut app)).unwrap();
+        let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        for want in ["[ ] Seed paper", "swarm", "add a paper", "uses 1 keyword · a"] {
+            assert!(text.contains(want), "missing {want:?}");
+        }
+    }
+
     #[test]
     fn widens_cut_off_columns_into_spare_room() {
         let mut widths = [20, 40, 40, 10];
