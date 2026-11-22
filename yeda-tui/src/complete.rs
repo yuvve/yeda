@@ -44,7 +44,7 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
     let mut options = match (command.trim_end_matches('!'), args.len()) {
         ("summarize", 0) | ("export", 0) => tables(),
         ("summarize", 1) => vec!["--llm".into()],
-        ("discover", _) => ["--like", "--keyword", "--llm"].map(String::from).to_vec(),
+        ("discover", _) => ["--like", "--llm"].map(String::from).to_vec(),
         ("table", 0) => [tables(), vec!["close".into(), "rename".into()]].concat(),
         ("table", 1) if args[0] == "rename" => tables(),
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),

@@ -689,18 +689,14 @@ fn draw_discover(f: &mut Frame, app: &App, main: Rect) {
         let editing = form.edit.as_ref().filter(|_| i == form.sel);
         let line = match row {
             Row::Header(text) => Line::raw(*text).dim(),
-            Row::Paper(p) => {
-                let paper = &form.papers[*p];
-                Line::raw(format!("[{}] {}", if paper.on { "x" } else { " " }, paper.title))
-            }
-            Row::Keyword(k) => Line::raw(format!("  {}", form.keywords[*k])),
-            Row::AddPaper | Row::AddKeyword => match editing {
+            Row::Paper(p) => Line::raw(format!("  {}", form.papers[*p].title)),
+            Row::AddPaper => match editing {
                 Some(edit) => Line::from([vec![Span::raw("  + ")], typing(edit)].concat()),
-                None => Line::raw(if *row == Row::AddPaper { "  + add a paper" } else { "  + add a keyword" }).dim(),
+                None => Line::raw("  + add a paper").dim(),
             },
-            Row::Description => match editing {
+            Row::Text => match editing {
                 Some(edit) => Line::from([vec![Span::raw("  ")], typing(edit)].concat()),
-                None if form.text.is_empty() => Line::raw("  (none)").dim(),
+                None if form.text.is_empty() => Line::raw("  e.g. swarm exploration under comms loss, must have \"decentralized\" in the title").dim(),
                 None => Line::raw(format!("  {}", form.text)),
             },
             Row::Llm => Line::raw(format!("  ◂ {} ▸", form.llm_name().unwrap_or("no llm profile"))),
@@ -713,13 +709,18 @@ fn draw_discover(f: &mut Frame, app: &App, main: Rect) {
                 lines.push(if n == form.edit.as_ref().map_or(0, |e| e.pick) { line.reversed() } else { line });
             }
         }
+        if *row == Row::Llm
+            && let Some(note) = &form.llm_note
+        {
+            lines.push(Line::raw(format!("  {note}")).yellow());
+        }
     }
     lines.push(Line::raw(""));
     lines.push(Line::raw(form.summary()).bold());
     let height = (lines.len() as u16 + 2).min(main.height);
     let area = popup(main, 76.min(main.width), height);
     let title = " Discover · Enter search · ! search fresh · Esc close ";
-    let footer = if form.edit.is_some() { " Enter accept · Esc cancel · ↑/↓ pick " } else { " a add · d remove · space use paper · ←/→ model " };
+    let footer = if form.edit.is_some() { " Enter accept · Esc cancel · ↑/↓ pick " } else { " a add · d remove · ←/→ model " };
     let frame = block(title.into(), true).title_bottom(Line::styled(footer.to_string(), Style::new().fg(Color::Yellow)));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(frame), area);
@@ -1342,13 +1343,13 @@ mod tests {
         let seed = yeda_core::library::Ref { key: "seed".into(), title: "Seed paper".into(), ..Default::default() };
         let mut app = crate::app::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         let mut form = crate::discoverform::DiscoverForm::new(&app.lib, &[&seed], None);
-        form.keywords.push("swarm".into());
+        form.text = "robots".into();
         app.discover_form = Some(form);
         app.mode = crate::app::Mode::Discover;
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
         terminal.draw(|f| super::draw(f, &mut app)).unwrap();
         let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        for want in ["[ ] Seed paper", "swarm", "add a paper", "uses 1 keyword · a"] {
+        for want in ["Seed paper", "robots", "add a paper", "uses 1 paper · text · a"] {
             assert!(text.contains(want), "missing {want:?}");
         }
     }

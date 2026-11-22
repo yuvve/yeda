@@ -58,7 +58,6 @@ pub struct Input {
     pub profile: Bound,
     pub key: Option<String>,
     pub prompt: String,
-    pub keywords: Vec<String>,
     pub from: Vec<Ref>,
     pub openalex_key: Option<String>,
     pub settings: Settings,
@@ -83,7 +82,7 @@ pub fn spawn(input: Input) -> Receiver<Msg> {
 /// Queries, search, OpenAlex matching and ranking; the same pipeline for the TUI and the CLI.
 pub fn run(input: &Input, progress: &dyn Fn(String)) -> Suggestions {
     let refs: Vec<&Ref> = input.from.iter().collect();
-    let query_text = discover::query_request(&input.prompt, &input.keywords, &refs, input.settings.discover_queries);
+    let query_text = discover::query_request(&input.prompt, &refs, input.settings.discover_queries);
     let answer = yeda_net::llm::text(&input.profile, discover::QUERY_SYSTEM, &query_text, input.key.as_deref())?;
     let queries = discover::parse_queries(&answer, input.settings.discover_queries)?;
     progress(format!("searching: {}", queries.join("; ")));
@@ -499,7 +498,7 @@ fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
             abstract_text: c.text.as_ref().map(|t| t.chars().take(1200).collect()),
         })
         .collect();
-    let picks = yeda_net::llm::text(&input.profile, discover::RANK_SYSTEM, &discover::ranking_request(&input.prompt, &input.keywords, &candidates, input.settings.discover_results), input.key.as_deref())
+    let picks = yeda_net::llm::text(&input.profile, discover::RANK_SYSTEM, &discover::ranking_request(&input.prompt, &candidates, input.settings.discover_results), input.key.as_deref())
         .ok()
         .map(|answer| discover::parse_ranking(&answer, &ids))
         .filter(|picks| !picks.is_empty());

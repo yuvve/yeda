@@ -163,7 +163,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":graph[!] [citations]", "citation graph of the selected or marked references, from OpenAlex (:help explains it)"),
     (":graph tags", "the selected or marked references and their tags, clustered"),
     (":graph col <column>", "the same with a table column's values, such as :graph col group"),
-    (":discover[!] [--like] [--keyword <word>]… [--llm <profile>] [what]", "ask the LLM for papers like the marked or selected ones (--like), on keywords, or as described, searching the web and arXiv; with none of these it opens a form; ! skips cached results; v marks, a adds"),
+    (":discover[!] [--like] [--llm <profile>] [what]", "ask the LLM for papers like the marked or selected ones (--like), or as described, searching the web and arXiv; with neither it opens a form; ! skips cached results; v marks, a adds"),
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
@@ -2940,14 +2940,14 @@ impl App {
         }
     }
 
-    /// `:discover`: runs with the papers, keywords and description it names, or opens the form when it names none.
+    /// `:discover`: runs with the papers and description it names, or opens the form when it names none.
     fn discover(&mut self, args: &str, command: &str, fresh: bool) -> anyhow::Result<()> {
-        let (opts, prompt) = options(args, &["llm", "keyword"], &["like"])?;
+        let (opts, prompt) = options(args, &["llm"], &["like"])?;
         let llm = opts.get("llm").and_then(|v| v.last()).copied();
-        let keywords: Vec<String> = opts.get("keyword").into_iter().flatten().map(|k| k.to_string()).collect();
         let like = opts.contains_key("like");
-        if prompt.trim().is_empty() && keywords.is_empty() && !like {
-            return self.open_discover(llm);
+        if prompt.trim().is_empty() && !like {
+            self.open_discover(llm);
+            return Ok(());
         }
         let from: Vec<Ref> = if like {
             let targets = self.targets();
@@ -2956,15 +2956,13 @@ impl App {
         } else {
             Vec::new()
         };
-        self.start_discover(llm, prompt, keywords, from, command, fresh)
+        self.start_discover(llm, prompt, from, command, fresh)
     }
 
-    fn open_discover(&mut self, llm: Option<&str>) -> anyhow::Result<()> {
-        self.lib.llm_profile(llm)?;
-        let offered: Vec<&Ref> = self.targets().into_iter().map(|i| &self.lib.refs[i]).collect();
-        self.discover_form = Some(crate::discoverform::DiscoverForm::new(&self.lib, &offered, llm));
+    fn open_discover(&mut self, llm: Option<&str>) {
+        let marked: Vec<&Ref> = self.lib.refs.iter().filter(|r| self.marked.contains(&r.key)).collect();
+        self.discover_form = Some(crate::discoverform::DiscoverForm::new(&self.lib, &marked, llm));
         self.mode = Mode::Discover;
-        Ok(())
     }
 
     fn discover_form_key(&mut self, k: KeyEvent) {
@@ -2982,13 +2980,13 @@ impl App {
             }
             Outcome::Search { fresh } => fresh,
         };
-        let from: Vec<Ref> = form.used_papers().into_iter().filter_map(|key| self.lib.get(key).cloned()).collect();
-        let (prompt, keywords, llm) = (form.text.trim().to_string(), form.keywords.clone(), form.llm_name().map(String::from));
-        if from.is_empty() && keywords.is_empty() && prompt.is_empty() {
-            return self.status = "add papers (space uses one), keywords or a description first".into();
+        let from: Vec<Ref> = form.papers.iter().filter_map(|p| self.lib.get(&p.key).cloned()).collect();
+        let (prompt, llm) = (form.text.trim().to_string(), form.llm_name().map(String::from));
+        if from.is_empty() && prompt.is_empty() {
+            return self.status = "add a paper or write what to look for first".into();
         }
         let command = if fresh { "discover!" } else { "discover" };
-        match self.start_discover(llm.as_deref(), prompt, keywords, from, command, fresh) {
+        match self.start_discover(llm.as_deref(), prompt, from, command, fresh) {
             Ok(()) => {
                 self.discover_form = None;
                 self.mode = Mode::Normal;
@@ -2998,7 +2996,7 @@ impl App {
     }
 
     /// Asks the LLM profile `llm`, else the default one, for papers from what is given.
-    fn start_discover(&mut self, llm: Option<&str>, prompt: String, keywords: Vec<String>, from: Vec<Ref>, command: &str, fresh: bool) -> anyhow::Result<()> {
+    fn start_discover(&mut self, llm: Option<&str>, prompt: String, from: Vec<Ref>, command: &str, fresh: bool) -> anyhow::Result<()> {
         if self.discover_job.is_some() {
             anyhow::bail!("already searching");
         }
@@ -3024,14 +3022,11 @@ impl App {
         if !from.is_empty() {
             used.push(plural(from.len(), "paper"));
         }
-        if !keywords.is_empty() {
-            used.push(plural(keywords.len(), "keyword"));
-        }
         if !prompt.trim().is_empty() {
             used.push("a description".into());
         }
         self.status = format!("asking {name} at {server} with {}…", used.join(", "));
-        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt, keywords, from, openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
+        self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt, from, openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
         Ok(())
     }
 
@@ -4531,8 +4526,8 @@ mod tests {
         assert_eq!((opts["llm"].as_slice(), rest.as_str()), (&["gpt"][..], "--not an option"));
         assert!(super::options("--llm", &["llm"], &[]).is_err());
         assert!(super::options("--model x", &["llm"], &[]).is_err());
-        let (opts, rest) = super::options("--like --keyword a swarm --keyword=b", &["keyword"], &["like"]).unwrap();
-        assert_eq!((opts["keyword"].as_slice(), opts.contains_key("like"), rest.as_str()), (&["a", "b"][..], true, "swarm"));
+        let (opts, rest) = super::options("--like --llm a swarm --llm=b", &["llm"], &["like"]).unwrap();
+        assert_eq!((opts["llm"].as_slice(), opts.contains_key("like"), rest.as_str()), (&["a", "b"][..], true, "swarm"));
     }
 
     #[test]
