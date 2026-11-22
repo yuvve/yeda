@@ -291,6 +291,7 @@ THE READER  ( o, yeda read )
     dd c y                 delete the selected annotation / edit its comment /
                            copy the selected text
     C                      column mode (also a toolbar button)
+    ?                      search every keybind and run one with Enter
     q                      close the reader
 
   Column mode is for two-column papers: each column fills the window's
