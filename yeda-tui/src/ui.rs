@@ -719,7 +719,7 @@ fn draw_discover(f: &mut Frame, app: &App, main: Rect) {
     lines.push(Line::raw(form.summary()).bold());
     let height = (lines.len() as u16 + 2).min(main.height);
     let area = popup(main, 76.min(main.width), height);
-    let title = " Discover · Enter search · ! search fresh · Esc close ";
+    let title = " Discover · Enter search · ! search without cache · Esc close ";
     let footer = if form.edit.is_some() { " Enter accept · Esc cancel · ↑/↓ pick " } else { " a add · d remove · ←/→ model " };
     let frame = block(title.into(), true).title_bottom(Line::styled(footer.to_string(), Style::new().fg(Color::Yellow)));
     f.render_widget(Clear, area);
