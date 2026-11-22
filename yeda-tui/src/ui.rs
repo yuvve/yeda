@@ -275,6 +275,24 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
 const THREE_COLUMNS: u16 = 120;
 const TWO_COLUMNS: u16 = 80;
 
+/// The search and filters applied to the focused column.
+fn focused_search(app: &App) -> String {
+    match (app.pane, &app.table) {
+        (Pane::Sidebar, _) if !app.side_query.is_empty() => format!("library /{}", app.side_query),
+        (Pane::List, _) if !app.query.is_empty() => format!("/{}", app.query),
+        (Pane::Right, Some(t)) if app.right == RightView::Tables => {
+            let columns = table::columns(&app.lib, &t.name);
+            let mut parts = Vec::new();
+            if !t.query.is_empty() {
+                parts.push(format!("table /{}", t.query));
+            }
+            parts.extend(t.filters.iter().filter_map(|(c, v)| Some(format!("{}: {v}", columns.get(*c)?.name))));
+            parts.join(" · ")
+        }
+        _ => String::new(),
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(f.area());
     let [side, list, detail] = match (app.focus, app.pane) {
@@ -365,8 +383,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             "•".repeat(app.input.chars().count())
         ),
         _ if !app.status.is_empty() => app.status.clone(),
-        _ if !app.query.is_empty() => format!("/{}", app.query),
-        _ => String::new(),
+        _ => focused_search(app),
     };
     match &app.completion {
         Some(c) if app.mode == Mode::Prompt(Prompt::Command) => {
