@@ -120,13 +120,13 @@ Install the APK from the [latest release](https://github.com/yuvve/yeda/releases
 
 ### Getting started
 
-On first start, pick the library folder and allow all-files access. Get a library onto the device by syncing its folder with Syncthing, or by cloning its git repository from the settings.
+On first start, pick the library folder and allow all-files access. Get a library onto the device by syncing its folder with Syncthing, or by cloning its git repository from the settings. When a PDF location's folder isn't found on the device, the app asks for it once.
 
 ### Features
 
 - **Browse:** filter by collection, tag or saved search; search with the terminal app's syntax; sort.
 - **Paper page:** open or add PDFs, preview annotations, edit the Markdown note, change status, tags and collection.
-- **Reader:** the same as on the desktop, with Zotero-compatible annotations, column mode and a pen mode (the pen draws, a finger pans, a palm is ignored). An e-ink mode shows one page at a time with black ink.
+- **Reader:** the same as on the desktop, with Zotero-compatible annotations, column mode and a pen mode (the pen draws, a finger pans, a palm is ignored). An e-ink mode (Settings → Display → E-ink screen) shows one page at a time, turned by swiping, with black ink.
 - **Open with:** PDFs from outside the library open with their annotations in a `<file>.annotations/` folder.
 - **Sync:** commits, merges `origin` and pushes over HTTPS. Conflicting annotation files are merged annotation by annotation; any other conflict stops the sync.
 - **PDFs:** from local folders or WebDAV locations. Passwords and tokens are kept in the Android Keystore.
