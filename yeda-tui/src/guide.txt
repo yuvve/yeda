@@ -219,6 +219,14 @@ THE COMMAND LINE  ( : )
 
 SECRETS  ( :secrets, :envvars )
 
+  When a password or API key is missing, yeda asks for it and offers to save
+  it in the secret store. A key is stored with its server's address, so it is
+  only sent to the server it was entered for. Passwords, API keys and tokens
+  only go to https:// servers, local ones included: LLM servers, WebDAV
+  locations, web search providers and library proxies with a plain http://
+  address are refused. LLM profiles bound to one provider share its key or
+  OAuth credentials. Web search keys are optional.
+
   Passwords, API keys and tokens are kept in the system secret store, never
   in a file. :secrets lists each one and where it comes from: envvar,
   session (entered this run, not saved), secret service, or not set. Enter
@@ -333,6 +341,19 @@ FINDING PAPERS  ( :discover[!] [--like] [--llm <profile>] [what] )
   The provider's own search (`model_provider_web_search`) is off by
   default and sends your query to the LLM provider.
 
+  The same settings in yeda.toml:
+
+    [web_search]
+    always_search_providers   = ["keenable"]
+    fallback_search_providers = ["exa", "parallel", "firecrawl"]
+    disabled_search_providers = ["model_provider_web_search", "searxng"]
+    discover_queries          = 3        # queries the model writes
+    discover_results          = 15       # papers shown
+    # searxng_url             = "https://searx.example.org"
+
+  Results are cached in $XDG_CACHE_HOME/yeda. yeda.toml is trusted like code,
+  so a changed searxng_url sends queries elsewhere.
+
 TABLES  ( :table [name], T )
 
   Define literature tables with :setup table [name], a form with the
@@ -359,6 +380,9 @@ TABLES  ( :table [name], T )
   Without a table name and with several tables, a list to pick from opens;
   Tab completes the name on the command line.
 
+  :export <table> <file.csv> writes a table to CSV, and yeda import-table
+  reads one back.
+
   :table [name] (or T) shows a table of the selected or marked references
   in the right column; c gives it the whole window. j/k pick a row, h/l a
   column (h from the first goes back to the list). Enter shows the cell in
@@ -368,3 +392,99 @@ TABLES  ( :table [name], T )
   column and + shows the hidden ones again. Esc closes the cell, then
   clears search and filters, then closes the table; q closes the cell,
   then the table.
+
+MAIN WINDOW
+
+  Three columns, left to right:
+    library     collections, tags and saved searches; select one to filter
+    references  the papers, with a reading status and a dot per coloured tag
+    right       the selected paper's details; :graph, A (annotations) and
+                T (table) show something else there
+
+  Reading status: ✦ new, ○ to read, ◐ in progress, ● read; r changes it.
+  / searches, s sorts, v marks papers to act on together.
+  h/l or Tab move between columns, j/k within one, and c shows the current
+  column alone. Below 120 columns the right column is hidden, below 80 the
+  library column too. A click selects and focuses; the wheel moves the
+  selection.
+
+  Every other row of the reference list and of a table is shaded a little
+  lighter than the terminal's background, so a line is easy to follow. A
+  terminal that does not report its background gets plain rows.
+
+LIBRARIES  ( yeda init, yeda import, yeda <dir> )
+
+  yeda init creates an empty library. A form asks for its folder, where its
+  PDFs go (a local folder, a WebDAV folder, or none yet) and whether it
+  becomes the default library. The library is ready for git and Syncthing.
+
+  yeda import creates a library from Zotero's instead. The same form also
+  asks for Zotero's data folder. It imports the items, annotations, notes,
+  tag colours and saved searches, and copies every PDF to the chosen place,
+  whether Zotero stored it, linked it, or only has it on its WebDAV server.
+  Zotero can stay open; it is only read.
+
+  yeda <dir> opens that library. Without a folder, yeda opens the current
+  folder if it is a library, else the default library.
+
+  ~/.config/yeda/config.toml holds this device's settings; yeda creates it
+  with them commented out:
+
+    library = "~/yeda"               # the default library
+    reader = "default"               # yeda's own PDF reader
+
+    [locations]                      # this device's folder for a location
+    pdfs = "/mnt/papers"
+
+  reader can name another command, run as <command> <pdf> --annotations
+  <dir>. yeda then sees only the annotations that reader saves in the PDF,
+  through x.
+
+ANNOTATIONS  ( A, x )
+
+  Highlights, underlines, notes, text, image areas and ink made in the reader
+  are saved in the library next to the paper, so the Android app shows them
+  too. A lists them in the right column. x extracts the annotations embedded
+  in the PDF itself.
+
+SETUP  ( :setup, :config )
+
+  :setup lists what it sets, as it is now: LLM providers and profiles,
+  WebDAV locations, the OpenAlex key, web search, library proxies and tables.
+  Enter opens one's form. :config opens yeda.toml in $EDITOR, :config device
+  this device's config.toml.
+
+  An LLM profile names a provider and a model; the provider holds where to
+  connect and how. A command uses default_llm unless it names another
+  profile, as in :discover --llm gpt swarm robots.
+
+    default_llm = "claude"
+
+    [providers.claude]
+    base_url = "https://api.anthropic.com"
+    protocol = "anthropic"    # or openai, mistral, openrouter, opencode-go,
+                              # openai-responses
+    auth = "oauth"            # or api-key, or none for a server without a key
+
+    [llm.claude]
+    provider = "claude"
+    model = "claude-opus-5-5"
+
+TRUST
+
+  yeda.toml is trusted like code: whoever can write to the library's git
+  remote or Syncthing folder decides which servers get LLM requests, which
+  proxies the fetch window logs in to, and which WebDAV servers hold the
+  PDFs. What they cannot get is a secret: each is stored with its server's
+  address, so a changed address finds none and yeda asks for one, naming the
+  server; read that name before answering. The status line also names the
+  server of every LLM request and the proxies before the fetch window opens,
+  and the log keeps those lines.
+
+  The PDF URLs in [fulltext.patterns] come from yeda.toml too, and the
+  open-access ones from OpenAlex. A direct download goes only over https://
+  (a plain http:// URL is tried as https://) and only to a public host,
+  after each of at most 5 redirects as well: localhost, dotless names,
+  .local names and private, loopback and link-local addresses are refused. A
+  name whose DNS points at a private address is not caught. A download stops
+  at 100 MB.

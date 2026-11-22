@@ -9,6 +9,7 @@ repository = "https://github.com/yuvve/yeda"
 keywords = ["reference-manager", "bibliography", "research", "citations", "tui"]
 categories = ["command-line-utilities", "science", "visualization"]
 exclude = ["screenshots"]
+build = "build.rs"
 
 [dependencies]
 yeda-core = { workspace = true, features = ["zotero"] }
@@ -27,6 +28,9 @@ serde_json = "1.0.154"
 toml = { version = "1.1.8", features = ["preserve_order"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+
+[build-dependencies]
+toml = { version = "1.1.8", features = ["preserve_order"] }
 
 [[bin]]
 name = "yeda"
