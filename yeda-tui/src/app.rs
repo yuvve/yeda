@@ -94,7 +94,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("search", "search; in the library column, filter it (:help explains the syntax)"),
     ("filter", "filter by field, with suggestions from the library"),
     ("sort", "sort"),
-    ("clear", "cancel a range, else unmark all, else clear the search"),
+    ("clear", "cancel a range, else unmark all, else clear this column's search, else clear every search"),
     ("add", "add by DOI, arXiv ID or ISBN, into a collection you pick; a pasted list adds each"),
     ("open", "open the PDF in the reader (yeda read)"),
     ("edit", "edit the reference file in $EDITOR; on a saved search in the library column, its name, query and sort"),
@@ -137,7 +137,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("table-sort", "sort by the column; again reverses"),
     ("table-search", "show only rows with every word in some cell"),
     ("table-filter", "show only rows whose cell in this column matches (!x: doesn't; \"\": empty)"),
-    ("table-clear", "close the cell, else clear search and filters, else close the table"),
+    ("table-clear", "close the cell, else clear the table's search and filters, else clear every search, else close the table"),
 ];
 
 /// Actions that change every marked reference, asked about first: action, and what it does.
@@ -1122,6 +1122,17 @@ impl App {
         }
     }
 
+    /// Sorts and the selected library entry stay.
+    fn clear_all_searches(&mut self) {
+        self.side_query.clear();
+        self.query.clear();
+        if let Some(t) = &mut self.table {
+            t.query.clear();
+            t.filters.clear();
+        }
+        self.refilter_sidebar(false);
+    }
+
     /// The keymap context of the focused column.
     fn context(&self) -> &'static str {
         match self.pane {
@@ -1293,14 +1304,18 @@ impl App {
                 self.mode = Mode::Prompt(Prompt::TableFilter);
             }
             "table-edit" => self.table_edit(),
-            "table-clear" => match &mut self.table {
-                Some(t) if t.open => t.open = false,
-                Some(t) if !t.query.is_empty() || !t.filters.is_empty() => {
-                    t.query.clear();
-                    t.filters.clear();
+            "table-clear" => {
+                let table_search = self.table.as_ref().is_some_and(|t| !t.query.is_empty() || !t.filters.is_empty());
+                match &mut self.table {
+                    Some(t) if t.open => t.open = false,
+                    Some(t) if table_search => {
+                        t.query.clear();
+                        t.filters.clear();
+                    }
+                    _ if !self.side_query.is_empty() || !self.query.is_empty() => self.clear_all_searches(),
+                    _ => self.close_table(),
                 }
-                _ => self.close_table(),
-            },
+            }
             "extract" if !self.targets().is_empty() => {
                 self.status = "extracting annotations…".into();
                 self.job = Some(Job::ExtractAnnotations);
@@ -1321,12 +1336,16 @@ impl App {
             }
             "mark" | "range" => {}
             "clear" => {
+                let sidebar = self.pane == Pane::Sidebar;
+                let own_search = if sidebar { !self.side_query.is_empty() } else { !self.query.is_empty() };
                 if let Some((_, before)) = self.visual.take() {
                     self.marked = before;
                 } else if self.pane == Pane::List && !self.marked.is_empty() {
                     self.status = format!("unmarked {}", self.marked.len());
                     self.marked.clear();
-                } else if self.pane == Pane::Sidebar {
+                } else if !own_search {
+                    self.clear_all_searches();
+                } else if sidebar {
                     self.side_query.clear();
                     self.refilter_sidebar(false);
                 } else {
@@ -4659,6 +4678,53 @@ mod tests {
         assert_eq!(app.selected_envvar().as_deref(), Some("YEDA_KEY_OTHER_EXAMPLE_COM_443_ALIAS_C"));
         app.secret_sel = app.secret_items.iter().position(|i| i.label.starts_with("Provider d:")).unwrap();
         assert_eq!(app.selected_envvar(), None);
+    }
+
+    #[test]
+    fn esc_clears_the_focused_column_then_every_search() {
+        use super::Pane;
+        use yeda_core::browse::{Sort, SortField};
+        let refs = [("a2020", "title = \"Alpha\"\nyear = 2020\n"), ("b2019", "title = \"Beta\"\nyear = 2019\n")];
+        let lib = yeda_core::library::Library::parse(None, None, refs.map(|(k, t)| (k.to_string(), t.to_string())), None).unwrap();
+        let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let sort = Sort { field: SortField::Year, descending: true };
+        app.sort = sort;
+        let searches = |app: &mut super::App| {
+            app.query = "alpha".into();
+            app.side_query = "x".into();
+            app.refilter_sidebar(false);
+            assert_eq!(app.visible.len(), 1);
+        };
+
+        searches(&mut app);
+        app.pane = Pane::Sidebar;
+        app.action("clear", "");
+        assert_eq!((app.side_query.as_str(), app.query.as_str()), ("", "alpha"));
+        app.action("clear", "");
+        assert_eq!((app.query.as_str(), app.visible.len()), ("", 2));
+
+        searches(&mut app);
+        app.pane = Pane::List;
+        app.action("clear", "");
+        assert_eq!((app.side_query.as_str(), app.query.as_str()), ("x", ""));
+        app.action("clear", "");
+        assert_eq!(app.side_query, "");
+
+        searches(&mut app);
+        app.table = Some(crate::table::TableView::new("t".into(), vec!["a2020".into()]));
+        app.right = super::RightView::Tables;
+        app.pane = Pane::Right;
+        let t = app.table.as_mut().unwrap();
+        t.query = "a".into();
+        t.filters.push((0, "a".into()));
+        app.action("table-clear", "");
+        let t = app.table.as_ref().unwrap();
+        assert_eq!((t.query.as_str(), t.filters.len(), app.query.as_str()), ("", 0, "alpha"));
+        app.action("table-clear", "");
+        assert_eq!((app.query.as_str(), app.side_query.as_str(), app.table.is_some()), ("", "", true));
+        app.action("table-clear", "");
+        assert!(app.table.is_none());
+        assert_eq!(app.sort, sort);
     }
 
     #[test]
