@@ -6,7 +6,6 @@ import { installVim, VimReader } from './vim';
 
 interface Reader extends Omit<VimReader, '_state'>, Omit<PenReader, '_state'> {
 	_state: VimReader['_state'] & PenReader['_state'];
-	initializedPromise: Promise<unknown>;
 	setAnnotations(annotations: Annotation[]): void;
 }
 
@@ -91,7 +90,8 @@ export async function openReader(onClose: () => void = noop): Promise<boolean> {
 	toggleColumns = attachColumns(reader);
 
 	settleEink(reader).catch(reportError('Setting up e-ink mode'));
-	reader.initializedPromise
+	// The reader's own initializedPromise never resolves; the view's does.
+	reader._primaryView?.initializedPromise
 		.then(() => store.renderMissing(annotations, showImage))
 		.catch(reportError('Rendering annotation images'));
 	return true;
