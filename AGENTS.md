@@ -43,7 +43,7 @@
 - Keep no TODO or plan files in the repository; plans go in the issue.
 - README changes go in the PR whose change they describe, not in a later one.
 - Publishing to crates.io is done by the user, with `scripts/release.sh <version>`: it bumps the versions in the root `Cargo.toml` (every crate takes them) through an issue and PR, publishes the workspace and pushes the tag `v<version>`. The tag's workflow makes the GitHub release, with the APK and Linux binaries.
-- After merging a PR that changes what goes into the Android app (yeda-android, yeda-reader, or the crates it uses), tag main `android-vYYYY.MM.DD` (add `.2`, `.3` for later builds that day) and push the tag. That builds the APK and publishes it as a pre-release. To let the user test a PR on the phone before merging, push such a tag on the PR branch instead.
+- Tag `android-vYYYY.MM.DD` (add `.2`, `.3` for later builds that day) only when the user asks for a beta; push it on main, or on a PR branch to test before merging. The tag builds the APK and publishes it as a pre-release. Releases build their own APK.
 
 ## Code comments
 - NEVER write a comment describing what code does. What a function does must be evident from its name and signature; if it isn't, fix the name, don't add a comment. This includes section-marker comments that restate the next line ("# parse the config", "# loop over nodes", "# return result").
