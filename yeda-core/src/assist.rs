@@ -64,7 +64,10 @@ pub enum Action {
 
 impl Action {
     pub fn command(&self) -> String {
-        let opt = |flag: &str, v: &Option<String>| v.as_ref().map(|v| format!(" --{flag} {v}")).unwrap_or_default();
+        let opt = |flag: &str, v: &Option<String>| {
+            let quote = |v: &str| if v.contains(char::is_whitespace) { format!("\"{v}\"") } else { v.to_string() };
+            v.as_ref().map(|v| format!(" --{flag} {}", quote(v))).unwrap_or_default()
+        };
         match self {
             Action::Add { ids, to } => format!("add{} {}", opt("to", to), ids.join(" ")),
             Action::Fetch { location } => format!("fetch{}", location.as_ref().map(|l| format!(" {l}")).unwrap_or_default()),
@@ -99,6 +102,10 @@ impl Action {
             ensure!(!v.trim().is_empty() && !v.contains('\n'), "{what} must be one line of text");
             Ok(())
         }
+        fn quotable(what: &str, v: &str) -> Result<()> {
+            ensure!(!v.trim().is_empty() && !v.starts_with('-') && !v.contains(['"', '\n']), "{what} must be one line without quotes: {v:?}");
+            Ok(())
+        }
         let named = |what: &str, v: &str, known: bool| -> Result<()> {
             word(what, v)?;
             ensure!(known, "no {what} named {v}");
@@ -114,7 +121,7 @@ impl Action {
                     ensure!(crate::ids::parse_id(id).is_some(), "not a DOI, arXiv ID or ISBN: {id}");
                     ensure!(request.contains(&id.to_lowercase()), "{id} is not in the request");
                 }
-                to.as_deref().map_or(Ok(()), |c| word("collection", c))
+                to.as_deref().map_or(Ok(()), |c| quotable("collection", c))
             }
             Action::Fetch { location } => location.as_deref().map_or(Ok(()), |l| named("location", l, lib.locations.contains_key(l) || lib.remotes.contains_key(l))),
             Action::Summarize { table: t, llm: l, .. } => {
@@ -137,7 +144,7 @@ impl Action {
                 ensure!(file.ends_with(".csv"), "the export file must end in .csv");
                 Ok(())
             }
-            Action::Save { name } => word("search name", name),
+            Action::Save { name } => text("search name", name),
             Action::Cache | Action::Extract | Action::Graph { .. } | Action::Sync => Ok(()),
         }
     }
@@ -306,6 +313,8 @@ mod tests {
         let lib = lib();
         let command = |action: Value, request: &str| plan(&lib, action, request).unwrap().steps[0].command();
         assert_eq!(command(json!({"command": "add", "ids": ["10.1/x", "arXiv:2401.00001"], "to": "PhD"}), "10.1/x and arXiv:2401.00001"), "add --to PhD 10.1/x arXiv:2401.00001");
+        assert_eq!(command(json!({"command": "add", "ids": ["10.1/x"], "to": "My Thesis"}), "10.1/x"), "add --to \"My Thesis\" 10.1/x");
+        assert_eq!(command(json!({"command": "save", "name": "to read"}), ""), "save to read");
         assert_eq!(command(json!({"command": "summarize", "table": "lit", "overwrite": true, "llm": "fast"}), ""), "summarize! lit --llm fast");
         assert_eq!(command(json!({"command": "discover", "what": "swarms", "like": true, "llm": null}), ""), "discover --like -- swarms");
         assert_eq!(command(json!({"command": "search", "query": "status:unread swarm"}), ""), "search status:unread swarm");
@@ -324,7 +333,7 @@ mod tests {
             json!({"command": "summarize", "table": "lit", "overwrite": false, "llm": "nope"}),
             json!({"command": "graph_col", "column": "nope"}),
             json!({"command": "export", "table": "lit", "file": "out.txt"}),
-            json!({"command": "save", "name": "two words"}),
+            json!({"command": "add", "ids": ["10.1/x"], "to": "say \"hi\""}),
             json!({"command": "add", "ids": [], "to": null}),
         ] {
             assert!(plan(&lib, bad.clone(), "10.1/x").is_err(), "{bad}");

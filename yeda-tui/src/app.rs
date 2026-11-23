@@ -4615,12 +4615,27 @@ fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || child.wait());
 }
 
+/// Splits on whitespace, except inside double quotes, which are dropped: `--to "My Thesis"`.
+fn words(args: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = args.trim_start();
+    while !rest.is_empty() {
+        let (word, after) = match rest.strip_prefix('"').and_then(|r| r.split_once('"')) {
+            Some((quoted, after)) => (quoted, after),
+            None => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
+        };
+        out.push(word);
+        rest = after.trim_start();
+    }
+    out
+}
+
 /// Splits a command's `--name value` and `--name=value` options, which may come anywhere, from the
 /// rest of its arguments; `--` ends the options. Only `known` names are accepted, and `flags` take no
 /// value. A name given twice keeps every value, in order.
 fn options<'a>(args: &'a str, known: &[&str], flags: &[&str]) -> anyhow::Result<(HashMap<&'a str, Vec<&'a str>>, String)> {
     let (mut opts, mut rest): (HashMap<&str, Vec<&str>>, _) = (HashMap::new(), Vec::new());
-    let mut words = args.split_whitespace();
+    let mut words = words(args).into_iter();
     while let Some(word) = words.next() {
         let Some(name) = word.strip_prefix("--") else {
             rest.push(word);
@@ -4760,6 +4775,12 @@ mod tests {
         let Some(super::Job::Fetch(batch)) = app.job.take() else { panic!("no add job") };
         app.finish_batch(batch);
         assert!(app.plan_queue.is_empty());
+    }
+
+    #[test]
+    fn quotes_keep_an_option_value_whole() {
+        let (opts, rest) = super::options(r#"--to "My Thesis" 10.1/x --llm a"#, &["to", "llm"], &[]).unwrap();
+        assert_eq!((opts["to"].as_slice(), opts["llm"].as_slice(), rest.as_str()), (&["My Thesis"][..], &["a"][..], "10.1/x"));
     }
 
     #[test]
