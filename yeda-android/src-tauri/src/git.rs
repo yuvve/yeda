@@ -7,6 +7,7 @@ use yeda_core::annotations;
 
 // ponytail: always the `origin` remote and the branch of the same name; read the upstream config if other setups appear.
 const REMOTE: &str = "origin";
+const STAGE_MASK: u16 = 0x3000;
 
 /// Credentials for HTTPS. `refused` is set when the server asked for a login and `token`
 /// was missing or had already been tried, so the caller can ask for a new one.
@@ -161,7 +162,7 @@ fn merge(repo: &Repository, ours: &Commit, theirs: &Commit, branch: &str) -> Res
         let mut entry = c.our.or(c.their).unwrap();
         entry.id = repo.blob(merged.as_bytes())?;
         entry.file_size = merged.len() as u32;
-        entry.flags &= !0x3000; // the stage bits; 0 marks the entry resolved
+        entry.flags &= !STAGE_MASK;
         index.remove_path(Path::new(&path))?;
         index.add(&entry)?;
     }

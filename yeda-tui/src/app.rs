@@ -1477,7 +1477,6 @@ impl App {
         match mode {
             Mode::Search => self.refilter(),
             Mode::SideSearch => self.refilter_sidebar(true),
-            // Enter keeps what was typed; Esc clears it.
             Mode::Prompt(Prompt::TableSearch) if self.mode == mode || k.code == KeyCode::Esc => {
                 if let Some(t) = &mut self.table {
                     t.query = self.input.clone();
@@ -2153,7 +2152,7 @@ impl App {
         let Some(form) = &self.setup else { return };
         let name = form.name().to_string();
         // The keys a form leaves out when their field is empty.
-        let (path, cleared): (Vec<&str>, &[&str]) = match form.kind {
+        let (path, omitted_when_empty): (Vec<&str>, &[&str]) = match form.kind {
             setup::Kind::Provider => (vec!["providers", &name], &[]),
             setup::Kind::Llm => (vec!["llm", &name], &[]),
             setup::Kind::Table => (vec!["tables", &name], &["describe"]),
@@ -2169,7 +2168,7 @@ impl App {
                 }
                 table = entry.as_table_mut().unwrap();
             }
-            for key in cleared {
+            for key in omitted_when_empty {
                 table.remove(*key);
             }
             table.extend(section);
@@ -2417,7 +2416,6 @@ impl App {
     /// Rebuilds the dropdown from the input: fuzzy matches ranked by score, then create/remove entries.
     fn refresh_options(&mut self) {
         let current_coll = match self.chooser.as_ref().map(|c| c.kind) {
-            // New references go where the library is being looked at, unless changed.
             Some(PickKind::AddTo) => match self.current_filter() {
                 Filter::Collection(p) => Some(p.clone()),
                 _ => None,
@@ -3886,7 +3884,6 @@ impl App {
         if find(&path).is_none()
             && let Some(i) = self.lib.refs.iter().position(|r| r.key == key)
         {
-            // A cell not in the file yet gets an empty line to fill in.
             tables::merge(&mut self.lib.refs[i], &name, Row::from([(column.clone(), String::new())]), false);
             let effect = self.lib.save_ai(&self.lib.refs[i]);
             self.apply(effect.map(|e| vec![e]));
@@ -3905,7 +3902,6 @@ impl App {
         if pane == Pane::Right && self.right == RightView::Details {
             return;
         }
-        // The graph's own area, as opposed to the citation list under it.
         let on_graph = pane == Pane::Right && offset.is_none() && self.right == RightView::Graph;
         match m.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if on_graph => {

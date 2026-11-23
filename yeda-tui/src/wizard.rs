@@ -109,7 +109,6 @@ impl Form {
             F::Dest => {
                 let before = self.dests()[self.dest].0;
                 self.dest = (self.dest as isize + by).rem_euclid(3) as usize;
-                // The location's default name follows the choice until it is typed over.
                 let after = default_name(self.dests()[self.dest].0);
                 let name = &mut self.values[F::Name as usize];
                 if *name == default_name(before) {

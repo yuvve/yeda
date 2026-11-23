@@ -149,7 +149,6 @@ mod tests {
         assert_eq!(c.find_key("c"), Some(3));
         assert!(c.find_key("e").is_none());
         let dist = |i: usize, j: usize| ((c.nodes[i].x - c.nodes[j].x).powi(2) + (c.nodes[i].y - c.nodes[j].y).powi(2)).sqrt();
-        // Papers on one label sit closer to each other than to the other label's papers.
         assert!(dist(0, 2) < dist(0, 3) && dist(3, 5) < dist(2, 5));
         assert!(c.nodes.iter().all(|n| (0.0..=1.0).contains(&n.x) && (0.0..=1.0).contains(&n.y)));
     }

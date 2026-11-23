@@ -34,7 +34,7 @@ pub struct Paper {
 pub enum Outcome {
     Saved { key: String, file: PathBuf },
     Failed { key: String, error: String },
-    /// A page the window loaded, for the log.
+    /// A page the window awaiting_report, for the log.
     Visited { key: String, page: String },
 }
 
@@ -104,8 +104,7 @@ fn download_natively(window: &WebviewWindow, url: &str) {
 
 pub fn run(job: Job) {
     let (tx, rx) = mpsc::channel::<Event>();
-    // The file name of the paper being fetched, so `on_download` knows where to save.
-    let current: Arc<Mutex<String>> = Arc::default();
+    let fetching_file: Arc<Mutex<String>> = Arc::default();
     let mut context = tauri::generate_context!();
     // The reader's config opens its own window; this mode makes its own.
     context.config_mut().app.windows.clear();
@@ -124,7 +123,7 @@ pub fn run(job: Job) {
             }
             let menu = Menu::with_items(app, &[&fetch])?;
             let (load_tx, dl_tx, menu_tx, title_tx, new_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone(), tx.clone());
-            let target = current.clone();
+            let target = fetching_file.clone();
             let dir = downloads.clone();
             let window = WebviewWindowBuilder::new(app, "fetch", WebviewUrl::External("about:blank".parse().unwrap()))
                 .title("yeda fetch")
@@ -172,7 +171,7 @@ pub fn run(job: Job) {
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                drive(&window, &job, &rx, &current);
+                drive(&window, &job, &rx, &fetching_file);
                 handle.exit(0);
             });
             Ok(())
@@ -181,13 +180,13 @@ pub fn run(job: Job) {
         .expect("error while running the fetch window");
 }
 
-fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, current: &Mutex<String>) {
+fn drive(window: &WebviewWindow, job: &Job, rx: &Receiver<Event>, fetching_file: &Mutex<String>) {
     let proxies: Vec<Option<&str>> = match job.settings.proxies.as_slice() {
         [] => vec![None],
         list => list.iter().map(|p| Some(p.as_str())).collect(),
     };
     for (n, paper) in job.papers.iter().enumerate() {
-        *current.lock().unwrap() = paper.file.clone();
+        *fetching_file.lock().unwrap() = paper.file.clone();
         let mut outcome = Outcome::Failed { key: paper.key.clone(), error: "no proxy gave a PDF".into() };
         for (i, proxy) in proxies.iter().enumerate() {
             let through = if proxies.len() > 1 { format!(" · proxy {}/{}", i + 1, proxies.len()) } else { String::new() };
@@ -235,11 +234,10 @@ fn through_proxy(window: &WebviewWindow, job: &Job, paper: &Paper, proxy: Option
         return Step::Done(Outcome::Failed { key: paper.key.clone(), error: format!("{e:#}") });
     }
     let script = report_script(proxy);
-    // The page waiting for its script to report, and the links already tried.
-    let mut loaded: Option<String> = None;
-    let mut tried: Vec<String> = Vec::new();
+    let mut awaiting_report: Option<String> = None;
+    let mut tried_links: Vec<String> = Vec::new();
     loop {
-        let event = match loaded {
+        let event = match awaiting_report {
             Some(_) => rx.recv_timeout(Duration::from_secs(2)),
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
@@ -255,11 +253,11 @@ fn through_proxy(window: &WebviewWindow, job: &Job, paper: &Paper, proxy: Option
                     (_, Some(fulltext::Ieee::Document { stamp })) => Some(stamp),
                     _ => None,
                 };
-                if let Some(next) = next.filter(|n| !tried.contains(n)) {
-                    tried.push(next.clone());
+                if let Some(next) = next.filter(|n| !tried_links.contains(n)) {
+                    tried_links.push(next.clone());
                     let _ = next.parse().map(|u| window.navigate(u));
                     // Left at once, so this page's report isn't waited for.
-                    loaded = None;
+                    awaiting_report = None;
                     continue;
                 }
                 // On every load, so a bot check passed on the PDF page is followed by the PDF.
@@ -267,26 +265,26 @@ fn through_proxy(window: &WebviewWindow, job: &Job, paper: &Paper, proxy: Option
                     download_natively(window, &pdf);
                 }
                 let _ = window.eval(&script);
-                loaded = Some(url);
+                awaiting_report = Some(url);
             }
             Ok(Event::Title(title)) => {
                 let Some((page, pdf)) = title.strip_prefix(HTML).and_then(|t| t.split_once(' ')) else { continue };
                 // A report from a page already left (a redirect) mustn't cancel the wait for this one.
-                if loaded.as_deref().is_some_and(|l| without_fragment(l) == without_fragment(page)) {
-                    loaded = None;
+                if awaiting_report.as_deref().is_some_and(|l| without_fragment(l) == without_fragment(page)) {
+                    awaiting_report = None;
                 }
-                if pdf.is_empty() || tried.iter().any(|t| t == pdf) {
+                if pdf.is_empty() || tried_links.iter().any(|t| t == pdf) {
                     continue;
                 }
-                tried.push(pdf.to_string());
+                tried_links.push(pdf.to_string());
                 // A link to another site just opens, showing what stands in the way: a sign-in or a check.
                 download_in_page(window, pdf);
             }
             // No report: WebKit's PDF viewer, which can be downloaded from like any page.
             Err(RecvTimeoutError::Timeout) => {
-                let url = loaded.take().unwrap_or_default();
-                if !url.is_empty() && !tried.contains(&url) {
-                    tried.push(url.clone());
+                let url = awaiting_report.take().unwrap_or_default();
+                if !url.is_empty() && !tried_links.contains(&url) {
+                    tried_links.push(url.clone());
                     report(&Outcome::Visited { key: paper.key.clone(), page: format!("WebKit download of {}", without_query(&url)) });
                     download_natively(window, &url);
                 }
