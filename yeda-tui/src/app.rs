@@ -566,6 +566,9 @@ pub struct App {
     pub plan: Option<yeda_core::assist::Plan>,
     /// Commands of an approved plan still to run, each once the one before is done.
     plan_queue: std::collections::VecDeque<String>,
+    /// Steps in the approved plan, and whether it has not finished yet; for the log.
+    plan_total: usize,
+    plan_running: bool,
     /// How the last :discover answered, if the user should know (no web search).
     pub found_note: Option<String>,
     pub found: Vec<Candidate>,
@@ -709,6 +712,8 @@ impl App {
             assist_job: None,
             plan: None,
             plan_queue: Default::default(),
+            plan_total: 0,
+            plan_running: false,
             discover_form: None,
             found_note: None,
             found: Vec::new(),
@@ -3099,13 +3104,24 @@ impl App {
             Err(TryRecvError::Disconnected) => Err("the request stopped".into()),
         };
         self.assist_job = None;
+        let raw = answer.clone().unwrap_or_default();
         match answer.map_err(anyhow::Error::msg).and_then(|a| yeda_core::assist::parse_plan(&a)) {
-            Ok(plan) if plan.steps.is_empty() => self.status = plan.reply,
+            Ok(plan) if plan.steps.is_empty() => {
+                self.log.write(&format!("do: no plan: {}", plan.reply));
+                self.status = plan.reply;
+            }
             Ok(plan) => {
+                for (i, step) in plan.steps.iter().enumerate() {
+                    self.log.write(&format!("do: plan {}/{}: {} — {}", i + 1, plan.steps.len(), step.command, step.reason));
+                }
                 self.plan = Some(plan);
                 self.mode = Mode::Plan;
             }
-            Err(e) => self.status = format!("do: {e:#}"),
+            Err(e) => {
+                let answer: String = raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(500).collect();
+                self.log.write(&format!("do: failed: {e:#}; answer: {answer}"));
+                self.status = format!("do: {e:#}");
+            }
         }
     }
 
@@ -3113,11 +3129,15 @@ impl App {
         match k.code {
             KeyCode::Enter => {
                 self.plan_queue = self.plan.take().map(|p| p.steps.into_iter().map(|s| s.command).collect()).unwrap_or_default();
+                self.plan_total = self.plan_queue.len();
+                self.plan_running = true;
+                self.log.write("do: approved");
                 self.mode = Mode::Normal;
                 self.status = format!("running {} steps…", self.plan_queue.len());
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.plan = None;
+                self.log.write("do: cancelled");
                 self.mode = Mode::Normal;
                 self.status = "cancelled".into();
             }
@@ -3130,8 +3150,13 @@ impl App {
         if self.mode != Mode::Normal || self.job.is_some() || !self.busy().is_empty() {
             return;
         }
-        let Some(command) = self.plan_queue.pop_front() else { return };
-        self.log.write(&format!("do: {command}"));
+        let Some(command) = self.plan_queue.pop_front() else {
+            if std::mem::take(&mut self.plan_running) {
+                self.log.write("do: done");
+            }
+            return;
+        };
+        self.log.write(&format!("do: step {}/{}: {command}", self.plan_total - self.plan_queue.len(), self.plan_total));
         self.confirmed = true;
         self.submit(Prompt::Command, &command);
         self.confirmed = false;
@@ -3876,7 +3901,10 @@ impl App {
         if batch.mark_result {
             self.marked = batch.added.iter().chain(&batch.existed).cloned().collect();
             if self.marked.is_empty() {
-                self.plan_queue.clear();
+                let skipped = std::mem::take(&mut self.plan_queue);
+                if std::mem::take(&mut self.plan_running) {
+                    self.log.write(&format!("do: stopped: add found nothing; skipped {}", skipped.into_iter().collect::<Vec<_>>().join(", ")));
+                }
             }
         }
         let mut parts = Vec::new();
@@ -4669,6 +4697,38 @@ mod tests {
         app.finish_batch(batch);
         assert_eq!(app.marked.iter().collect::<Vec<_>>(), ["a"]);
         assert_eq!(app.plan_queue.len(), 1);
+    }
+
+    #[test]
+    fn do_logs_its_plan_failures_and_steps() {
+        let path = std::env::temp_dir().join(format!("yeda-do-log-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut app = plain_app();
+        app.log.path = Some(path.clone());
+        let send = |app: &mut super::App, answer: &str| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(Ok(answer.to_string())).unwrap();
+            app.assist_job = Some(rx);
+            app.poll_assist();
+        };
+        send(&mut app, r#"{"steps": [], "reply": "No command filters the list."}"#);
+        send(&mut app, "not a\nplan");
+        send(&mut app, r#"{"steps": [{"command": "add --to PhD 10.1/x", "reason": "files it"}, {"command": "fetch", "reason": "gets the PDF"}], "reply": ""}"#);
+        app.plan_key(ratatui::crossterm::event::KeyEvent::from(KeyCode::Enter));
+        app.poll_plan();
+        app.job = None;
+        app.plan_queue.clear();
+        app.poll_plan();
+        let log = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = log.lines().map(|l| l.split_once(' ').unwrap().1).collect();
+        assert_eq!(lines[0], "do: no plan: No command filters the list.");
+        assert!(lines[1].starts_with("do: failed: ") && lines[1].ends_with("answer: not a plan"), "{}", lines[1]);
+        assert_eq!(lines[2], "do: plan 1/2: add --to PhD 10.1/x — files it");
+        assert_eq!(lines[3], "do: plan 2/2: fetch — gets the PDF");
+        assert_eq!(lines[4], "do: approved");
+        assert_eq!(lines[5], "do: step 1/2: add --to PhD 10.1/x");
+        assert_eq!(lines[6], "do: done");
     }
 
     #[test]
