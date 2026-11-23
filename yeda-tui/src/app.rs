@@ -568,6 +568,7 @@ pub struct App {
     plan_queue: std::collections::VecDeque<String>,
     /// Steps in the approved plan, and whether it has not finished yet; for the log.
     plan_total: usize,
+    assist_request: String,
     plan_running: bool,
     /// How the last :discover answered, if the user should know (no web search).
     pub found_note: Option<String>,
@@ -713,6 +714,7 @@ impl App {
             plan: None,
             plan_queue: Default::default(),
             plan_total: 0,
+            assist_request: String::new(),
             plan_running: false,
             discover_form: None,
             found_note: None,
@@ -2276,6 +2278,13 @@ impl App {
     }
 
     /// Runs `command <table> rest`: with the only table, else the one picked in a modal.
+    fn set_search(&mut self, query: &str) {
+        self.pane = Pane::List;
+        self.query = query.to_string();
+        self.refilter();
+        self.status = format!("{} references match", self.visible.len());
+    }
+
     fn pick_table(&mut self, command: &str, rest: &str) {
         match self.lib.tables.len() {
             0 => self.status = "no tables defined: add [tables.<name>] to yeda.toml or run import-table".into(),
@@ -2616,6 +2625,7 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
+                ("search", query) if !query.trim().is_empty() => self.set_search(query.trim()),
                 (cmd @ ("summarize" | "summarize!"), args) => match options(args, &["llm"], &[]) {
                     Ok((_, rest)) if rest.is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, args.trim()),
                     Ok((opts, rest)) => {
@@ -3091,8 +3101,9 @@ impl App {
         let usage: Vec<(String, &str)> = COMMANDS.iter().map(|(u, m)| (u.to_string(), *m)).chain(ACTIONS.iter().map(|(a, m)| (a.to_string(), *m))).collect();
         let usage: Vec<(&str, &str)> = usage.iter().map(|(u, m)| (u.as_str(), *m)).collect();
         let text = yeda_core::assist::request(&usage, &self.lib, &targets, marked, &request);
+        self.assist_request = request.to_string();
         self.status = format!("asking {name} at {} for a plan…", profile.url());
-        self.assist_job = Some(crate::assist::spawn(profile, key, text));
+        self.assist_job = Some(crate::assist::spawn(profile, key, text, yeda_core::assist::schema(&self.lib)));
         Ok(())
     }
 
@@ -3105,14 +3116,14 @@ impl App {
         };
         self.assist_job = None;
         let raw = answer.clone().unwrap_or_default();
-        match answer.map_err(anyhow::Error::msg).and_then(|a| yeda_core::assist::parse_plan(&a)) {
+        match answer.map_err(anyhow::Error::msg).and_then(|a| yeda_core::assist::parse_plan(&a, &self.lib, &self.assist_request)) {
             Ok(plan) if plan.steps.is_empty() => {
                 self.log.write(&format!("do: no plan: {}", plan.reply));
                 self.status = plan.reply;
             }
             Ok(plan) => {
                 for (i, step) in plan.steps.iter().enumerate() {
-                    self.log.write(&format!("do: plan {}/{}: {} — {}", i + 1, plan.steps.len(), step.command, step.reason));
+                    self.log.write(&format!("do: plan {}/{}: {} — {}", i + 1, plan.steps.len(), step.command(), step.reason));
                 }
                 self.plan = Some(plan);
                 self.mode = Mode::Plan;
@@ -3128,7 +3139,7 @@ impl App {
     fn plan_key(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Enter => {
-                self.plan_queue = self.plan.take().map(|p| p.steps.into_iter().map(|s| s.command).collect()).unwrap_or_default();
+                self.plan_queue = self.plan.take().map(|p| p.steps.iter().map(yeda_core::assist::Step::command).collect()).unwrap_or_default();
                 self.plan_total = self.plan_queue.len();
                 self.plan_running = true;
                 self.log.write("do: approved");
@@ -4679,8 +4690,8 @@ mod tests {
         let mut app = plain_app();
         app.plan = Some(yeda_core::assist::Plan {
             steps: vec![
-                yeda_core::assist::Step { command: "add --to PhD 10.1/x".into(), reason: String::new() },
-                yeda_core::assist::Step { command: "fetch".into(), reason: String::new() },
+                yeda_core::assist::Step { action: yeda_core::assist::Action::Add { ids: vec!["10.1/x".into()], to: Some("PhD".into()) }, reason: String::new() },
+                yeda_core::assist::Step { action: yeda_core::assist::Action::Fetch { location: None }, reason: String::new() },
             ],
             reply: String::new(),
         });
@@ -4713,7 +4724,8 @@ mod tests {
         };
         send(&mut app, r#"{"steps": [], "reply": "No command filters the list."}"#);
         send(&mut app, "not a\nplan");
-        send(&mut app, r#"{"steps": [{"command": "add --to PhD 10.1/x", "reason": "files it"}, {"command": "fetch", "reason": "gets the PDF"}], "reply": ""}"#);
+        app.assist_request = "add 10.1/x to PhD and fetch it".into();
+        send(&mut app, r#"{"steps": [{"action": {"command": "add", "ids": ["10.1/x"], "to": "PhD"}, "reason": "files it"}, {"action": {"command": "fetch", "location": null}, "reason": "gets the PDF"}], "reply": ""}"#);
         app.plan_key(ratatui::crossterm::event::KeyEvent::from(KeyCode::Enter));
         app.poll_plan();
         app.job = None;
@@ -4729,6 +4741,15 @@ mod tests {
         assert_eq!(lines[4], "do: approved");
         assert_eq!(lines[5], "do: step 1/2: add --to PhD 10.1/x");
         assert_eq!(lines[6], "do: done");
+    }
+
+    #[test]
+    fn search_sets_the_library_query() {
+        let mut app = plain_app();
+        app.submit(super::Prompt::Command, "search title:a");
+        assert_eq!((app.query.as_str(), app.visible.len()), ("title:a", 1));
+        app.submit(super::Prompt::Command, "search title:zzz");
+        assert_eq!(app.visible.len(), 0);
     }
 
     #[test]

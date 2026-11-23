@@ -318,12 +318,15 @@ RUNNING COMMANDS FROM A REQUEST  ( :do [--llm <profile>] <request> )
   after another, Esc cancels. u afterwards undoes all of them. After an
   add step the references it added, or found already in the library, are
   marked, so the next steps act on them. A plan holds only :add, :fetch,
-  :summarize, :discover, :cache, :extract, :cite, :table, :graph,
-  :export, :save and :sync. :add --to <collection> files into that
+  :summarize, :discover, :search, :cache, :extract, :cite, :table,
+  :graph, :export, :save and :sync. :add --to <collection> files into that
   collection without asking, and adds it to references already in the
-  library too. The request, the collection, tag, table and location
-  names, and the titles of the marked (else selected) references go to
-  the LLM server.
+  library too. :search <query> shows only the references a query
+  matches, as typing it after the search key does. yeda refuses a plan
+  that names a table, location or profile you don't have, or an
+  identifier your request doesn't contain. The request, the collection,
+  tag, table and location names, and the titles of the marked (else
+  selected) references go to the LLM server.
 
 FINDING PAPERS  ( :discover[!] [--like] [--llm <profile>] [what] )
 

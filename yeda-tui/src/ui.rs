@@ -884,7 +884,7 @@ fn draw_plan(f: &mut Frame, app: &App, main: Rect) {
     let Some(plan) = &app.plan else { return };
     let mut lines = Vec::new();
     for (i, step) in plan.steps.iter().enumerate() {
-        lines.push(Line::from(vec![Span::raw(format!("{}. ", i + 1)), Span::styled(format!(":{}", step.command), Style::new().bold())]));
+        lines.push(Line::from(vec![Span::raw(format!("{}. ", i + 1)), Span::styled(format!(":{}", step.command()), Style::new().bold())]));
         lines.push(Line::raw(format!("   {}", step.reason)).dim());
     }
     let width = main.width.saturating_sub(4).min(110);
