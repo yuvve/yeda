@@ -253,7 +253,9 @@ pub fn request(commands: &[(&str, &str)], lib: &Library, targets: &[&Ref], marke
     let _ = writeln!(s, "LLM profiles: {}", list(lib.llm.keys().map(String::as_str).collect()));
     s += "</library>\n\n<search>\nfields: ";
     s += &crate::search::FILTER_FIELDS.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ");
-    let _ = writeln!(s, "\nstatus values: {}\n</search>\n", crate::library::STATUSES.join(", "));
+    let _ = writeln!(s, "\nstatus values: {}", crate::library::STATUSES.join(", "));
+    s += "syntax: a space between terms means AND; | inside one term means OR (tag:ml|vision); ! before a word or a field's value means NOT (tag:!read); quotes keep a phrase together (status:\"To Read\"); there are no parentheses. Matching is fuzzy; ^word$ matches exactly.\n\
+unread means status New or To Read: status:New|\"To Read\". \"Not Read\" is status:!^Read$.\n</search>\n\n";
 
     let names = |of: fn(&Ref) -> &[String]| -> String {
         let all: BTreeSet<String> = lib.refs.iter().flat_map(|r| of(r).iter().map(|n| data(n))).collect();
@@ -347,6 +349,15 @@ mod tests {
         assert!(plan(&lib, add.clone(), "add 10.1/x").is_ok());
         assert!(plan(&lib, add.clone(), "add that paper").is_err());
         assert!(plan(&lib, json!({"command": "add", "ids": ["not an id"], "to": null}), "not an id").is_err());
+    }
+
+    #[test]
+    fn the_search_examples_in_the_prompt_match_as_described() {
+        let with = |status: &str| Ref { title: "Swarms".into(), status: status.into(), ..Default::default() };
+        let mut searcher = crate::search::Searcher::new();
+        let mut hits = |query: &str| ["New", "To Read", "In Progress", "Read"].map(|s| searcher.matches(&crate::search::parse(query), &with(s)));
+        assert_eq!(hits(r#"status:New|"To Read""#), [true, true, false, false]);
+        assert_eq!(hits("status:!^Read$"), [true, true, true, false]);
     }
 
     #[test]
