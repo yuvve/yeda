@@ -28,6 +28,17 @@ impl Log {
             return;
         }
         self.last = line.to_string();
+        self.append(line);
+    }
+
+    /// Appends a typed command every time; `last` stays, so a status still on screen isn't logged again.
+    pub fn command(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.append(&format!("> {text}"));
+        }
+    }
+
+    fn append(&self, line: &str) {
         let Some(path) = &self.path else { return };
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let entry = format!("{} {}\n", stamp(secs), redact(line));
@@ -72,6 +83,21 @@ fn stamp(secs: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commands_repeat_but_statuses_do_not() {
+        let path = std::env::temp_dir().join(format!("yeda-log-test-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut log = super::Log { path: Some(path.clone()), last: String::new() };
+        log.write("synced");
+        log.command("help");
+        log.command("help");
+        log.write("synced");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = text.lines().map(|l| l.split_once(' ').unwrap().1).collect();
+        assert_eq!(lines, ["synced", "> help", "> help"]);
+    }
+
     #[test]
     fn stamps_and_redacts() {
         assert_eq!(super::stamp(0), "1970-01-01T00:00:00Z");
