@@ -1468,6 +1468,7 @@ impl App {
                     self.history_at = None;
                     if p == Prompt::Command && !text.trim().is_empty() {
                         self.remember(text.trim());
+                        self.log.command(text.trim());
                     }
                     self.submit(p, text.trim());
                 }

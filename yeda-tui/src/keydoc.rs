@@ -102,7 +102,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":keys", "this list"),
     (":help", "guide: search syntax (AND, OR, NOT, fields), filters, saved searches"),
     (":failed", "what the last add or fetch could not get, with the reasons"),
-    (":log", "every status message and failure, with times, in $EDITOR"),
+    (":log", "every typed command, status message and failure, with times, in $EDITOR"),
     (":q", "quit"),
     (":<action>", "any action above, such as :annotations"),
 ];
