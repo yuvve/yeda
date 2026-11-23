@@ -117,7 +117,9 @@ the command line, searches, forms and pickers
 
 | | |
 | --- | --- |
-| `:add [DOI, arXiv ID or ISBN …]` | add these, or the ones typed in a prompt |
+| `:add [--to <collection>] [DOI, arXiv ID or ISBN …]` | add these, or the ones typed in a prompt; with --to, into that collection without asking, and references already in the library join it too |
+| `:do [--llm <profile>] <request>` | have the LLM turn a request into commands, such as add, fetch and summarize; you approve the plan before it runs, and undo takes it all back |
+| `:search <query>` | show only the references the query matches, in the library column; the same as typing it after the search key |
 | `:save <name>` | save the current search |
 | `:summarize[!] [table] [--llm <profile>]` | fill the reference's table row with an LLM; ! overwrites |
 | `:cancel` | stop summarizing after the current paper |
@@ -158,5 +160,5 @@ the command line, searches, forms and pickers
 | `:<action>` | any action above, such as :annotations |
 | `mouse` | a click selects and focuses; the wheel moves the selection, or scrolls the graph |
 | `narrow` | below 120 columns the right column is hidden, below 80 the library column too |
-| `--name value` | an option, anywhere in a command (also --name=value); -- ends options, so the rest is text |
+| `--name value` | an option, anywhere in a command (also --name=value; put a value with spaces in "double quotes"); -- ends options, so the rest is text |
 | `keys` | change them under [keys.<context>] in ~/.config/yeda/config.toml (:help shows how) |

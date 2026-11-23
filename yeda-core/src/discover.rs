@@ -57,7 +57,7 @@ pub fn normalize_doi(doi: &str) -> Option<String> {
 }
 
 /// Text from the web or a model as one line, so it cannot close a tag or add a record of its own.
-fn data(text: &str) -> String {
+pub fn data(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").replace("</untrusted", "")
 }
 

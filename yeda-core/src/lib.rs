@@ -2,6 +2,7 @@
 //! file contents and return values or [`Effect`]s for the caller to apply.
 
 pub mod annotations;
+pub mod assist;
 pub mod browse;
 pub mod clusters;
 pub mod discover;
