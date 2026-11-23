@@ -267,7 +267,6 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
         let text = if r[t.col].trim().is_empty() { "—".to_string() } else { r[t.col].clone() };
         f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).block(block(format!("{} · {}", columns[t.col], r[0]), true)), cell);
     }
-    // The rows start under the header.
     let rows_area = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
     clickable(app, Pane::Right, rows_area, Some(state.offset()));
 }
@@ -873,12 +872,11 @@ fn draw_git(f: &mut Frame, app: &App, main: Rect) {
     }
     let width = main.width.saturating_sub(4).min(110);
     let height = (lines.len() as u16 + 2).min(main.height.saturating_sub(2));
-    // The newest lines stay in view.
-    let skip = lines.len().saturating_sub(height.saturating_sub(2) as usize);
+    let scroll_to_newest = lines.len().saturating_sub(height.saturating_sub(2) as usize);
     let area = popup(main, width, height);
     f.render_widget(Clear, area);
     let title = format!(" :{} · {} ", g.title, if g.done.is_some() { "Esc closes" } else { "running; Esc hides it" });
-    f.render_widget(Paragraph::new(lines.split_off(skip)).wrap(Wrap { trim: false }).block(block(title, true)), area);
+    f.render_widget(Paragraph::new(lines.split_off(scroll_to_newest)).wrap(Wrap { trim: false }).block(block(title, true)), area);
 }
 
 fn draw_diff(f: &mut Frame, app: &App, main: Rect) {
@@ -959,7 +957,6 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
     let (title, lines): (&str, Vec<Line>) = match page {
         HelpPage::Keys => (concat!(" yeda ", env!("CARGO_PKG_VERSION"), " · Keys · j/k scroll · / search · q close · :help for the guide "), key_help(&app.keymap)),
         HelpPage::Guide => {
-            // Headings are the unindented lines.
             let lines = GUIDE
                 .lines()
                 .map(|l| if l.starts_with(' ') || l.is_empty() { Line::from(l) } else { Line::from(l).bold().fg(Color::Cyan) })
@@ -1126,8 +1123,7 @@ fn draw_clusters(f: &mut Frame, app: &mut App, area: Rect) {
         let (x, y) = pos(i);
         ((x * (w - 1) as f64) as i32, ((1.0 - y) * (h - 1) as f64) as i32)
     };
-    // A point inside cell (c, r), for printing there.
-    let at = |c: i32, r: i32| (((c as f64 + 0.01) / (w - 1).max(1) as f64).min(1.0), (1.0 - (r as f64 + 0.01) / (h - 1).max(1) as f64).max(0.0));
+    let cell_point = |c: i32, r: i32| (((c as f64 + 0.01) / (w - 1).max(1) as f64).min(1.0), (1.0 - (r as f64 + 0.01) / (h - 1).max(1) as f64).max(0.0));
     let mut order: Vec<usize> = (0..nodes.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(rank(i)));
     let mut taken: Vec<(i32, i32, i32)> = Vec::new();
@@ -1174,14 +1170,14 @@ fn draw_clusters(f: &mut Frame, app: &mut App, area: Rect) {
                     _ => "•",
                 };
                 let (c, r) = cell(i);
-                let (x, y) = at(c, r);
+                let (x, y) = cell_point(c, r);
                 ctx.print(x, y, Span::styled(glyph, style));
                 let start = match labelled[i] {
                     Some(Label::Right) => c + 2,
                     Some(Label::Left) => c - 1 - text(i).chars().count() as i32,
                     _ => continue,
                 };
-                let (x, y) = at(start, r);
+                let (x, y) = cell_point(start, r);
                 ctx.print(x, y, Span::styled(text(i), style));
             }
         });
@@ -1238,11 +1234,9 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let ranks: Vec<u8> = (0..g.nodes.len()).map(rank).collect();
     let rank = |i: usize| ranks[i];
     let width = top.width.saturating_sub(2).max(1) as f64;
-    // As the canvas maps x to a column.
-    let col = |i: usize| ((g.nodes[i].x + 0.15) / 1.15 * (width - 1.0)).round() as i32;
-    let Placement { at: placed, years: starts, rows: total } = place(g, &shown, &rank, &col, width as i32);
+    let canvas_column = |i: usize| ((g.nodes[i].x + 0.15) / 1.15 * (width - 1.0)).round() as i32;
+    let Placement { at: placed, years: starts, rows: total } = place(g, &shown, &rank, &canvas_column, width as i32);
     let height = top.height.saturating_sub(2).max(1) as usize;
-    // Follows the paper picked in the list, and otherwise stays where Ctrl-e/Ctrl-y put it.
     let target = picked.unwrap_or(v.sel);
     if v.scroll_for != Some(target) {
         if let Some(&(r, _)) = placed.get(&target) {
@@ -1258,8 +1252,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
     let y = |r: usize| rows - 1.0 - (r as f64 - v.scroll as f64);
     let pos = |i: usize| (g.nodes[i].x, y(placed[&i].0));
     let is_shown = |i: usize| placed.contains_key(&i);
-    // Two character cells, in canvas units, between a node and its label.
-    let gap = 2.0 * 1.15 / (width - 1.0);
+    let label_gap = 2.0 * 1.15 / (width - 1.0);
     let edge = |(a, b): (usize, usize), color| {
         let ((x1, y1), (x2, y2)) = (pos(a), pos(b));
         CanvasLine { x1, y1, x2, y2, color }
@@ -1322,8 +1315,8 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
                 ctx.print(x, y, Span::styled(glyph, style));
                 let text = node_label(n);
                 match label {
-                    Label::Right => ctx.print(x + gap, y, Span::styled(text, style)),
-                    Label::Left => ctx.print(x - gap / 2.0 * (text.chars().count() + 1) as f64, y, Span::styled(text, style)),
+                    Label::Right => ctx.print(x + label_gap, y, Span::styled(text, style)),
+                    Label::Left => ctx.print(x - label_gap / 2.0 * (text.chars().count() + 1) as f64, y, Span::styled(text, style)),
                     Label::None => {}
                 }
             }

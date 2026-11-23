@@ -732,7 +732,6 @@ mod tests {
         g.values[4] = "api-key".into();
         assert!(g.section().unwrap_err().to_string().contains("needs an API key"));
 
-        // The guidance speaks for the chosen auth and protocol only.
         let hints = |f: &SetupForm| f.fields().iter().map(|(l, h)| (l.clone(), *h)).collect::<Vec<_>>();
         let mut hinted = SetupForm::new(Kind::Provider, "cx", &lib);
         hinted.values[1] = "codex".into();

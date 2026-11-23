@@ -233,20 +233,26 @@ pub fn surname(author: &str) -> String {
     author.split(',').next().unwrap_or(author).split_whitespace().last().unwrap_or("").to_string()
 }
 
-/// The graph of the seeds (work ids), the library works linked to them, and the `outside` best-linked others.
-pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> Graph {
-    let by_id: HashMap<&str, &Ref> = refs.iter().filter_map(|r| Some((work_id(r)?, r))).collect();
-    let seed_set: HashSet<&str> = seeds.iter().map(String::as_str).collect();
-    let mut ids: Vec<String> = seeds.to_vec();
-    // Library works linked to a seed, in either direction.
+/// Library works that cite a seed or are cited by one.
+fn library_neighbours(refs: &[Ref], seeds: &[String], seed_set: &HashSet<&str>, known: &Known) -> Vec<String> {
+    let mut neighbours = Vec::new();
     for id in refs.iter().filter_map(work_id) {
         let w = known.works.get(id);
         let cites_seed = w.is_some_and(|w| w.references.iter().any(|r| seed_set.contains(r.as_str())));
         let cited_by_seed = seeds.iter().any(|s| known.works.get(s).is_some_and(|w| w.references.iter().any(|r| r == id)));
         if !seed_set.contains(id) && (cites_seed || cited_by_seed) {
-            ids.push(id.to_string());
+            neighbours.push(id.to_string());
         }
     }
+    neighbours
+}
+
+/// The graph of the seeds (work ids), the library works linked to them, and the `outside` best-linked others.
+pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> Graph {
+    let by_id: HashMap<&str, &Ref> = refs.iter().filter_map(|r| Some((work_id(r)?, r))).collect();
+    let seed_set: HashSet<&str> = seeds.iter().map(String::as_str).collect();
+    let mut ids: Vec<String> = seeds.to_vec();
+    ids.extend(library_neighbours(refs, seeds, &seed_set, known));
     let ranked = outside_links(refs, seeds, known);
     // Works OpenAlex no longer has stay in other works' references; they'd be blank nodes.
     ids.extend(ranked.iter().filter(|(id, _)| known.works.contains_key(id)).take(outside).map(|(id, _)| id.clone()));
@@ -308,7 +314,6 @@ pub fn build(refs: &[Ref], seeds: &[String], known: &Known, outside: usize) -> G
 /// their neighbours, which keeps most edges short.
 fn layout(nodes: &mut [Node], edges: &[(usize, usize)]) -> Vec<Option<i32>> {
     let mut years: Vec<Option<i32>> = nodes.iter().filter(|n| !n.hidden).map(|n| n.year).collect::<HashSet<_>>().into_iter().collect();
-    // Newest first, and the row without a year last.
     years.sort_by_key(|y| (y.is_none(), std::cmp::Reverse(*y)));
     for n in nodes.iter_mut() {
         n.row = years.iter().position(|y| *y == n.year).unwrap_or(0);

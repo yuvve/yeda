@@ -54,7 +54,6 @@ impl History {
             return Ok(());
         }
         self.redo.clear();
-        // A background job's results join the command that started it.
         match self.undo.iter_mut().rev().find(|e| e.step.id == step.id) {
             Some(entry) => entry.changes.extend(changes),
             None => self.undo.push(Entry { step: step.clone(), changes }),

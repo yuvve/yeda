@@ -434,7 +434,6 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
 }
 
 fn detect_picker() -> Picker {
-    // The alternate-row colour is a tint of the terminal's own background.
     let options = QueryStdioOptions { terminal_background_color_osc: true, ..QueryStdioOptions::default() };
     let deadline = options.timeout;
     let started = Instant::now();
