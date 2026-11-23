@@ -160,5 +160,5 @@ the command line, searches, forms and pickers
 | `:<action>` | any action above, such as :annotations |
 | `mouse` | a click selects and focuses; the wheel moves the selection, or scrolls the graph |
 | `narrow` | below 120 columns the right column is hidden, below 80 the library column too |
-| `--name value` | an option, anywhere in a command (also --name=value); -- ends options, so the rest is text |
+| `--name value` | an option, anywhere in a command (also --name=value; put a value with spaces in "double quotes"); -- ends options, so the rest is text |
 | `keys` | change them under [keys.<context>] in ~/.config/yeda/config.toml (:help shows how) |
