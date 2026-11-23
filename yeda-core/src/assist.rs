@@ -176,8 +176,8 @@ pub fn schema(lib: &Library) -> Value {
     let names = |it: Vec<&str>| it.into_iter().map(String::from).collect::<Vec<_>>();
     let choice = |values: Vec<String>, optional: bool| match (values.is_empty(), optional) {
         (true, _) => json!({"type": "null"}),
-        (false, true) => json!({"enum": values.into_iter().map(Value::String).chain([Value::Null]).collect::<Vec<_>>()}),
-        (false, false) => json!({"enum": values}),
+        (false, true) => json!({"type": ["string", "null"], "enum": values.into_iter().map(Value::String).chain([Value::Null]).collect::<Vec<_>>()}),
+        (false, false) => json!({"type": "string", "enum": values}),
     };
     let text = || json!({"type": "string"});
     let maybe_text = || json!({"type": ["string", "null"]});
@@ -188,7 +188,7 @@ pub fn schema(lib: &Library) -> Value {
     let formats: Vec<String> = ["bibtex", "ident"].into_iter().map(String::from).chain(crate::cite::style_names().into_iter().map(String::from)).collect();
 
     let variant = |command: &str, fields: Vec<(&str, Value)>| {
-        let mut properties = serde_json::Map::from_iter([("command".to_string(), json!({"const": command}))]);
+        let mut properties = serde_json::Map::from_iter([("command".to_string(), json!({"type": "string", "enum": [command]}))]);
         let mut required = vec![json!("command")];
         for (name, schema) in fields {
             required.push(json!(name));
@@ -204,7 +204,7 @@ pub fn schema(lib: &Library) -> Value {
         variant("cache", vec![]),
         variant("extract", vec![]),
         variant("cite", vec![("format", choice(formats, true))]),
-        variant("graph", vec![("kind", json!({"enum": ["citations", "tags"]}))]),
+        variant("graph", vec![("kind", json!({"type": "string", "enum": ["citations", "tags"]}))]),
         variant("save", vec![("name", text())]),
         variant("sync", vec![]),
     ];
@@ -356,6 +356,26 @@ mod tests {
         assert!(parse_plan(r#"{"steps": [], "reply": ""}"#, &lib, "").is_err());
         assert!(parse_plan(r#"{"steps": [], "reply": "Which table?", "extra": 1}"#, &lib, "").is_err());
         assert_eq!(parse_plan(r#"{"steps": [], "reply": "Which table?"}"#, &lib, "").unwrap().reply, "Which table?");
+    }
+
+    fn every_node_has_a_type(node: &Value, path: &str) {
+        match node {
+            Value::Object(map) => {
+                let schema_like = map.contains_key("enum") || map.contains_key("properties") || map.contains_key("items") || map.contains_key("type");
+                assert!(!schema_like || map.contains_key("type"), "no type at {path}: {node}");
+                for (k, v) in map {
+                    every_node_has_a_type(v, &format!("{path}/{k}"));
+                }
+            }
+            Value::Array(items) => items.iter().enumerate().for_each(|(i, v)| every_node_has_a_type(v, &format!("{path}/{i}"))),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn every_schema_node_names_its_type_as_strict_mode_requires() {
+        every_node_has_a_type(&schema(&lib()), "");
+        every_node_has_a_type(&schema(&Library::parse(None, None, [], None).unwrap()), "");
     }
 
     #[test]
