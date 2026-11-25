@@ -340,17 +340,18 @@ fn parallel(s: &Search<'_>) -> Result<Answer, Failure> {
     }
 }
 
+fn firecrawl_body(query: &str, limit: usize) -> Value {
+    json!({"query": query, "limit": limit, "categories": ["research"]})
+}
+
 fn firecrawl(s: &Search<'_>) -> Result<Answer, Failure> {
     let ctx = Ctx { provider: s.provider, keyed: s.key.is_some(), key: s.key };
-    let reply = post("https://api.firecrawl.dev/v2/search", "api.firecrawl.dev", &ctx, &json!({"query": s.query, "limit": s.limit}))?;
+    let reply = post("https://api.firecrawl.dev/v2/search", "api.firecrawl.dev", &ctx, &firecrawl_body(s.query, s.limit))?;
     Ok(Answer { hits: hits(&json_reply(&reply)?), reset_in: reply.reset_in })
 }
 
-fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
-    let Some(base) = s.searxng_url else { return Err(Failure::setting("no URL")) };
-    let Some(host) = searxng_host(base) else { return Err(Failure::setting("no URL")) };
-    let ctx = Ctx { provider: s.provider, keyed: s.key.is_some(), key: s.key };
-    // A token in the instance URL's query string is kept, in front of the search parameters.
+/// The search URL and parameters, with the instance URL's own query string kept in front.
+fn searxng_request<'a>(base: &'a str, query: &str) -> (String, Vec<(&'a str, String, bool)>) {
     let without_fragment = base.split('#').next().unwrap_or(base);
     let (path, extra) = match without_fragment.split_once('?') {
         Some((path, query)) => (path, Some(query)),
@@ -365,9 +366,17 @@ fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
             }
         }
     }
-    params.push(("q", s.query.to_string(), false));
+    params.push(("q", query.to_string(), false));
     params.push(("format", "json".to_string(), false));
-    let url = format!("{}/search", path.trim_end_matches('/'));
+    params.push(("categories", "science".to_string(), false));
+    (format!("{}/search", path.trim_end_matches('/')), params)
+}
+
+fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
+    let Some(base) = s.searxng_url else { return Err(Failure::setting("no URL")) };
+    let Some(host) = searxng_host(base) else { return Err(Failure::setting("no URL")) };
+    let ctx = Ctx { provider: s.provider, keyed: s.key.is_some(), key: s.key };
+    let (url, params) = searxng_request(base, s.query);
     let reply = get(&url, &host, &ctx, &params)?;
     let body = json_reply(&reply)?;
     if body["results"].as_array().is_none() {
@@ -484,6 +493,20 @@ mod tests {
         let entry = "<entry><id>http://arxiv.org/abs/2401.01234v1</id><title>  A &amp; B </title><summary>x\ny</summary></entry>";
         assert_eq!(xml_field(entry, "title").as_deref(), Some("A & B"));
         assert_eq!(xml_field(entry, "summary").as_deref(), Some("x y"));
+    }
+
+    #[test]
+    fn asks_firecrawl_and_searxng_for_academic_sources() {
+        let body = firecrawl_body("q", 5);
+        assert_eq!(body["categories"], json!(["research"]));
+        assert_eq!((body["query"].as_str(), body["limit"].as_u64()), (Some("q"), Some(5)));
+
+        let (url, params) = searxng_request("https://searx.example.org/?token=abc", "q");
+        assert_eq!(url, "https://searx.example.org/search");
+        assert!(params.contains(&("token", "abc".to_string(), true)), "instance parameters are kept");
+        assert!(params.contains(&("categories", "science".to_string(), false)));
+        assert!(params.contains(&("format", "json".to_string(), false)));
+        assert!(params.contains(&("q", "q".to_string(), false)));
     }
 
     #[test]
