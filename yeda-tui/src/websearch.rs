@@ -152,7 +152,7 @@ impl WebSearchForm {
                 let down = crate::discover::down(p);
                 if let Some(reason) = down {
                     return match p {
-                        Provider::Searxng => format!("down ({reason}), disabled until restart; e edits the URL, and saving a new one clears it"),
+                        Provider::Searxng => format!("down ({reason}), disabled until restart; e edits the URL, and saving it clears this"),
                         Provider::ModelProviderWebSearch => format!("down ({reason}), disabled until restart; no form here, only a restart clears it"),
                         _ => format!("down ({reason}), disabled until restart; e sets a new key and clears it"),
                     };
@@ -166,7 +166,7 @@ impl WebSearchForm {
                     Provider::Parallel => "shared free tier, lower limits; e sets an API key".into(),
                     Provider::Firecrawl if self.key_set.get(&p).copied().unwrap_or(false) => "own key, higher limits; e replaces it".into(),
                     Provider::Firecrawl => "shared free tier, lower limits; e sets an API key".into(),
-                    Provider::Searxng => "your own instance; https only; no API key exists; e edits the URL".into(),
+                    Provider::Searxng => "your own instance; https only; e edits the URL and its basic-auth login".into(),
                     Provider::ModelProviderWebSearch => "the LLM profile's search: anthropic, mistral, openrouter; none on openai, opencode-go; uses the LLM key".into(),
                 }
             }
@@ -207,6 +207,13 @@ pub fn account(provider: Provider) -> &'static str {
         Provider::Firecrawl => yeda_secrets::FIRECRAWL,
         _ => "",
     }
+}
+
+/// The SearXNG instance's `user:password`, keyed for the search input, when the instance has one.
+pub fn searxng_login(settings: &yeda_core::web_search::Settings) -> Option<(Provider, String)> {
+    let url = settings.searxng_url.as_deref()?;
+    let login = yeda_secrets::get(&yeda_secrets::searxng_account(url)).ok().flatten()?;
+    Some((Provider::Searxng, login))
 }
 
 /// The provider whose key is kept under `account`, if any.

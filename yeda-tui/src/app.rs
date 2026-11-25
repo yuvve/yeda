@@ -1896,8 +1896,13 @@ impl App {
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
-                    let (probe, test_secret) = (setup.clone(), secret.clone());
                     let account = setup::account(&setup);
+                    let stored_login = || yeda_secrets::get(&account).ok().flatten();
+                    let probe = setup.clone();
+                    let test_secret = match &setup {
+                        setup::Setup::Searxng(_) => secret.clone().or_else(stored_login),
+                        _ => secret.clone(),
+                    };
                     let providers = self.lib.providers.clone();
                     // An empty field asks a Codex provider to sign in instead: stored credentials
                     // reauthorize with their own client and host id, a missing one registers anew.
@@ -1933,7 +1938,7 @@ impl App {
                         return;
                     }
                     std::thread::spawn(move || {
-                        let _ = tx.send(setup::test(&providers, &probe, test_secret.as_deref()).map(|_| test_secret.clone()));
+                        let _ = tx.send(setup::test(&providers, &probe, test_secret.as_deref()).map(|_| secret));
                     });
                     form.testing = true;
                     self.status = "testing the connection…".into();
@@ -2171,7 +2176,7 @@ impl App {
                 form.refresh();
             }
             self.mode = if self.web_search.is_some() { Mode::WebSearch } else { Mode::Normal };
-            self.status = format!("searxng URL saved; enable it here{warning}");
+            self.status = format!("searxng saved; enable it here{warning}{stored}");
             return;
         }
         self.save_setup(job.section, &stored);
@@ -2958,6 +2963,7 @@ impl App {
                 keys.insert(provider, k);
             }
         }
+        keys.extend(crate::websearch::searxng_login(&settings));
         // The server is named, since a shared yeda.toml decides where the text goes.
         let server = profile.url().to_string();
         let plural = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
@@ -3477,6 +3483,10 @@ impl App {
             let profiles: Vec<&str> = self.lib.llm.iter().filter(|(_, q)| q.provider == *name).map(|(n, _)| n.as_str()).collect();
             let for_profiles = if profiles.is_empty() { String::new() } else { format!(", shared by {}", profiles.join(", ")) };
             items.push((yeda_secrets::provider_account(name, p.url()), format!("Provider {name}: {what} for {}{for_profiles}", p.url())));
+        }
+        if let Some(url) = &self.lib.web_search.searxng_url {
+            let host = yeda_core::web_search::searxng_host(url).unwrap_or_default();
+            items.push((yeda_secrets::searxng_account(url), format!("SearXNG {host}: user:password, optional (basic auth)")));
         }
         items.push((OPENALEX_ACCOUNT.into(), "OpenAlex API key, optional (free at openalex.org/settings/api)".into()));
         for (account, label) in [

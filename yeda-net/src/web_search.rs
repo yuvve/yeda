@@ -1,5 +1,6 @@
 //! Web search providers for `:discover`: one request to one provider, normalised to hits.
 
+use base64::Engine;
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use yeda_core::discover::Hit;
@@ -64,7 +65,7 @@ pub struct Search<'a> {
     pub provider: Provider,
     pub query: &'a str,
     pub limit: usize,
-    /// The provider's own API key, if the store has one.
+    /// The provider's own API key, if the store has one; for SearXNG, the instance's `user:password`.
     pub key: Option<&'a str>,
     pub searxng_url: Option<&'a str>,
 }
@@ -110,6 +111,7 @@ fn headers(ctx: &Ctx<'_>) -> Vec<(String, String)> {
             Provider::Keenable => ("x-api-key", key.to_string()),
             Provider::Exa | Provider::Parallel => ("x-api-key", key.to_string()),
             Provider::Firecrawl => ("authorization", format!("Bearer {key}")),
+            Provider::Searxng => ("authorization", format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(key))),
             _ => ("", String::new()),
         };
         if !name.is_empty() {
@@ -169,8 +171,10 @@ fn status_failure(status: u16, retry_after: Option<Duration>, reset: Option<Dura
         return Failure::down("unexpected redirect");
     }
     if matches!(status, 401 | 403) {
-        if ctx.keyed {
-            return Failure::down("key rejected");
+        // SearXNG answers 403 for a disabled JSON format even to a logged-in user.
+        let searxng = ctx.provider == Provider::Searxng;
+        if ctx.keyed && !(searxng && status == 403) {
+            return Failure::down(if searxng { "login rejected" } else { "key rejected" });
         }
         return Failure::down(match ctx.provider {
             Provider::Exa => "blocked: needs direct IPv4".to_string(),
@@ -345,7 +349,7 @@ fn firecrawl(s: &Search<'_>) -> Result<Answer, Failure> {
 fn searxng(s: &Search<'_>) -> Result<Answer, Failure> {
     let Some(base) = s.searxng_url else { return Err(Failure::setting("no URL")) };
     let Some(host) = searxng_host(base) else { return Err(Failure::setting("no URL")) };
-    let ctx = Ctx { provider: s.provider, keyed: false, key: None };
+    let ctx = Ctx { provider: s.provider, keyed: s.key.is_some(), key: s.key };
     // A token in the instance URL's query string is kept, in front of the search parameters.
     let without_fragment = base.split('#').next().unwrap_or(base);
     let (path, extra) = match without_fragment.split_once('?') {
@@ -446,6 +450,14 @@ fn xml_field(entry: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn searxng_login_is_basic_auth() {
+        let ctx = Ctx { provider: Provider::Searxng, keyed: true, key: Some("me:pw") };
+        assert!(headers(&ctx).contains(&("authorization".into(), "Basic bWU6cHc=".into())));
+        let ctx = Ctx { provider: Provider::Searxng, keyed: false, key: None };
+        assert!(headers(&ctx).iter().all(|(k, _)| k != "authorization"));
+    }
 
     #[test]
     fn reads_every_provider_shape() {

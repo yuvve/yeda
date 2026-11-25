@@ -158,7 +158,7 @@ impl SetupForm {
             }
             Kind::Openalex => vec![String::new()],
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => vec![String::new()],
-            Kind::Searxng => vec![lib.web_search.searxng_url.clone().unwrap_or_default()],
+            Kind::Searxng => vec![lib.web_search.searxng_url.clone().unwrap_or_default(), String::new(), String::new()],
             Kind::Proxy => vec![lib.fulltext.proxies.join(" ")],
             Kind::Table => vec![name.into(), lib.tables.get(name).map(|t| t.columns.join(", ")).unwrap_or_default()],
             Kind::Reference => {
@@ -276,7 +276,11 @@ impl SetupForm {
             Kind::Exa => &[("API key", "optional; without one, search uses the shared free tier, which needs a direct IPv4 connection; the test runs one real search and uses quota")],
             Kind::Parallel => &[("API key", "optional; without one, search uses the shared free tier; keyed use is billed by Parallel; the test runs one real search and uses quota")],
             Kind::Firecrawl => &[("API key", "optional; without one, search uses the shared free tier with lower limits; the test runs one real search and uses quota")],
-            Kind::Searxng => &[("Instance URL", "example URL; https only, no user name or password; the instance must have JSON output enabled (search.formats in settings.yml)")],
+            Kind::Searxng => &[
+                ("Instance URL", "e.g. https://searx.example.org; https only; the instance must have JSON output enabled (search.formats in settings.yml)"),
+                ("User", "optional, for an instance behind basic auth; kept with the password in the secret store; blank keeps what is stored"),
+                ("Password", "kept in the secret store"),
+            ],
             Kind::Reference => &[
                 ("Type", CHOICE_HINT),
                 ("Title", ""),
@@ -325,10 +329,16 @@ impl SetupForm {
     }
 
     fn has_secret(&self) -> bool {
-        matches!(self.kind, Kind::Provider | Kind::Webdav | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
+        matches!(self.kind, Kind::Provider | Kind::Webdav | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl | Kind::Searxng)
     }
 
+    /// What goes in the secret store: the last field, or `user:password` for SearXNG.
     pub fn secret(&self) -> Option<String> {
+        let last = self.values.last()?.trim();
+        if self.kind == Kind::Searxng {
+            let user = self.values[1].trim();
+            return (!user.is_empty() && !last.is_empty()).then(|| format!("{user}:{last}"));
+        }
         Some(self.values.last()?.clone()).filter(|s| !s.is_empty() && self.has_secret())
     }
 
@@ -404,6 +414,12 @@ impl SetupForm {
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => Setup::ApiKey(self.kind.web_search_provider().unwrap()),
             Kind::Searxng => {
                 yeda_core::web_search::check_searxng_url(v[0])?;
+                if v[1].is_empty() != v[2].is_empty() {
+                    bail!("give the user name and the password, or neither");
+                }
+                if v[1].contains(':') {
+                    bail!("a basic-auth user name has no ':'");
+                }
                 t.insert("searxng_url".into(), v[0].trim_end_matches('/').into());
                 Setup::Searxng(v[0].trim_end_matches('/').to_string())
             }
@@ -600,7 +616,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
             provider: WebProvider::Searxng,
             query: "yeda searxng test",
             limit: 3,
-            key: None,
+            key: secret,
             searxng_url: Some(url),
         })
         .map(drop)
@@ -622,7 +638,7 @@ pub fn account(setup: &Setup) -> String {
         Setup::Llm(..) | Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
         Setup::ApiKey(provider) => crate::websearch::account(*provider).into(),
-        Setup::Searxng(_) => String::new(),
+        Setup::Searxng(url) => yeda_secrets::searxng_account(url),
     }
 }
 
@@ -676,6 +692,18 @@ mod tests {
         let (t, setup) = searx.section().unwrap();
         assert_eq!(t["searxng_url"].as_str(), Some("https://searx.example.org"));
         assert!(matches!(setup, Setup::Searxng(ref url) if url == "https://searx.example.org"));
+        assert_eq!(searx.secret(), None);
+        assert_eq!(account(&setup), "searxng:https://searx.example.org");
+
+        searx.values[1] = "me".into();
+        assert!(searx.section().unwrap_err().to_string().contains("or neither"));
+        searx.values[2] = "pw".into();
+        assert_eq!(searx.secret().as_deref(), Some("me:pw"));
+        let (t, _) = searx.section().unwrap();
+        assert!(!t.values().any(|v| v.as_str().is_some_and(|s| s.contains("pw"))));
+        searx.values[1] = "a:b".into();
+        assert!(searx.section().unwrap_err().to_string().contains("':'"));
+        assert!(searx.masked(2) && !searx.masked(1));
     }
 
     #[test]
