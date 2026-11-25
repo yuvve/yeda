@@ -339,7 +339,7 @@ fn remote_secret(name: &str, remote: &library::Remote) -> Result<String> {
     match remote {
         library::Remote::Webdav(dav) => dav_password(dav),
         _ => yeda_secrets::get(&yeda_secrets::remote_account(name, remote))?
-            .with_context(|| format!("{name}: not signed in to {}; run :setup storage {name} in yeda", remote.label())),
+            .with_context(|| format!("{name}: not signed in to {}; run :setup storage in yeda", remote.label())),
     }
 }
 

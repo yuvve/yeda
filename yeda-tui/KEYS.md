@@ -139,11 +139,10 @@ the command line, searches, forms and pickers
 | `:found` | the papers the last :discover found |
 | `:history` | past commands; Enter puts one on the command line (Ctrl-R there) |
 | `:setup` | list everything :setup sets, as it is set now; Enter changes one |
-| `:setup provider\|llm\|storage [name]` | add or change a provider, an LLM profile or a storage location (local, WebDAV, Dropbox) in yeda.toml, testing it first |
+| `:setup provider\|llm\|storage\|table` | list the existing ones to edit, or type a new name to add one; * makes an LLM profile or a storage location the default |
 | `:setup openalex` | set the optional OpenAlex API key, testing it first |
-| `:setup web-search [keenable\|exa\|parallel\|firecrawl\|searxng]` | the search providers :discover uses, or one provider's optional key or SearXNG URL, testing it first |
+| `:setup web-search` | the search providers :discover uses; e edits one provider's optional key or SearXNG URL, testing it first |
 | `:setup proxy` | set the library proxies :fetch opens papers through |
-| `:setup table [name]` | add or change a literature table: its columns and what each holds |
 | `:config [library\|device]` | edit yeda.toml, or this device's config.toml, in $EDITOR |
 | `:secrets` | every password, API key and OAuth token the config uses: where each is set; set, replace or remove them |
 | `:envvars` | the environment variable that sets each secret, and which ones need an alias to tell them apart |
