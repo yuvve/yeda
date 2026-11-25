@@ -366,6 +366,13 @@ struct CacheJob {
     rejected: bool,
 }
 
+/// `:storage migrate`: the moved references, once every PDF is copied.
+struct MigrateJob {
+    rx: Receiver<Result<(Vec<Ref>, usize), String>>,
+    from: String,
+    to: String,
+}
+
 struct FetchJob {
     rx: Receiver<fetch::Msg>,
     step: undo::Step,
@@ -500,6 +507,7 @@ pub struct App {
     text_indexed: HashSet<PathBuf>,
     text_job: Option<TextJob>,
     cache_job: Option<CacheJob>,
+    migrate_job: Option<MigrateJob>,
     pub query: String,
     pub mode: Mode,
     pub input: String,
@@ -665,6 +673,7 @@ impl App {
             text_indexed: HashSet::new(),
             text_job: None,
             cache_job: None,
+            migrate_job: None,
             query: String::new(),
             mode: Mode::Normal,
             input: String::new(),
@@ -1740,6 +1749,9 @@ impl App {
             if form.kind == setup::Kind::Provider && field == 1 {
                 form.provider_changed();
             }
+            if form.kind == setup::Kind::Storage && field == 1 {
+                form.storage_kind_changed();
+            }
         }
         self.cursor_back = 0;
     }
@@ -1893,6 +1905,15 @@ impl App {
                     self.status = "testing the connection…".into();
                     self.setup_job = Some(SetupJob { rx, section, setup: s });
                 }
+                Ok((section, setup::Setup::Cloud(name, remote))) => self.submit_cloud(section, name, remote),
+                Ok((_, setup::Setup::Local(name, path))) => match anyhow::Context::context(dirs::config_dir(), "no config folder on this device").and_then(|d| ops::save_device_location(&d.join("yeda/config.toml"), &name, &path)) {
+                    Ok(()) => {
+                        self.close_setup();
+                        self.reload();
+                        self.status = format!("saved [locations.{name}] to this device's config.toml");
+                    }
+                    Err(e) => self.status = format!("{e:#}"),
+                },
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
@@ -1964,6 +1985,9 @@ impl App {
         if let Some(form) = &mut self.setup {
             if form.kind == setup::Kind::Provider && form.sel == 1 {
                 form.provider_changed();
+            }
+            if form.kind == setup::Kind::Storage && form.sel == 1 {
+                form.storage_kind_changed();
             }
             form.sync_columns();
         }
@@ -2182,6 +2206,55 @@ impl App {
         self.save_setup(job.section, &stored);
     }
 
+    /// Enter on a Dropbox form: with no sign-in to use, shows the link and waits for the code
+    /// pasted back; otherwise tests the sign-in typed or saved.
+    fn submit_cloud(&mut self, section: toml::Table, name: String, remote: library::Remote) {
+        let Some(form) = &mut self.setup else { return };
+        let typed = form.secret();
+        let again = typed.as_deref() == Some("signin");
+        let typed = typed.filter(|_| !again);
+        let pending = form.code_link.take();
+        let account = yeda_secrets::remote_account(&name, &remote);
+        let saved = if again { None } else { yeda_secrets::get(&account).ok().flatten() };
+        let setup = setup::Setup::Cloud(name.clone(), remote.clone());
+        let (tx, rx) = mpsc::channel();
+        match (&remote, typed.or(saved)) {
+            (library::Remote::Dropbox(cloud), Some(text)) if pending.is_some() => {
+                let (verifier, cloud) = (pending.map(|p| p.1).unwrap_or_default(), cloud.clone());
+                std::thread::spawn(move || {
+                    let result = yeda_net::dropbox::finish(&cloud, &verifier, &text).and_then(|secret| {
+                        // Stored before the test, so fixing the folder does not need another code.
+                        let _ = yeda_secrets::set(&account, &secret);
+                        yeda_net::remote::login(&remote, &secret).map(|()| Some(secret))
+                    });
+                    let _ = tx.send(result);
+                });
+            }
+            (_, Some(secret)) => {
+                std::thread::spawn(move || {
+                    let _ = tx.send(yeda_net::remote::login(&remote, &secret).map(|()| Some(secret)));
+                });
+            }
+            (library::Remote::Dropbox(cloud), None) => {
+                match yeda_net::dropbox::start(cloud) {
+                    Ok(sign_in) => {
+                        form.code_link = Some((sign_in.url.clone(), sign_in.verifier));
+                        self.status = "allow yeda in the browser, then paste the code Dropbox shows into Code".into();
+                        self.xdg_open(&sign_in.url);
+                    }
+                    Err(e) => self.status = format!("{e:#}"),
+                }
+                return;
+            }
+            (library::Remote::Webdav(_), None) => return,
+        }
+        self.status = "testing the connection…".into();
+        if let Some(form) = &mut self.setup {
+            form.testing = true;
+        }
+        self.setup_job = Some(SetupJob { rx, section, setup });
+    }
+
     /// Writes the form's section into yeda.toml, keeping the keys it has no field for.
     fn save_setup(&mut self, section: toml::Table, stored: &str) {
         let Some(form) = &self.setup else { return };
@@ -2192,6 +2265,7 @@ impl App {
             setup::Kind::Llm => (vec!["llm", &name], &[]),
             setup::Kind::Table => (vec!["tables", &name], &["describe"]),
             setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
+            setup::Kind::Storage => (vec!["locations", &name], &["kind", "url", "user", "alias", "folder"]),
             _ => (vec!["locations", &name], &[]),
         };
         let result = self.lib.update_config(|t| {
@@ -2688,7 +2762,7 @@ impl App {
                     let kind = match kind {
                         "provider" => setup::Kind::Provider,
                         "llm" => setup::Kind::Llm,
-                        "webdav" => setup::Kind::Webdav,
+                        "storage" => setup::Kind::Storage,
                         "openalex" => setup::Kind::Openalex,
                         "proxy" => setup::Kind::Proxy,
                         "table" => setup::Kind::Table,
@@ -2698,7 +2772,7 @@ impl App {
                         "firecrawl" => setup::Kind::Firecrawl,
                         "searxng" => setup::Kind::Searxng,
                         _ => {
-                            self.status = "usage: :setup [provider|llm|webdav|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
+                            self.status = "usage: :setup [provider|llm|storage|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
                             return;
                         }
                     };
@@ -2732,6 +2806,7 @@ impl App {
                 },
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
+                ("storage", args) => self.storage(args, text),
                 ("detach", _) => self.detach(text),
                 ("cache", _) => self.cache_pdfs(text),
                 ("new", _) => {
@@ -3341,6 +3416,7 @@ impl App {
             (self.graph_job.is_some(), "graph"),
             (self.text_job.is_some(), "text extraction"),
             (self.cache_job.is_some(), "cache"),
+            (self.migrate_job.is_some(), "migration"),
         ]
         .into_iter()
         .filter_map(|(running, what)| running.then_some(what))
@@ -3441,7 +3517,31 @@ impl App {
     /// The alias of the provider or WebDAV location whose secret is `account`.
     fn alias_of(&self, account: &str) -> Option<String> {
         let provider = self.lib.providers.iter().find(|(n, p)| yeda_secrets::provider_account(n, p.url()) == account).and_then(|(_, p)| p.alias.clone());
-        provider.or_else(|| self.lib.remotes.values().find(|d| yeda_secrets::webdav_account(&d.user, &d.url) == account).and_then(|d| d.alias.clone()))
+        provider.or_else(|| self.lib.remotes.iter().find(|(n, r)| yeda_secrets::remote_account(n, r) == account).and_then(|(_, r)| r.alias().map(String::from)))
+    }
+
+    /// The secret of the location `name`: a WebDAV password, asked for when missing, or a cloud
+    /// drive's sign-in, which only `:setup storage` makes.
+    fn remote_secret(&mut self, name: &str, retry: Retry) -> Option<String> {
+        let remote = self.lib.remotes.get(name)?.clone();
+        let account = yeda_secrets::remote_account(name, &remote);
+        if matches!(remote, library::Remote::Webdav(_)) {
+            return self.secret(&account, &remote.label(), retry);
+        }
+        if let Some(s) = yeda_secrets::from_env(&account, None).or_else(|| self.secrets.get(&account).cloned()) {
+            return Some(s);
+        }
+        match yeda_secrets::stored(&account) {
+            Ok(Some(s)) if !self.rejected.contains(&account) => Some(s),
+            Ok(_) => {
+                self.status = format!("{name} is not signed in to {}; run :setup storage {name}", remote.label());
+                None
+            }
+            Err(e) => {
+                self.status = format!("{e:#}");
+                None
+            }
+        }
     }
 
     /// What to tell the user when the server turned down the secret of `account`. An environment
@@ -3470,8 +3570,9 @@ impl App {
     /// Every secret the configuration can use, as (account, label).
     fn secret_accounts(&self) -> Vec<(String, String)> {
         let mut items: Vec<(String, String)> = Vec::new();
-        for (name, dav) in &self.lib.remotes {
-            items.push((yeda_secrets::webdav_account(&dav.user, &dav.url), format!("WebDAV {name}: {}@{}", dav.user, dav.url)));
+        for (name, remote) in &self.lib.remotes {
+            let what = if matches!(remote, library::Remote::Webdav(_)) { "password" } else { "sign-in token" };
+            items.push((yeda_secrets::remote_account(name, remote), format!("Storage {name}: {what} for {}", remote.label())));
         }
         for (name, p) in &self.lib.providers {
             let what = match (p.auth, p.protocol) {
@@ -3614,13 +3715,13 @@ impl App {
         }
     }
 
-    /// Downloads the selected reference's WebDAV PDF into the cache, then opens it.
+    /// Downloads the selected reference's remote PDF into the cache, then opens it.
     fn download(&mut self, pdf: &Pdf, password: &str) {
         let (Some(remote), Ok(path)) = (self.lib.remote_pdf(pdf), self.lib.pdf_path(pdf)) else { return };
-        let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-        match ops::sync_pdf(remote.dav, password, &remote.path, &path) {
+        let account = yeda_secrets::remote_account(remote.location, remote.remote);
+        match ops::sync_pdf(remote.remote, password, &remote.path, &path) {
             Ok(()) => self.launch_reader(&path, pdf),
-            Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
+            Err(e) if yeda_net::remote::is_unauthorized(&e) => {
                 self.reject(&account);
                 self.open_pdf();
             }
@@ -3628,26 +3729,26 @@ impl App {
         }
     }
 
-    /// `:cache`: brings the cached copies of the targets' WebDAV PDFs up to date in the background.
+    /// `:cache`: brings the cached copies of the targets' remote PDFs up to date in the background.
     fn cache_pdfs(&mut self, command: &str) {
         if self.cache_job.is_some() {
             return self.status = "already caching PDFs".into();
         }
-        let pdfs: Vec<(library::Dav, String, PathBuf)> = self
+        let pdfs: Vec<(String, library::Remote, String, PathBuf)> = self
             .targets()
             .iter()
             .flat_map(|&i| &self.lib.refs[i].pdfs)
             .filter_map(|p| Some((self.lib.remote_pdf(p)?, self.lib.pdf_path(p).ok()?)))
-            .map(|(remote, path)| (remote.dav.clone(), remote.path, path))
+            .map(|(remote, path)| (remote.location.to_string(), remote.remote.clone(), remote.path, path))
             .collect();
         if pdfs.is_empty() {
-            return self.status = "no WebDAV PDFs".into();
+            return self.status = "no remote PDFs".into();
         }
         let mut passwords = HashMap::new();
-        for (dav, ..) in &pdfs {
-            let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+        for (name, remote, ..) in &pdfs {
+            let account = yeda_secrets::remote_account(name, remote);
             if let std::collections::hash_map::Entry::Vacant(e) = passwords.entry(account) {
-                let Some(p) = self.secret(e.key(), &format!("{}@{}", dav.user, dav.url), Retry::Command(command.into())) else { return };
+                let Some(p) = self.remote_secret(name, Retry::Command(command.into())) else { return };
                 e.insert(p);
             }
         }
@@ -3655,11 +3756,11 @@ impl App {
         let total = pdfs.len();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            for (dav, remote, path) in pdfs {
-                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-                let result = ops::sync_pdf(&dav, &passwords[&account], &remote, &path);
-                let rejected = result.as_ref().is_err_and(yeda_net::webdav::is_unauthorized);
-                if tx.send((account, remote, result)).is_err() || rejected {
+            for (name, remote, path, cached) in pdfs {
+                let account = yeda_secrets::remote_account(&name, &remote);
+                let result = ops::sync_pdf(&remote, &passwords[&account], &path, &cached);
+                let rejected = result.as_ref().is_err_and(yeda_net::remote::is_unauthorized);
+                if tx.send((account, path, result)).is_err() || rejected {
                     break;
                 }
             }
@@ -3677,7 +3778,7 @@ impl App {
                     job.done += 1;
                     if let Err(e) = result {
                         job.failed += 1;
-                        if yeda_net::webdav::is_unauthorized(&e) {
+                        if yeda_net::remote::is_unauthorized(&e) {
                             job.rejected = true;
                             rejected = Some(account);
                         }
@@ -3694,7 +3795,7 @@ impl App {
         self.status = match (finished, &job.error) {
             (false, _) => format!("caching PDFs: {}/{}…", job.done, job.total),
             (true, None) => format!("{} PDFs cached", job.total),
-            (true, Some(_)) if job.rejected => format!("the WebDAV password was rejected; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), self.alias_of(rejected.as_deref().unwrap_or_default()).as_deref(), ":cache")),
+            (true, Some(_)) if job.rejected => format!("the remote rejected the credentials; {}", Self::rejected_hint(rejected.as_deref().unwrap_or_default(), self.alias_of(rejected.as_deref().unwrap_or_default()).as_deref(), ":cache")),
             (true, Some(e)) => format!("{} of {} PDFs cached; {} failed: {e}", job.total - job.failed, job.total, job.failed),
         };
         if let Some(account) = rejected {
@@ -3705,6 +3806,98 @@ impl App {
             if self.text_job.is_none() && self.searches_text() {
                 self.index_text();
             }
+        }
+    }
+
+    /// `:storage migrate <location>`: copies every PDF of the default location there, then makes
+    /// it the default. The originals stay.
+    fn storage(&mut self, args: &str, command: &str) {
+        let (sub, to) = args.trim().split_once(' ').unwrap_or((args.trim(), ""));
+        let to = to.trim();
+        if sub != "migrate" || to.is_empty() {
+            return self.status = "usage: :storage migrate <location>".into();
+        }
+        if self.migrate_job.is_some() {
+            return self.status = "a migration is already running".into();
+        }
+        if !self.lib.locations.contains_key(to) && !self.lib.remotes.contains_key(to) {
+            return self.status = format!("no location named '{to}'; :setup storage lists them");
+        }
+        let names: Vec<&String> = self.lib.locations.keys().chain(self.lib.remotes.keys()).collect();
+        let from = match (&self.lib.fulltext.location, names.as_slice()) {
+            (Some(l), _) => l.clone(),
+            (None, [only]) => only.to_string(),
+            (None, _) => {
+                return self.status = format!("name the default location in [fulltext] location of yeda.toml ({})", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+            }
+        };
+        if from == to {
+            return self.status = format!("{to} is the default location already");
+        }
+        let refs = self.lib.refs.iter().filter(|r| r.pdfs.iter().any(|p| p.location == from)).count();
+        if refs == 0 {
+            return self.status = format!("no PDFs in {from}");
+        }
+        if !self.confirm_many(&format!("move the PDFs of {from} to {to} for"), refs, command) {
+            return;
+        }
+        let from_secret = if self.lib.remotes.contains_key(&from) {
+            match self.remote_secret(&from, Retry::Command(command.into())) {
+                Some(s) => Some(s),
+                None => return,
+            }
+        } else {
+            None
+        };
+        let to_secret = if self.lib.remotes.contains_key(to) {
+            match self.remote_secret(to, Retry::Command(command.into())) {
+                Some(s) => Some(s),
+                None => return,
+            }
+        } else {
+            None
+        };
+        let lib = self.lib.clone();
+        let (from_name, to_name) = (from.clone(), to.to_string());
+        let (tx, rx) = mpsc::channel();
+        self.status = format!("moving {refs} of the PDFs in {from} to {to}…");
+        std::thread::spawn(move || {
+            let result = ops::migrate(&lib, &from_name, &to_name, from_secret.as_deref(), to_secret.as_deref())
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+        });
+        self.migrate_job = Some(MigrateJob { rx, from, to: to.to_string() });
+    }
+
+    /// Applies a finished `:storage migrate`; called from the event loop.
+    pub fn poll_migrate(&mut self) {
+        let Some(job) = &self.migrate_job else { return };
+        let result = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the migration stopped".into()),
+        };
+        let job = self.migrate_job.take().unwrap();
+        let (refs, moved) = match result {
+            Ok(r) => r,
+            Err(e) => return self.status = format!("not moved: {e}"),
+        };
+        let effects: Vec<Effect> = refs.iter().filter_map(|r| self.lib.save(r).ok()).collect();
+        let config = self.lib.update_config(|t| {
+            config_section(t, "fulltext")?.insert("location".into(), job.to.clone().into());
+            Ok(())
+        });
+        let effects = match config {
+            Ok(effect) => {
+                let mut all = effects;
+                all.push(effect);
+                Ok(all)
+            }
+            Err(e) => Err(e),
+        };
+        if self.apply(effects) {
+            self.reload();
+            self.status = format!("moved {moved} PDFs to {}; the originals stay in {}", job.to, job.from);
         }
     }
 
@@ -3734,16 +3927,13 @@ impl App {
             (Some(rest), Some(home)) => home.join(rest),
             _ => PathBuf::from(file),
         };
-        let password = match self.lib.remotes.get(&location) {
-            Some(dav) => {
-                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-                let label = format!("{}@{}", dav.user, dav.url);
-                match self.secret(&account, &label, Retry::Command(command.into())) {
-                    Some(p) => Some(p),
-                    None => return,
-                }
+        let password = if self.lib.remotes.contains_key(&location) {
+            match self.remote_secret(&location, Retry::Command(command.into())) {
+                Some(p) => Some(p),
+                None => return,
             }
-            None => None,
+        } else {
+            None
         };
         self.status = format!("attaching {}…", file.display());
         self.job = Some(Job::Attach { file, location, password });
@@ -3776,12 +3966,12 @@ impl App {
                     self.reload();
                 }
             }
-            Err(e) if yeda_net::webdav::is_unauthorized(&e) => {
-                if let Some(dav) = self.lib.remotes.get(location) {
-                    let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
+            Err(e) if yeda_net::remote::is_unauthorized(&e) => {
+                let account = self.lib.remotes.get(location).map(|r| yeda_secrets::remote_account(location, r));
+                let hint = account.as_deref().map_or_else(String::new, |a| Self::rejected_hint(a, self.alias_of(a).as_deref(), ":attach"));
+                if let Some(account) = account {
                     self.reject(&account);
                 }
-                let hint = self.lib.remotes.get(location).map_or_else(String::new, |dav| Self::rejected_hint(&yeda_secrets::webdav_account(&dav.user, &dav.url), dav.alias.as_deref(), ":attach"));
                 self.status = format!("{e:#}; {hint}");
             }
             Err(e) => self.status = format!("{e:#}"),
@@ -4157,10 +4347,8 @@ impl App {
             return self.launch_reader(&path, &pdf);
         }
         let Some(remote) = self.lib.remote_pdf(&pdf) else { return self.status = format!("missing: {}", path.display()) };
-        let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
-        let label = format!("{}@{}", remote.dav.user, remote.dav.url);
-        let file = remote.path.clone();
-        if let Some(password) = self.secret(&account, &label, Retry::OpenPdf) {
+        let (location, file) = (remote.location.to_string(), remote.path.clone());
+        if let Some(password) = self.remote_secret(&location, Retry::OpenPdf) {
             self.status = format!("downloading {file}…");
             self.job = Some(Job::Download(pdf.clone(), password));
         }
@@ -4511,16 +4699,13 @@ impl App {
             self.status = format!("no location named '{location}' (locations: {})", names.join(", "));
             return;
         }
-        let password = match self.lib.remotes.get(&location) {
-            Some(dav) => {
-                let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-                let label = format!("{}@{}", dav.user, dav.url);
-                match self.secret(&account, &label, Retry::Command(command.into())) {
-                    Some(p) => Some(p),
-                    None => return,
-                }
+        let password = if self.lib.remotes.contains_key(&location) {
+            match self.remote_secret(&location, Retry::Command(command.into())) {
+                Some(p) => Some(p),
+                None => return,
             }
-            None => None,
+        } else {
+            None
         };
         let targets = self.targets();
         if !self.confirm_many("fetch PDFs for", targets.iter().filter(|&&i| self.lib.refs[i].pdfs.is_empty()).count(), command) {

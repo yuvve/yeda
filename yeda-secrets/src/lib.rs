@@ -1,4 +1,4 @@
-//! Secrets (WebDAV passwords, LLM API keys) in the system's secret store: the Secret Service on
+//! Secrets (WebDAV passwords, Dropbox sign-ins, LLM API keys) in the system's secret store: the Secret Service on
 //! Linux (GNOME Keyring, KWallet, KeePassXC) and the Keystore on Android. Never in a file.
 
 use anyhow::{Context, Result};
@@ -46,6 +46,10 @@ pub fn env_names(account: &str, alias: Option<&str>) -> Vec<String> {
         EXA => ("KEY", "https://api.exa.ai"),
         PARALLEL => ("KEY", "https://api.parallel.ai"),
         FIRECRAWL => ("KEY", "https://api.firecrawl.dev"),
+        _ if account.starts_with(DROPBOX_PREFIX) => {
+            let Some(name) = env_name(&account[DROPBOX_PREFIX.len()..]) else { return Vec::new() };
+            return vec![format!("YEDA_DROPBOX_{name}")];
+        }
         _ => {
             let prefix = if account.starts_with("provider:") {
                 "KEY"
@@ -119,6 +123,25 @@ pub fn webdav_account(user: &str, url: &str) -> String {
     format!("webdav:{user}@{url}")
 }
 
+const DROPBOX_PREFIX: &str = "dropbox:";
+
+/// The account of the location `name`: a WebDAV login, or a Dropbox sign-in. A Dropbox sign-in is
+/// only ever sent to Dropbox's fixed servers, so the location's name is enough to find it.
+pub fn remote_account(name: &str, remote: &yeda_core::library::Remote) -> String {
+    use yeda_core::library::Remote;
+    match remote {
+        Remote::Webdav(d) => webdav_account(&d.user, &d.url),
+        Remote::Dropbox(_) => format!("{DROPBOX_PREFIX}{name}"),
+    }
+}
+
+/// A location name as part of an environment variable's name: letters and digits, `_`, and `-`
+/// as `__`; `None` for a name that would not identify one location.
+fn env_name(name: &str) -> Option<String> {
+    let ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    ok.then(|| name.to_ascii_uppercase().replace('-', "__"))
+}
+
 /// The account for a SearXNG instance's `user:password`, which `:setup searxng` keeps out of the URL.
 pub fn searxng_account(url: &str) -> String {
     format!("searxng:{url}")
@@ -158,6 +181,9 @@ mod tests {
         assert_eq!(names(&super::searxng_account("https://searx.example.org/"), None), ["YEDA_AUTH_SEARX_EXAMPLE_ORG_443"]);
         assert_eq!(names(super::OPENALEX, None), ["YEDA_KEY_API_OPENALEX_ORG_443"]);
         assert_eq!(names(super::FIRECRAWL, None), ["YEDA_KEY_API_FIRECRAWL_DEV_443"]);
+        assert_eq!(names("dropbox:my-box", None), ["YEDA_DROPBOX_MY__BOX"]);
+        assert_eq!(names("dropbox:papers", Some("x")), ["YEDA_DROPBOX_PAPERS"]);
+        assert!(names("dropbox:my.box", None).is_empty());
         assert!(names(&super::git_account("https://github.com/a/b"), None).is_empty());
         assert!(names(&super::provider_account("x", "http://plain.example"), None).is_empty());
     }

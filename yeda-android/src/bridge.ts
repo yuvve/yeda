@@ -5,6 +5,7 @@ interface AndroidBridge {
 	pickFolder(callback: string): void;
 	pickPdf(callback: string): void;
 	takeOpenWithPath(): string | null;
+	openUrl(url: string): void;
 }
 
 declare global {
@@ -21,6 +22,7 @@ const desktop: AndroidBridge = {
 	pickFolder: callback => window[callback as `yedaCallback${number}`]!(window.prompt('Folder path')),
 	pickPdf: callback => window[callback as `yedaCallback${number}`]!(window.prompt('PDF path')),
 	takeOpenWithPath: () => null,
+	openUrl: url => void window.open(url, '_blank'),
 };
 
 const android = window.YedaAndroid ?? desktop;
@@ -45,3 +47,5 @@ export const pickFolder = () => bridgeCall<string | null>(cb => android.pickFold
 export const pickPdf = () => bridgeCall<string | null>(cb => android.pickPdf(cb));
 /** The PDF passed through "Open with", consumed by the call. */
 export const takeOpenWithPath = () => android.takeOpenWithPath();
+/** Opens an https:// link in the system browser. */
+export const openUrl = (url: string) => android.openUrl(url);

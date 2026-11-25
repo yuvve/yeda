@@ -54,7 +54,7 @@ pub fn cite_text(lib: &Library, dir: &Path, refs: &[Ref], format: &str) -> Resul
     Ok((cite::export(refs, &format, read)?, format))
 }
 
-/// Copies `file` to a local location, or uploads it to a WebDAV one keeping a cached copy;
+/// Copies `file` to a local location, or uploads it to a remote one keeping a cached copy;
 /// returns `r` pointing at it, not yet saved.
 pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password: Option<&str>) -> Result<Ref> {
     let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
@@ -63,12 +63,76 @@ pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password
     let path = lib.pdf_path(&pdf)?;
     yeda_fs::write_atomic(&path, &bytes)?;
     if let (Some(remote), Some(password)) = (lib.remote_pdf(&pdf), password) {
-        yeda_net::webdav::upload(remote.dav, password, &remote.path, &bytes)?;
-        let version = yeda_net::webdav::current_version(remote.dav, password, &remote.path)?;
+        yeda_net::remote::upload(remote.remote, password, &remote.path, &bytes)?;
+        let version = yeda_net::remote::current_version(remote.remote, password, &remote.path)?;
         yeda_fs::set_cached_version(&path, version.as_deref())?;
     }
     r.pdfs.push(pdf);
     Ok(r)
+}
+
+/// Copies `pdf` to `target`, which is already in another location. `source_secret` and
+/// `target_secret` are the sign-ins of the two locations, for the remote ones.
+pub fn copy_pdf(lib: &Library, pdf: &Pdf, target: &Pdf, source_secret: Option<&str>, target_secret: Option<&str>) -> Result<()> {
+    let bytes = match lib.remote_pdf(pdf) {
+        Some(remote) => yeda_net::remote::download(remote.remote, source_secret.unwrap_or_default(), &remote.path)?.0,
+        None => {
+            let path = lib.pdf_path(pdf)?;
+            fs::read(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?
+        }
+    };
+    let path = lib.pdf_path(target)?;
+    yeda_fs::write_atomic(&path, &bytes).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    if let Some(remote) = lib.remote_pdf(target) {
+        let secret = target_secret.unwrap_or_default();
+        yeda_net::remote::upload(remote.remote, secret, &remote.path, &bytes)?;
+        let version = yeda_net::remote::current_version(remote.remote, secret, &remote.path)?;
+        yeda_fs::set_cached_version(&path, version.as_deref())?;
+    }
+    Ok(())
+}
+
+/// Copies every PDF at `from` to `to`, keeping each PDF's id so its annotations stay with it, and
+/// returns the references now pointing at the copies. The originals stay where they are.
+pub fn migrate(lib: &Library, from: &str, to: &str, from_secret: Option<&str>, to_secret: Option<&str>) -> Result<(Vec<Ref>, usize)> {
+    let mut updated = Vec::new();
+    let mut moved = 0;
+    for r in lib.refs.iter().filter(|r| r.pdfs.iter().any(|p| p.location == from)) {
+        let mut r = r.clone();
+        let todo: Vec<Pdf> = r.pdfs.iter().filter(|p| p.location == from).cloned().collect();
+        for pdf in todo {
+            // attach names the copy `<citekey>/<file>` and gives it a new id; the id has to stay.
+            let target = Pdf { id: pdf.id.clone(), ..lib.attach(&r, to, &pdf.path)? };
+            copy_pdf(lib, &pdf, &target, from_secret, to_secret)?;
+            if let Some(slot) = r.pdfs.iter_mut().find(|p| p.id == pdf.id) {
+                *slot = target;
+            }
+            moved += 1;
+        }
+        updated.push(r);
+    }
+    Ok((updated, moved))
+}
+
+/// Sets `[locations.<name>]` in this device's config to the local folder `path`, making the folder.
+/// A new location is appended, so the file's comments stay; changing one rewrites the file.
+pub fn save_device_location(config: &Path, name: &str, path: &str) -> Result<()> {
+    let folder = expand_home(path);
+    fs::create_dir_all(&folder).map_err(|e| anyhow::anyhow!("{}: {e}", folder.display()))?;
+    crate::sync::write_new(&folder.join(".stignore"), "*.tmp\n")?;
+    let text = fs::read_to_string(config).unwrap_or_default();
+    let mut device: toml::Table = toml::from_str(&text).context("device config")?;
+    let known = device.get("locations").and_then(|l| l.get(name)).is_some();
+    let locations = yeda_core::library::config_section(&mut device, "locations")?;
+    locations.insert(name.into(), yeda_core::library::local_location(path));
+    let written = if known {
+        toml::to_string(&device)?
+    } else {
+        let only = toml::Table::from_iter([("locations".to_string(), toml::Value::Table(toml::Table::from_iter([(name.to_string(), yeda_core::library::local_location(path))])))]);
+        format!("{}{}{}", text, if text.is_empty() || text.ends_with("\n\n") { "" } else { "\n" }, toml::to_string(&only)?)
+    };
+    yeda_fs::write_atomic(config, written.as_bytes())?;
+    Ok(())
 }
 
 /// Refuses a PDF from the fetch window that doesn't look like `r`, since any link could have been clicked there.
@@ -95,11 +159,11 @@ pub fn fetch_request<'a>(lib: &Library, refs: impl IntoIterator<Item = &'a Ref>,
     fetch::Request { items, settings: lib.fulltext.clone(), downloads, openalex_key, window }
 }
 
-/// Downloads WebDAV file `remote` to `cached` unless the copy there is the server's current one.
-pub fn sync_pdf(dav: &library::Dav, password: &str, remote: &str, cached: &Path) -> Result<()> {
+/// Downloads file `path` of `remote` to `cached` unless the copy there is the remote's current one.
+pub fn sync_pdf(remote: &library::Remote, secret: &str, path: &str, cached: &Path) -> Result<()> {
     yeda_fs::sync_cached(cached, |version| {
-        yeda_net::webdav::current_version(dav, password, remote).map(|v| v.is_some() && v.as_deref() == version)
-    }, || yeda_net::webdav::download(dav, password, remote))
+        yeda_net::remote::current_version(remote, secret, path).map(|v| v.is_some() && v.as_deref() == version)
+    }, || yeda_net::remote::download(remote, secret, path))
 }
 
 /// Extracts the annotations embedded in each of `r`'s PDFs, handing what to write to `write`.
@@ -177,4 +241,55 @@ pub fn finish_graph(lib: &mut Library, f: citations::Fetched) -> (Graph, Vec<Res
 
 pub fn ref_index(lib: &Library, key: &str) -> Result<usize> {
     lib.refs.iter().position(|r| r.key == key).with_context(|| format!("no reference with key '{key}'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_copies_keeps_ids_and_leaves_the_originals() {
+        let dir = std::env::temp_dir().join(format!("yeda-migrate-{}", std::process::id()));
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        fs::create_dir_all(a.join("smith2020")).unwrap();
+        fs::write(a.join("smith2020/paper.pdf"), b"%PDF-a").unwrap();
+        let shared = format!(
+            "[locations.a]\nkind = \"local\"\npath = \"{}\"\n\n[locations.b]\nkind = \"local\"\npath = \"{}\"\n",
+            a.display(),
+            b.display()
+        );
+        let refs = [("smith2020".to_string(), "title = \"A\"\n[[pdf]]\nid = \"1\"\nlocation = \"a\"\npath = \"smith2020/paper.pdf\"\n".to_string())];
+        let lib = Library::parse(Some(&shared), None, refs, None).unwrap();
+        let (updated, moved) = migrate(&lib, "a", "b", None, None).unwrap();
+        assert_eq!(moved, 1);
+        let pdf = &updated[0].pdfs[0];
+        assert_eq!((pdf.id.as_str(), pdf.location.as_str(), pdf.path.as_str()), ("1", "b", "smith2020/paper.pdf"));
+        assert_eq!(fs::read(b.join("smith2020/paper.pdf")).unwrap(), b"%PDF-a");
+        assert!(a.join("smith2020/paper.pdf").is_file());
+        // A missing file fails the whole run, before any reference changes.
+        fs::remove_file(a.join("smith2020/paper.pdf")).unwrap();
+        assert!(migrate(&lib, "a", "b", None, None).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_device_location_keeps_the_comments_until_it_changes() {
+        let dir = std::env::temp_dir().join(format!("yeda-device-{}", std::process::id()));
+        let config = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&config, "# Settings for this device.\nlibrary = \"~/l\"\n").unwrap();
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        save_device_location(&config, "papers", a.to_str().unwrap()).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.starts_with("# Settings for this device.\nlibrary = \"~/l\"\n"), "{text}");
+        assert!(a.join(".stignore").is_file());
+        let lib = Library::parse(None, Some(&text), [], None).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(lib.locations["papers"], a);
+
+        save_device_location(&config, "papers", b.to_str().unwrap()).unwrap();
+        save_device_location(&config, "more", a.to_str().unwrap()).unwrap();
+        let lib = Library::parse(None, Some(&fs::read_to_string(&config).unwrap()), [], None).unwrap();
+        assert_eq!((lib.locations["papers"].clone(), lib.locations["more"].clone()), (b, a));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -68,11 +68,11 @@ fn wizard(import: bool) -> Result<()> {
     if a.dest != wizard::Dest::Nowhere {
         let mut lib = load_library(dir)?;
         let location: toml::Value = match &a.dav {
-            Some((dav, _)) => toml::Table::from_iter([("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
+            Some((dav, _)) => toml::Table::from_iter([("kind".to_string(), "webdav".into()), ("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
             None => {
                 fs::create_dir_all(&a.folder)?;
                 sync::write_new(&a.folder.join(".stignore"), "*.tmp\n")?;
-                a.folder.to_string_lossy().into_owned().into()
+                library::local_location(&a.folder.to_string_lossy())
             }
         };
         let effect = lib.update_config(|t| {
@@ -139,8 +139,9 @@ const CONFIG_TEMPLATE: &str = r#"# Settings for this device. Everything else goe
 # reader = "default"
 
 # This device's folders for the library's PDF locations.
-# [locations]
-# zotero = "~/Zotero/storage"
+# [locations.zotero]
+# kind = "local"
+# path = "~/Zotero/storage"
 
 # Key bindings, per context (normal, library, graph, cluster, table, annotations); "" unbinds a key.
 # [keys.normal]
@@ -328,6 +329,16 @@ fn zotero_webdav() -> Option<library::Dav> {
     Some(library::Dav { url, user: pref("username")?, alias: None })
 }
 
+/// What the secret store holds for the location `name`: a WebDAV password, asked for in the
+/// terminal when missing, or a cloud drive's sign-in, which only `:setup storage` can make.
+fn remote_secret(name: &str, remote: &library::Remote) -> Result<String> {
+    match remote {
+        library::Remote::Webdav(dav) => dav_password(dav),
+        _ => yeda_secrets::get(&yeda_secrets::remote_account(name, remote))?
+            .with_context(|| format!("{name}: not signed in to {}; run :setup storage {name} in yeda", remote.label())),
+    }
+}
+
 /// The WebDAV password for `dav`, from the secret store or asked for in the terminal.
 fn dav_password(dav: &library::Dav) -> Result<String> {
     let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
@@ -374,13 +385,13 @@ fn from_zotero_webdav(dav: &library::Dav, password: &str, path: &str) -> Result<
 fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
     let mut lib = load_library(dir)?;
     let zotero_dav = (from == ZOTERO_LOCATION).then(zotero_webdav).flatten();
-    if let (Some(z), Some(target)) = (&zotero_dav, lib.remotes.get(to))
+    if let (Some(z), Some(library::Remote::Webdav(target))) = (&zotero_dav, lib.remotes.get(to))
         && target.url.trim_end_matches('/').starts_with(z.url.trim_end_matches('/'))
     {
         anyhow::bail!("{to} is inside Zotero's WebDAV folder ({}); use a folder of its own", z.url);
     }
     let mut zotero_password: Option<String> = None;
-    let password = |name: &str| lib.remotes.get(name).map(dav_password).transpose();
+    let password = |name: &str| lib.remotes.get(name).map(|r| remote_secret(name, r)).transpose();
     let (from_password, to_password) = (password(from)?, password(to)?);
     let todo: Vec<(usize, usize)> =
         lib.refs.iter().enumerate().flat_map(|(i, r)| r.pdfs.iter().enumerate().filter(|(_, p)| p.location == from).map(move |(j, _)| (i, j))).collect();
@@ -392,7 +403,7 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
             let r = &lib.refs[i];
             let pdf = &r.pdfs[j];
             let bytes = match (lib.remote_pdf(pdf), &from_password) {
-                (Some(remote), Some(p)) => yeda_net::webdav::download(remote.dav, p, &remote.path)?.0,
+                (Some(remote), Some(p)) => yeda_net::remote::download(remote.remote, p, &remote.path)?.0,
                 _ => {
                     let path = lib.pdf_path(pdf)?;
                     match (fs::read(&path), &zotero_dav) {
@@ -415,15 +426,15 @@ fn copy_pdfs(from: &str, to: &str, dir: &Path) -> Result<()> {
             let dest = lib.pdf_path(&copy)?;
             yeda_fs::write_atomic(&dest, &bytes)?;
             if let (Some(remote), Some(p)) = (lib.remote_pdf(&copy), &to_password) {
-                yeda_net::webdav::upload(remote.dav, p, &remote.path, &bytes)?;
-                yeda_fs::set_cached_version(&dest, yeda_net::webdav::current_version(remote.dav, p, &remote.path)?.as_deref())?;
+                yeda_net::remote::upload(remote.remote, p, &remote.path, &bytes)?;
+                yeda_fs::set_cached_version(&dest, yeda_net::remote::current_version(remote.remote, p, &remote.path)?.as_deref())?;
             }
             yeda_fs::apply(dir, [lib.save(&r)?])?;
             Ok(r)
         })();
         match result {
             Ok(r) => lib.refs[i] = r,
-            Err(e) if yeda_net::webdav::is_unauthorized(&e) => return Err(e),
+            Err(e) if yeda_net::remote::is_unauthorized(&e) => return Err(e),
             Err(e) => failed.push(format!("{key}: {e:#}")),
         }
     }
@@ -469,6 +480,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_git();
         app.poll_text();
         app.poll_cache();
+        app.poll_migrate();
         app.log.write(&app.status);
         if let Some(job) = app.job.take() {
             term.draw(|f| ui::draw(f, app))?;

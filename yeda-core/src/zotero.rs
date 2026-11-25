@@ -186,7 +186,7 @@ pub fn import(db: &Connection, zotero: &Path, linked: Option<&Path>, mut lib: Li
                 Some(Ok(rest)) => format!("~/{}", rest.display()),
                 _ => base.display().to_string(),
             };
-            locations.insert(name.clone(), shown.trim_end_matches('/').into());
+            locations.insert(name.clone(), crate::library::local_location(shown.trim_end_matches('/')));
         }
         let tag_colors = config_section(t, "tag_colors")?;
         for (tag, color) in colors {

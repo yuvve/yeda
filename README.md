@@ -10,7 +10,7 @@ I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the 
 
 ## About
 
-yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local or WebDAV folder. An Android app reads and annotates the same library.
+yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local folder, on WebDAV or in Dropbox. An Android app reads and annotates the same library.
 
 ![Main window](yeda-tui/screenshots/main.png)
 
@@ -133,7 +133,7 @@ On first start, pick the library folder and allow all-files access. Get a librar
 - **Reader:** the same as on the desktop, with Zotero-compatible annotations, column mode and a pen mode (the pen draws, a finger pans, a palm is ignored). An e-ink mode (Settings → Display → E-ink screen) shows one page at a time, turned by swiping, with black ink.
 - **Open with:** PDFs from outside the library open with their annotations in a `<file>.annotations/` folder.
 - **Sync:** commits, merges `origin` and pushes over HTTPS. Conflicting annotation files are merged annotation by annotation; any other conflict stops the sync.
-- **PDFs:** from local folders or WebDAV locations. Passwords and tokens are kept in the Android Keystore.
+- **PDFs:** from local folders, WebDAV or Dropbox. Passwords and tokens are kept in the Android Keystore.
 
 The app icon is from Flaticon: [Knowledge graph icons created by Jagat Icon - Flaticon](https://www.flaticon.com/free-icons/knowledge-graph).
 <!-- /yeda-android -->
@@ -150,7 +150,7 @@ The app icon is from Flaticon: [Knowledge graph icons created by Jagat Icon - Fl
   annotations/<citekey>/<pdf>/img/<id>.png      # image and ink annotations
 ```
 
-PDFs are kept outside the library folder, in *locations*: local folders or WebDAV folders, each holding `<citekey>/<file>`. WebDAV PDFs are cached locally. A reference can have several PDFs, each a `[[pdf]]` entry whose `id` names its annotations folder.
+PDFs are kept outside the library folder, in *locations*: a local folder, a WebDAV folder or Dropbox, each holding `<citekey>/<file>`. Remote PDFs are cached locally. `:setup storage` adds a location; `:help` has the steps for using your own Dropbox app. A reference can have several PDFs, each a `[[pdf]]` entry whose `id` names its annotations folder.
 
 ### Shared settings
 
@@ -158,18 +158,19 @@ PDFs are kept outside the library folder, in *locations*: local folders or WebDA
 
 ```toml
 [locations]
-pdfs = "~/yeda-pdfs"             # a local folder
-dav = { url = "https://dav.example.com/yeda/", user = "me" }
+pdfs = { kind = "local", path = "~/yeda-pdfs" }
+dav = { kind = "webdav", url = "https://dav.example.com/yeda/", user = "me" }
+box = { kind = "dropbox", folder = "pdfs" }
 
 [searches]
 "To read" = { query = 'status:"^To Read$"', sort = "year", descending = true }
 ```
 
-Each device also has its own config, which may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop, the app's settings on Android.
+Each device also has its own config, whose `[locations]` may give a location a different folder on that device: `~/.config/yeda/config.toml` on the desktop, the app's settings on Android.
 
 ### Trust
 
-`yeda.toml` is trusted like code: whoever can write to the library's git remote or Syncthing folder decides which servers get LLM requests, which proxies the fetch window uses and which WebDAV servers hold the PDFs. They cannot get a secret: each is stored with its server's address, so a changed address finds none and yeda asks, naming the server.
+`yeda.toml` is trusted like code: whoever can write to the library's git remote or Syncthing folder decides which servers get LLM requests, which proxies the fetch window uses and which WebDAV servers hold the PDFs. A Dropbox location can only point at Dropbox. They cannot get a secret: each is stored with its server's address, so a changed address finds none and yeda asks, naming the server.
 
 PDF downloads go only over `https://` to public hosts (no `localhost`, `.local`, private or link-local addresses), through at most 5 redirects, and stop at 100 MB.
 

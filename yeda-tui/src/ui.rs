@@ -492,6 +492,9 @@ fn draw_filter(f: &mut Frame, app: &App, main: Rect) {
     f.render_widget(Paragraph::new(lines).block(block(" Filter · ^D/^U move · ^L clear · ^X all · Enter · Esc ".into(), true)), area);
 }
 
+const SIGN_IN_INTRO: &str = "yeda opened the sign-in link in your browser; press c to copy it, then finish signing in:";
+const CODE_INTRO: &str = "yeda opened this link in your browser; allow access, then paste the code it shows below and press Enter:";
+
 fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     let Some(form) = &app.setup else { return };
     let fields = form.fields();
@@ -522,9 +525,10 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     for hint in &hint_lines {
         lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
     }
-    if let Some(url) = &form.sign_in_url {
+    let link = form.sign_in_url.as_ref().map(|url| (SIGN_IN_INTRO, url)).or(form.code_link.as_ref().map(|(url, _)| (CODE_INTRO, url)));
+    if let Some((intro, url)) = link {
         lines.push(Line::raw(""));
-        for hint in wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line) {
+        for hint in wrapped(intro, chars_per_line) {
             lines.push(Line::raw(format!("{:>w$}  {hint}", "")).dim());
         }
         for line in wrapped(url, chars_per_line) {
@@ -534,7 +538,7 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
     let what = match form.kind {
         crate::setup::Kind::Provider => "LLM provider",
         crate::setup::Kind::Llm => "LLM profile",
-        crate::setup::Kind::Webdav => "WebDAV location",
+        crate::setup::Kind::Storage => "Storage location",
         crate::setup::Kind::Search => "Saved search",
         crate::setup::Kind::Openalex => "OpenAlex API key",
         crate::setup::Kind::Reference => "New reference",
@@ -547,9 +551,8 @@ fn draw_setup(f: &mut Frame, app: &App, main: Rect) {
         crate::setup::Kind::Searxng => "SearXNG",
     };
     let mut height = fields.len() as u16 + 3 + hint_lines.len() as u16;
-    if let Some(url) = &form.sign_in_url {
-        height += 2 + wrapped("yeda opened the sign-in link in your browser; press c to copy it, then finish signing in with ChatGPT:", chars_per_line).len() as u16
-            + wrapped(url, chars_per_line).len() as u16;
+    if let Some((intro, url)) = link {
+        height += 2 + wrapped(intro, chars_per_line).len() as u16 + wrapped(url, chars_per_line).len() as u16;
     }
     let area = popup(main, 76, height.max(5));
     f.render_widget(Clear, area);

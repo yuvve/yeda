@@ -74,6 +74,59 @@ pub struct Dav {
     pub alias: Option<String>,
 }
 
+/// A Dropbox folder holding PDFs. Its sign-in token is never part of the library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cloud {
+    /// Where PDFs go, inside yeda's Dropbox app folder.
+    #[serde(default)]
+    pub folder: String,
+    /// Replaces the Dropbox app yeda was built with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+}
+
+impl Cloud {
+    /// The folder's segments, without the slashes around them.
+    pub fn folder_segments(&self) -> Vec<&str> {
+        self.folder.split('/').filter(|s| !s.is_empty()).collect()
+    }
+}
+
+/// A `[locations.<name>]` table: where PDFs live other than in a local folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Remote {
+    Webdav(Dav),
+    Dropbox(Cloud),
+}
+
+/// Every `kind` a `[locations.<name>]` table may have.
+pub const LOCATION_KINDS: [&str; 3] = ["local", "webdav", "dropbox"];
+
+impl Remote {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Remote::Webdav(_) => "webdav",
+            Remote::Dropbox(_) => "dropbox",
+        }
+    }
+
+    pub fn alias(&self) -> Option<&str> {
+        match self {
+            Remote::Webdav(d) => d.alias.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// One line for lists: what the location is and where it points.
+    pub fn label(&self) -> String {
+        match self {
+            Remote::Webdav(d) => format!("WebDAV {}@{}", d.user, d.url),
+            Remote::Dropbox(c) => format!("Dropbox /{}", c.folder.trim_matches('/')),
+        }
+    }
+}
+
 impl Dav {
     /// The URL of `path` (`/`-separated), each segment percent-encoded.
     pub fn file_url(&self, path: &str) -> String {
@@ -106,18 +159,34 @@ impl SavedSearch {
     }
 }
 
-/// A `[locations]` entry: a local folder, or a table describing a WebDAV server.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+/// A `[locations]` entry: a `kind = "local"` folder, or a remote.
 enum Location {
     Folder(String),
-    Dav(Dav),
+    Remote(Box<Remote>),
+}
+
+/// The `[locations.<name>]` table for the local folder `path`.
+pub fn local_location(path: &str) -> toml::Value {
+    toml::Table::from_iter([("kind".to_string(), "local".into()), ("path".to_string(), path.into())]).into()
+}
+
+fn parse_location(name: &str, value: toml::Value) -> Result<Location> {
+    let hint = || format!("locations.{name}: a location is a table with kind = {}", LOCATION_KINDS.map(|k| format!("\"{k}\"")).join(", "));
+    let toml::Value::Table(t) = value else { bail!("{}", hint()) };
+    match t.get("kind").and_then(|k| k.as_str()) {
+        Some("local") => {
+            let path = t.get("path").and_then(|p| p.as_str()).filter(|p| !p.is_empty());
+            Ok(Location::Folder(path.with_context(|| format!("locations.{name}: a local location needs a path"))?.to_string()))
+        }
+        Some(kind) if LOCATION_KINDS.contains(&kind) => Ok(Location::Remote(Box::new(Remote::deserialize(toml::Value::Table(t)).with_context(|| format!("locations.{name}"))?))),
+        _ => bail!("{}", hint()),
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Config {
-    locations: BTreeMap<String, Location>,
+    locations: BTreeMap<String, toml::Value>,
     tag_colors: BTreeMap<String, String>,
     searches: BTreeMap<String, SavedSearch>,
     reader: Option<String>,
@@ -144,12 +213,12 @@ const DEVICE_KEYS: [&str; 4] = ["library", "reader", "keys", "locations"];
 
 pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not Reading"];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Library {
     /// Local folders, by location name.
     pub locations: BTreeMap<String, PathBuf>,
-    /// WebDAV locations, by name.
-    pub remotes: BTreeMap<String, Dav>,
+    /// WebDAV and cloud drive locations, by name.
+    pub remotes: BTreeMap<String, Remote>,
     /// Where the client keeps downloaded copies of remote PDFs: `<cache>/<location>/<key>/<file>`.
     pub cache: Option<PathBuf>,
     pub tag_colors: BTreeMap<String, String>,
@@ -180,8 +249,8 @@ pub struct Library {
 
 pub struct RemotePdf<'a> {
     pub location: &'a str,
-    pub dav: &'a Dav,
-    /// `/`-separated, relative to the server's URL.
+    pub remote: &'a Remote,
+    /// `/`-separated, relative to the remote's folder.
     pub path: String,
 }
 
@@ -243,19 +312,19 @@ impl Library {
             bail!("device config: `{key}` belongs in the library's {CONFIG}");
         }
         let mut lib = Library { shared: shared_table, ..Default::default() };
-        for (name, text) in [(CONFIG, shared), ("device config", machine)] {
+        for (source, text) in [(CONFIG, shared), ("device config", machine)] {
             let Some(text) = text else { continue };
-            let cfg: Config = toml::from_str(text).context(name)?;
-            // A device config may turn a shared WebDAV location into a local folder, or back.
-            for (name, location) in cfg.locations {
-                match location {
+            let cfg: Config = toml::from_str(text).context(source)?;
+            // A device config may turn a shared remote location into a local folder, or back.
+            for (name, value) in cfg.locations {
+                match parse_location(&name, value).context(source)? {
                     Location::Folder(p) => {
                         lib.remotes.remove(&name);
                         lib.locations.insert(name, expand_home(&p, home));
                     }
-                    Location::Dav(dav) => {
+                    Location::Remote(remote) => {
                         lib.locations.remove(&name);
-                        lib.remotes.insert(name, dav);
+                        lib.remotes.insert(name, *remote);
                     }
                 }
             }
@@ -285,7 +354,11 @@ impl Library {
             p.check().with_context(|| format!("providers.{name}"))?;
         }
         crate::check_aliases(lib.providers.iter().map(|(n, p)| (n.as_str(), p.url(), p.alias.as_deref()))).context("providers")?;
-        crate::check_aliases(lib.remotes.iter().map(|(n, d)| (n.as_str(), d.url.as_str(), d.alias.as_deref()))).context("locations")?;
+        let dav_aliases = lib.remotes.iter().filter_map(|(n, r)| match r {
+            Remote::Webdav(d) => Some((n.as_str(), d.url.as_str(), d.alias.as_deref())),
+            _ => None,
+        });
+        crate::check_aliases(dav_aliases).context("locations")?;
         for (key, text) in refs {
             match parse_ref(key.clone(), &text) {
                 Ok(r) => lib.refs.push(r),
@@ -417,21 +490,21 @@ impl Library {
         Ok(vec![Effect::remove(ref_path(key)), Effect::remove(annotations_dir(key)), Effect::remove(note_path(key)), Effect::remove(ai_path(key))])
     }
 
-    /// Where the PDF is on this machine; for a WebDAV location, its place in `cache`, which may not
+    /// Where the PDF is on this machine; for a remote location, its place in `cache`, which may not
     /// have been downloaded yet.
     pub fn pdf_path(&self, pdf: &Pdf) -> Result<PathBuf> {
         if let Some(base) = self.locations.get(&pdf.location) {
             return Ok(base.join(&pdf.path));
         }
         anyhow::ensure!(self.remotes.contains_key(&pdf.location), "unknown pdf location '{}'", pdf.location);
-        let cache = self.cache.as_ref().context("no cache folder for WebDAV PDFs")?;
+        let cache = self.cache.as_ref().context("no cache folder for remote PDFs")?;
         Ok(cache.join(&pdf.location).join(&pdf.path))
     }
 
-    /// The WebDAV server holding `pdf`, with its path on it.
+    /// The remote holding `pdf`, with its path on it.
     pub fn remote_pdf(&self, pdf: &Pdf) -> Option<RemotePdf<'_>> {
-        let (name, dav) = self.remotes.get_key_value(&pdf.location)?;
-        Some(RemotePdf { location: name, dav, path: pdf.path.clone() })
+        let (name, remote) = self.remotes.get_key_value(&pdf.location)?;
+        Some(RemotePdf { location: name, remote, path: pdf.path.clone() })
     }
 
     /// Where a PDF named `file_name` goes when attached to `r` at `location`: `<citekey>/<file name>`,
@@ -606,7 +679,7 @@ mod tests {
         let Effect::Write { path: ai, bytes: ai_bytes } = Library::default().save_ai(&r).unwrap() else { panic!() };
         assert_eq!(ai, "notes/smith2020.ai.toml");
         assert_eq!(ai_key("smith2020.ai.toml"), Some("smith2020"));
-        let shared = "[locations]\npapers = \"~/papers\"\n";
+        let shared = "[locations.papers]\nkind = \"local\"\npath = \"~/papers\"\n";
         let mut lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
         lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap());
         assert_eq!(lib.refs, vec![r]);
@@ -624,8 +697,8 @@ mod tests {
     #[test]
     fn device_folders_win_and_edits_keep_unknown_keys() {
         let mut lib = Library::parse(
-            Some("future_key = 1\n[locations]\npapers = \"/shared\"\n"),
-            Some("[locations]\npapers = \"/mine\"\n"),
+            Some("future_key = 1\n[locations.papers]\nkind = \"local\"\npath = \"/shared\"\n"),
+            Some("[locations.papers]\nkind = \"local\"\npath = \"/mine\"\n"),
             [],
             None,
         )
@@ -641,7 +714,7 @@ mod tests {
             panic!()
         };
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.contains("future_key = 1") && text.contains("papers = \"/shared\"") && text.contains("ml = \"red\""));
+        assert!(text.contains("future_key = 1") && text.contains("path = \"/shared\"") && text.contains("ml = \"red\""));
     }
 
     #[test]
@@ -656,7 +729,7 @@ mod tests {
 
     #[test]
     fn webdav_locations_and_attachments() {
-        let shared = "[locations]\npapers = \"/p\"\n\n[locations.dav]\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
+        let shared = "[locations.papers]\nkind = \"local\"\npath = \"/p\"\n\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
         let refs = [("a2020".to_string(), "[[pdf]]\nid = \"1\"\nlocation = \"dav\"\npath = \"ABCD2345/a.pdf\"\n".to_string())];
         let mut lib = Library::parse(Some(shared), None, refs, None).unwrap();
         assert!(lib.pdf_path(&lib.refs[0].pdfs[0]).is_err());
@@ -664,7 +737,8 @@ mod tests {
         assert_eq!(lib.pdf_path(&lib.refs[0].pdfs[0]).unwrap(), Path::new("/c/dav/ABCD2345/a.pdf"));
         let remote = lib.remote_pdf(&lib.refs[0].pdfs[0]).unwrap();
         assert_eq!(remote.path, "ABCD2345/a.pdf");
-        assert_eq!(remote.dav.file_url("a2020/Smith - 2020 - A & B.pdf"), "https://dav.example/zotero/a2020/Smith%20-%202020%20-%20A%20%26%20B.pdf");
+        let Remote::Webdav(dav) = remote.remote else { panic!() };
+        assert_eq!(dav.file_url("a2020/Smith - 2020 - A & B.pdf"), "https://dav.example/zotero/a2020/Smith%20-%202020%20-%20A%20%26%20B.pdf");
 
         let pdf = lib.attach(&lib.refs[0], "papers", "/tmp/x/Paper.pdf").unwrap();
         assert_eq!((pdf.id.as_str(), pdf.location.as_str(), pdf.path.as_str()), ("2", "papers", "a2020/Paper.pdf"));
@@ -673,8 +747,29 @@ mod tests {
         assert!(lib.attach(&r, "papers", "Paper.pdf").is_err());
         assert!(lib.attach(&lib.refs[0], "nowhere", "x.pdf").is_err());
 
-        let local = Library::parse(Some(shared), Some("[locations]\ndav = \"/mirror\"\n"), [], None).unwrap();
+        let local = Library::parse(Some(shared), Some("[locations.dav]\nkind = \"local\"\npath = \"/mirror\"\n"), [], None).unwrap();
         assert!(local.remotes.is_empty());
         assert_eq!(local.locations["dav"], Path::new("/mirror"));
+    }
+
+    #[test]
+    fn locations_need_a_known_kind() {
+        let shared = "[locations.box]\nkind = \"dropbox\"\nfolder = \"/yeda\"\nclient_id = \"mine\"\n";
+        let lib = Library::parse(Some(shared), None, [], None).unwrap();
+        let Remote::Dropbox(box_) = &lib.remotes["box"] else { panic!() };
+        assert_eq!((box_.folder_segments(), box_.client_id.as_deref()), (vec!["yeda"], Some("mine")));
+        assert_eq!(lib.remotes["box"].label(), "Dropbox /yeda");
+
+        let bad = [
+            "[locations.a]\nurl = \"https://x/\"\nuser = \"u\"\n",
+            "[locations.a]\nkind = \"ftp\"\n",
+            "[locations.a]\nkind = \"gdrive\"\nfolder = \"x\"\n",
+            "[locations.a]\nkind = \"local\"\n",
+            "[locations]\na = \"/bare/string\"\n",
+        ];
+        for text in bad {
+            let err = format!("{:#}", Library::parse(Some(text), None, [], None).unwrap_err());
+            assert!(err.contains("locations.a"), "{err}");
+        }
     }
 }
