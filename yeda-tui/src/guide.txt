@@ -46,7 +46,7 @@ FIELDS
 
   The first text: search reads every PDF on this machine in the background
   (with poppler's pdftotext) and keeps their text in the cache folder, so
-  later sessions only read new or changed PDFs. WebDAV PDFs are searched
+  later sessions only read new or changed PDFs. Remote PDFs are searched
   once cached on this machine: opening a PDF caches it, and :cache
   downloads the selected or marked ones (V G :cache for all of them).
   Opening uses the cached copy without asking the server; :cache also
@@ -238,12 +238,15 @@ SECRETS  ( :secrets, :envvars )
 
     YEDA_KEY_<HOST>_<PORT>   LLM providers, OpenAlex, web search keys
     YEDA_DAV_<HOST>_<PORT>   WebDAV locations
+    YEDA_DROPBOX_<NAME>      a Dropbox location's refresh token
+    YEDA_GDRIVE_<NAME>       a Google Drive location's refresh token
 
   The host is uppercase, "." becomes "_" and "-" becomes "__"; the port is
   443 unless the address gives one. https://api.anthropic.com is
   YEDA_KEY_API_ANTHROPIC_COM_443.
 
-  Providers, or WebDAV locations, on the same host share one variable. Give
+  <NAME> is the location's name, uppercase, with "-" as "__". Providers, or
+  WebDAV locations, on the same host share one variable. Give
   each an alias (letters and digits, unique per host) in yeda.toml or in
   :setup, and YEDA_KEY_<HOST>_<PORT>_ALIAS_<ALIAS> is theirs alone; it wins
   over the shared one:
@@ -430,11 +433,70 @@ MAIN WINDOW
   lighter than the terminal's background, so a line is easy to follow. A
   terminal that does not report its background gets plain rows.
 
+STORAGE  ( :setup storage [name] )
+
+  PDFs are kept in locations: a local folder, a WebDAV folder, Dropbox or
+  Google Drive. Each is a [locations.<name>] table in yeda.toml:
+
+    [locations.papers]
+    kind = "webdav"
+    url = "https://dav.example.com/pdfs/"
+    user = "me"
+
+    [locations.box]
+    kind = "dropbox"
+    folder = "pdfs"          # inside yeda's Dropbox app folder
+
+    [locations.drive]
+    kind = "gdrive"
+    folder = "yeda/pdfs"     # in My Drive
+
+  :setup storage opens a form: the location's name, its kind (webdav,
+  dropbox or gdrive), the URL or folder, then the sign-in. It tests the
+  connection before saving, and makes the folder if it is missing.
+
+    webdav   User and password; the password goes in the secret store.
+    dropbox  Press Enter with the Code field empty: yeda opens a link in the
+             browser. Allow yeda, paste the code Dropbox shows into Code, and
+             press Enter. yeda only sees its own app folder.
+    gdrive   Press Enter with the Sign-in field empty: yeda opens a link in
+             the browser, and the browser returns to yeda by itself. yeda only
+             sees the files and folders it made itself, so a PDF already in
+             Drive has to be attached through yeda.
+
+  The sign-in is kept in the secret store, one per location, and is used
+  again when the form is saved later; type signin in that field to sign in
+  again. :secrets lists them and :cache downloads the remote PDFs.
+
+  yeda has a Dropbox app and a Google client of its own. To use yours
+  instead, register it once and give its client ID to the location:
+
+    Dropbox     1. dropbox.com/developers/apps: Create app, Scoped access,
+                   App folder.
+                2. Permissions: files.metadata.read, files.content.read and
+                   files.content.write; Submit.
+                3. Settings: copy the App key, and leave "Allow public
+                   clients (Implicit Grant & PKCE)" on.
+                4. Put the key in the form's Client ID, or client_id in
+                   yeda.toml.
+
+    Google      1. console.cloud.google.com: a new project, with the Google
+                   Drive API enabled.
+                2. Google Auth Platform: Branding; Data access, add the scope
+                   .../auth/drive.file; Audience, External, then Publish app
+                   (a published app's sign-in does not expire after 7 days,
+                   and this scope needs no review).
+                3. Clients, Create client, Desktop app: copy the client ID and
+                   the client secret.
+                4. Put the ID in Client ID and the secret in Client secret.
+                   The secret is kept in the secret store, not in a file.
+
 LIBRARIES  ( yeda init, yeda import, yeda <dir> )
 
   yeda init creates an empty library. A form asks for its folder, where its
-  PDFs go (a local folder, a WebDAV folder, or none yet) and whether it
-  becomes the default library. The library is ready for git and Syncthing.
+  PDFs go (a local folder, a WebDAV folder, or none yet; Dropbox and Google
+  Drive are set up afterwards with :setup storage) and whether it becomes the
+  default library. The library is ready for git and Syncthing.
 
   yeda import creates a library from Zotero's instead. The same form also
   asks for Zotero's data folder. It imports the items, annotations, notes,
@@ -468,7 +530,7 @@ ANNOTATIONS  ( A, x )
 SETUP  ( :setup, :config )
 
   :setup lists what it sets, as it is now: LLM providers and profiles,
-  WebDAV locations, the OpenAlex key, web search, library proxies and tables.
+  storage locations, the OpenAlex key, web search, library proxies and tables.
   Enter opens one's form. :config opens yeda.toml in $EDITOR, :config device
   this device's config.toml.
 
@@ -493,11 +555,12 @@ TRUST
   yeda.toml is trusted like code: whoever can write to the library's git
   remote or Syncthing folder decides which servers get LLM requests, which
   proxies the fetch window logs in to, and which WebDAV servers hold the
-  PDFs. What they cannot get is a secret: each is stored with its server's
-  address, so a changed address finds none and yeda asks for one, naming the
-  server; read that name before answering. The status line also names the
-  server of every LLM request and the proxies before the fetch window opens,
-  and the log keeps those lines.
+  PDFs. A Dropbox or Google Drive location can only point at that provider.
+  What they cannot get is a secret: each is stored with its server's
+  address, so a changed address finds none and yeda asks for one,
+  naming the server; read that name before answering. The status line also
+  names the server of every LLM request and the proxies before the fetch
+  window opens, and the log keeps those lines.
 
   The PDF URLs in [fulltext.patterns] come from yeda.toml too, and the
   open-access ones from OpenAlex. A direct download goes only over https://

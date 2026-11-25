@@ -54,7 +54,7 @@ pub fn cite_text(lib: &Library, dir: &Path, refs: &[Ref], format: &str) -> Resul
     Ok((cite::export(refs, &format, read)?, format))
 }
 
-/// Copies `file` to a local location, or uploads it to a WebDAV one keeping a cached copy;
+/// Copies `file` to a local location, or uploads it to a remote one keeping a cached copy;
 /// returns `r` pointing at it, not yet saved.
 pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password: Option<&str>) -> Result<Ref> {
     let bytes = fs::read(file).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
@@ -63,8 +63,8 @@ pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password
     let path = lib.pdf_path(&pdf)?;
     yeda_fs::write_atomic(&path, &bytes)?;
     if let (Some(remote), Some(password)) = (lib.remote_pdf(&pdf), password) {
-        yeda_net::webdav::upload(remote.dav, password, &remote.path, &bytes)?;
-        let version = yeda_net::webdav::current_version(remote.dav, password, &remote.path)?;
+        yeda_net::remote::upload(remote.remote, password, &remote.path, &bytes)?;
+        let version = yeda_net::remote::current_version(remote.remote, password, &remote.path)?;
         yeda_fs::set_cached_version(&path, version.as_deref())?;
     }
     r.pdfs.push(pdf);
@@ -95,11 +95,11 @@ pub fn fetch_request<'a>(lib: &Library, refs: impl IntoIterator<Item = &'a Ref>,
     fetch::Request { items, settings: lib.fulltext.clone(), downloads, openalex_key, window }
 }
 
-/// Downloads WebDAV file `remote` to `cached` unless the copy there is the server's current one.
-pub fn sync_pdf(dav: &library::Dav, password: &str, remote: &str, cached: &Path) -> Result<()> {
+/// Downloads file `path` of `remote` to `cached` unless the copy there is the remote's current one.
+pub fn sync_pdf(remote: &library::Remote, secret: &str, path: &str, cached: &Path) -> Result<()> {
     yeda_fs::sync_cached(cached, |version| {
-        yeda_net::webdav::current_version(dav, password, remote).map(|v| v.is_some() && v.as_deref() == version)
-    }, || yeda_net::webdav::download(dav, password, remote))
+        yeda_net::remote::current_version(remote, secret, path).map(|v| v.is_some() && v.as_deref() == version)
+    }, || yeda_net::remote::download(remote, secret, path))
 }
 
 /// Extracts the annotations embedded in each of `r`'s PDFs, handing what to write to `write`.

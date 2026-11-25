@@ -416,7 +416,7 @@ pub fn codex_refresh(key: &str) -> Result<String> {
         return Ok(cred.refreshed(access, Some(v["refresh_token"].as_str().unwrap_or(refresh))));
     }
     let form = [("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", client_id), ("resource", "https://api.openai.com/v1")]
-        .map(|(k, v)| format!("{k}={}", crate::codex::encode(v)))
+        .map(|(k, v)| format!("{k}={}", crate::oauth::encode(v)))
         .join("&");
     let v = post_form("https://auth.openai.com/api/accounts/oauth/token", &form)?;
     let access = v["access_token"].as_str().context("the token refresh returned no access_token")?;
@@ -436,7 +436,7 @@ fn post_form(url: &str, form: &str) -> Result<Value> {
     let mut resp = agent.post(url).header("content-type", "application/x-www-form-urlencoded").send(form).with_context(|| url.to_string())?;
     let status = resp.status();
     let text = resp.body_mut().read_to_string()?;
-    crate::codex::token_response(url, status.as_u16(), &text)
+    crate::oauth::token_response(url, status.as_u16(), &text)
 }
 
 /// A minimal request, to test the profile and its provider's credentials.

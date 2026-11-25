@@ -362,7 +362,7 @@ fn new(lib: &Library, dir: &Path, a: &Args) -> Result<()> {
     Ok(())
 }
 
-/// The location named by `--to`, else `fallback`, else the only one there is; with its WebDAV password.
+/// The location named by `--to`, else `fallback`, else the only one there is; with its remote secret.
 fn location(lib: &Library, a: &Args, fallback: Option<&String>) -> Result<(String, Option<String>)> {
     let names: Vec<&String> = lib.locations.keys().chain(lib.remotes.keys()).collect();
     let location = match (a.opt("to"), fallback, names.as_slice()) {
@@ -372,7 +372,7 @@ fn location(lib: &Library, a: &Args, fallback: Option<&String>) -> Result<(Strin
         _ => bail!("name a location with --to: {}", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
     };
     anyhow::ensure!(names.contains(&&location), "no location named '{location}'");
-    let password = lib.remotes.get(&location).map(crate::dav_password).transpose()?;
+    let password = lib.remotes.get(&location).map(|r| crate::remote_secret(&location, r)).transpose()?;
     Ok((location, password))
 }
 
@@ -452,21 +452,21 @@ fn cache(lib: &Library, a: &Args) -> Result<()> {
     let mut passwords: HashMap<String, String> = HashMap::new();
     let mut failed = 0;
     for (n, (remote, path)) in pdfs.iter().enumerate() {
-        let account = yeda_secrets::webdav_account(&remote.dav.user, &remote.dav.url);
+        let account = yeda_secrets::remote_account(remote.location, remote.remote);
         if !passwords.contains_key(&account) {
-            passwords.insert(account.clone(), crate::dav_password(remote.dav)?);
+            passwords.insert(account.clone(), crate::remote_secret(remote.location, remote.remote)?);
         }
         eprint!("\r{}/{}", n + 1, pdfs.len());
-        match ops::sync_pdf(remote.dav, &passwords[&account], &remote.path, path) {
+        match ops::sync_pdf(remote.remote, &passwords[&account], &remote.path, path) {
             Ok(()) => {}
-            Err(e) if yeda_net::webdav::is_unauthorized(&e) => return Err(e),
+            Err(e) if yeda_net::remote::is_unauthorized(&e) => return Err(e),
             Err(e) => {
                 failed += 1;
                 eprintln!("\r{}: {e:#}", remote.path);
             }
         }
     }
-    eprintln!("\r{} of {} WebDAV PDFs cached", pdfs.len() - failed, pdfs.len());
+    eprintln!("\r{} of {} remote PDFs cached", pdfs.len() - failed, pdfs.len());
     anyhow::ensure!(failed == 0, "{failed} failed");
     Ok(())
 }

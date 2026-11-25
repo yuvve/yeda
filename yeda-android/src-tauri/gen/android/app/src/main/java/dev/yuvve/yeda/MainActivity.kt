@@ -87,6 +87,12 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    /** Opens an https:// link in the browser, for sign-ins. */
+    @JavascriptInterface
+    fun openUrl(url: String) = runOnUiThread {
+      if (url.startsWith("https://")) startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }
+
     /** The PDF passed through "Open with", as a path; consumed by the call. */
     @JavascriptInterface
     fun takeOpenWithPath(): String? {

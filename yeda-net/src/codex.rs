@@ -3,11 +3,10 @@
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
+use crate::oauth::{encode, token_response, wait_for_callback};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::time::{Duration, Instant};
+use std::net::TcpListener;
+use std::time::Duration;
 
 const AUTHORIZE: &str = "https://auth.openai.com/api/accounts/authorize";
 const TOKEN: &str = "https://auth.openai.com/api/accounts/oauth/token";
@@ -37,12 +36,10 @@ pub fn start(issued_client_id: Option<&str>, host_id: Option<&str>, id_token_hin
     let listener = TcpListener::bind("127.0.0.1:0").context("binding the sign-in callback listener")?;
     let port = listener.local_addr()?.port();
     let id = || uuid::Uuid::new_v4().simple().to_string();
-    // PKCE wants a 43-128 character verifier; one compact UUID is 32.
-    let verifier = format!("{}{}", id(), id());
+    let (verifier, challenge) = crate::oauth::pkce();
     let (nonce, state) = (id(), id());
     // A hyphenated UUID: OpenAI rejects the compact form.
     let host_id = host_id.map(String::from).unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
-    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let client_id = issued_client_id.unwrap_or(REGISTRATION_CLIENT);
     let mut params: Vec<(&str, String)> = vec![
         ("client_id", client_id.into()),
@@ -70,59 +67,11 @@ impl SignIn {
     /// Waits for the browser's callback and trades its code for the tokens; the returned JSON is
     /// what the secret store keeps.
     pub fn finish(self, timeout: Duration) -> Result<String> {
-        self.listener.set_nonblocking(true)?;
-        let deadline = Instant::now() + timeout;
-        let (mut stream, _) = 'wait: {
-            loop {
-                if Instant::now() >= deadline {
-                    bail!("no sign-in callback arrived in {} minutes; start the sign-in again", timeout.as_secs() / 60);
-                }
-                match self.listener.accept() {
-                    Ok(accepted) => break 'wait accepted,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(200)),
-                    Err(e) => return Err(e).context("waiting for the sign-in callback"),
-                }
-            }
-        };
-        let query = callback_query(&mut stream, &self.state)?;
+        let query = wait_for_callback(&self.listener, timeout, &self.state, "Signed in. You can close this tab and go back to yeda.")?;
         let code = query.get("code").map(String::as_str).context("the callback carried no code")?;
         let issued = query.get("client_id").map(String::as_str).or(self.issued_client_id.as_deref()).context("the sign-in returned no client id")?;
-        let answer = "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\nconnection: close\r\n\r\n\
-            <title>yeda</title><p>Signed in. You can close this tab and go back to yeda.</p>";
-        let _ = stream.write_all(answer.as_bytes());
-        let _ = stream.flush();
         exchange(code, &self.verifier, issued, port_of(&self.listener), &self.nonce, self.host_id.as_deref())
     }
-}
-
-/// The callback's query parameters, from the request line only: answering before the browser
-/// closes the connection keeps it from hanging on a keep-alive.
-fn callback_query(stream: &mut TcpStream, expected_state: &str) -> Result<std::collections::HashMap<String, String>> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request = String::new();
-    reader.read_line(&mut request)?;
-    loop {
-        let mut header = String::new();
-        match reader.read_line(&mut header) {
-            Ok(0) | Err(_) => break,
-            Ok(_) if header.trim().is_empty() => break,
-            Ok(_) => {}
-        }
-    }
-    let line = request.lines().next().unwrap_or_default();
-    let query = line.split_whitespace().nth(1).and_then(|path| path.split_once('?')).map(|(_, q)| q).unwrap_or_default();
-    let mut params = std::collections::HashMap::new();
-    for pair in query.split('&') {
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        params.insert(percent_decode(k), percent_decode(v));
-    }
-    if let Some(error) = params.get("error") {
-        bail!("the sign-in was refused: {error}");
-    }
-    if params.get("state").map(String::as_str) != Some(expected_state) {
-        bail!("the sign-in callback does not belong to this attempt");
-    }
-    Ok(params)
 }
 
 /// Trades the callback's code for tokens, checking the returned id token's claims.
@@ -196,13 +145,6 @@ fn granted_scope(response: &Value) -> Result<String> {
     Ok(scope.to_string())
 }
 
-pub(crate) fn token_response(url: &str, status: u16, text: &str) -> Result<Value> {
-    if !(200..300).contains(&status) {
-        bail!("{url}: HTTP {status}: {}", text.chars().take(300).collect::<String>());
-    }
-    serde_json::from_str(text).with_context(|| format!("{url}: response is not JSON"))
-}
-
 fn jwt_claims(jwt: &str) -> Value {
     jwt.split('.').nth(1)
         .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
@@ -221,50 +163,6 @@ fn audience_has(aud: &Value, client_id: &str) -> bool {
 
 fn port_of(listener: &TcpListener) -> u16 {
     listener.local_addr().map(|a| a.port()).unwrap_or_default()
-}
-
-/// Percent-encodes everything but the unreserved characters, as the docs ask for every value.
-pub fn encode(v: &str) -> String {
-    let mut out = String::new();
-    for byte in v.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(*byte as char),
-            b => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-fn percent_decode(v: &str) -> String {
-    let bytes = v.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 3 <= bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
-                match hex {
-                    Some(b) => {
-                        out.push(b);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -292,16 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_exchange_reports_the_endpoints_own_reason() {
-        let body = r#"{"error":"invalid_grant","error_description":"code expired"}"#;
-        let err = token_response("https://auth.example/token", 400, body).unwrap_err().to_string();
-        assert!(err.contains("HTTP 400") && err.contains("code expired"), "{err}");
-        let ok = token_response("https://auth.example/token", 200, r#"{"access_token":"a"}"#).unwrap();
-        assert_eq!(ok["access_token"], "a");
-        assert!(token_response("https://auth.example/token", 200, "not json").is_err());
-    }
-
-    #[test]
     fn encodes_a_url_with_the_callback_and_challenge() {
         let sign_in = start(None, None, None).unwrap();
         assert!(sign_in.url.starts_with("https://auth.openai.com/api/accounts/authorize?"), "{}", sign_in.url);
@@ -323,40 +211,5 @@ mod tests {
         assert!(issued.url.contains("ext_agent_host_id=urn%3Auuid%3A1"), "{}", issued.url);
         assert!(issued.url.contains("id_token_hint=id.jwt"), "{}", issued.url);
         assert!(!issued.url.contains("agent_name_hint"), "{}", issued.url);
-    }
-
-    #[test]
-    fn percent_decodes_query_values() {
-        assert_eq!(percent_decode("a%20b+c"), "a b c");
-        assert_eq!(percent_decode("plain"), "plain");
-        assert_eq!(percent_decode("%zz"), "%zz");
-    }
-
-    #[test]
-    fn reads_the_callback_without_waiting_for_the_connection_to_close() {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let query_of = |request: String| {
-            let client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            std::thread::spawn(move || {
-                let mut client = client;
-                client.write_all(request.as_bytes()).unwrap();
-                // A keep-alive connection: the browser does not close, so reading to EOF hangs.
-                std::thread::sleep(Duration::from_secs(2));
-                let _ = client.read_to_string(&mut String::new());
-            });
-            let (mut stream, _) = listener.accept().unwrap();
-            callback_query(&mut stream, "s")
-        };
-        let ok = "GET /auth/callback?code=x&state=s&client_id=oaiapp_x HTTP/1.1\r\nhost: h\r\nconnection: keep-alive\r\n\r\n".to_string();
-        let params = query_of(ok).unwrap();
-        assert_eq!(params.get("code").map(String::as_str), Some("x"));
-        assert_eq!(params.get("client_id").map(String::as_str), Some("oaiapp_x"));
-
-        // A state that does not belong to this attempt is refused before the exchange.
-        let bad = "GET /auth/callback?code=x&state=other HTTP/1.1\r\n\r\n".to_string();
-        let mismatch = query_of(bad).unwrap_err();
-        assert!(mismatch.to_string().contains("does not belong"), "{mismatch}");
     }
 }

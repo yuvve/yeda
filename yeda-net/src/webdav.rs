@@ -1,35 +1,7 @@
-use crate::MAX_BYTES;
+use crate::remote::{Unauthorized, agent, read_limited};
 use anyhow::{Context, Result, bail};
 use base64::Engine;
-use std::time::Duration;
 use yeda_core::library::Dav;
-
-/// The server rejected the user name and password; ask for the password again.
-#[derive(Debug)]
-pub struct Unauthorized;
-
-impl std::fmt::Display for Unauthorized {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("the WebDAV server rejected the user name or password")
-    }
-}
-
-impl std::error::Error for Unauthorized {}
-
-pub fn is_unauthorized(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<Unauthorized>().is_some()
-}
-
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10 * 60)))
-        .http_status_as_error(false)
-        .allow_non_standard_methods(true)
-        // Redirects too: every request carries the password.
-        .https_only(true)
-        .build()
-        .into()
-}
 
 /// The Basic auth header, only for an https server: it carries the password.
 fn authorization(dav: &Dav, password: &str) -> Result<String> {
@@ -41,7 +13,7 @@ fn authorization(dav: &Dav, password: &str) -> Result<String> {
 fn check(url: &str, status: ureq::http::StatusCode) -> Result<()> {
     match status.as_u16() {
         200..=299 => Ok(()),
-        401 | 403 => Err(Unauthorized.into()),
+        401 | 403 => Err(Unauthorized("the WebDAV server rejected the user name or password".into()).into()),
         404 => bail!("{url}: not found"),
         s => bail!("{url}: HTTP {s}"),
     }
@@ -60,11 +32,7 @@ pub fn download(dav: &Dav, password: &str, path: &str) -> Result<(Vec<u8>, Optio
     let mut resp = agent().get(&url).header("Authorization", authorization(dav, password)?).call().with_context(|| url.clone())?;
     check(&url, resp.status())?;
     let version = version(&resp);
-    // A whole file in memory, so a server (or a wrong URL) that sends without end is cut off.
-    if let Some(len) = resp.headers().get("content-length").and_then(|v| v.to_str().ok()?.parse::<u64>().ok()).filter(|&len| len > MAX_BYTES) {
-        bail!("{url}: {} MB, more than the {} MB limit", len >> 20, MAX_BYTES >> 20);
-    }
-    let bytes = resp.body_mut().with_config().limit(MAX_BYTES).read_to_vec().with_context(|| format!("{url} (limit {} MB)", MAX_BYTES >> 20))?;
+    let bytes = read_limited(&mut resp, &url)?;
     Ok((bytes, version))
 }
 

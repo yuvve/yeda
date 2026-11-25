@@ -1,6 +1,6 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
-import { hasFileAccess, pickFolder, pickPdf, requestFileAccess } from './bridge';
+import { hasFileAccess, openUrl, pickFolder, pickPdf, requestFileAccess } from './bridge';
 import { einkMode, setEinkMode } from '../../yeda-reader/src/pen';
 import { inspect, Region } from './pdftext';
 
@@ -77,6 +77,7 @@ type OpenRef =
 	| { status: 'opened' }
 	| { status: 'missingLocation'; location: string }
 	| { status: 'needsPassword'; account: string; label: string; rejected: boolean }
+	| { status: 'needsSignIn'; location: string; label: string }
 	| { status: 'synced'; message: string };
 
 const STYLE = `
@@ -442,6 +443,10 @@ export function showBrowser(openReader: () => void): () => boolean {
 	async function withPassword(call: () => Promise<OpenRef>): Promise<OpenRef | null> {
 		for (;;) {
 			const result = await call();
+			if (result.status === 'needsSignIn') {
+				say(`${result.location} is not signed in to ${result.label}; sign in under Settings → Storage location`);
+				return null;
+			}
 			if (result.status !== 'needsPassword') return result;
 			if (!(await askPassword(result.account, result.label, result.rejected))) return null;
 		}
@@ -541,7 +546,7 @@ export function showBrowser(openReader: () => void): () => boolean {
 				? h('div', {}, h('p', {}, overview.git), button('Sync now', () => run(sync)))
 				: h('div', {}, h('p', { className: 'meta' }, 'Clone a library repository over HTTPS into an empty folder; it becomes the library.'),
 					cloneUrl, button('Clone into a folder', () => cloneUrl.value.trim() && run(() => cloneLibrary(cloneUrl.value.trim())))),
-			h('h2', {}, 'WebDAV location'), webdavForm(),
+			h('h2', {}, 'Storage location'), storageForm(),
 			h('h2', {}, 'Settings file'),
 			h('p', { className: 'meta' }, 'settings.toml: the library folder, and [locations] for folders elsewhere on this device.'),
 			button('Edit settings.toml', () => run(showSettingsFile)),
@@ -552,17 +557,59 @@ export function showBrowser(openReader: () => void): () => boolean {
 			h('p', { className: 'meta' }, 'App icon: Knowledge graph icons created by Jagat Icon - Flaticon (flaticon.com/free-icons/knowledge-graph)'));
 	}
 
-	function webdavForm() {
+	function storageForm() {
 		const field = (placeholder: string, type = 'text') => h('input', { type, placeholder, autocapitalize: 'off' });
-		const name = field('name, e.g. dav'), url = field('https://dav.example.com/pdfs/', 'url'), user = field('user'), password = field('password', 'password');
-		return h('div', {}, h('p', { className: 'meta' }, 'Adds or replaces [locations.<name>] in yeda.toml after a test login; the password goes to the Keystore.'),
-			name, url, user, password,
-			button('Test and save', () => run(async () => {
-				await invoke('setup_webdav', { name: name.value, url: url.value, user: user.value, password: password.value });
-				say(`saved location ${name.value.trim()}`);
-				await refresh();
-				await showSettings();
-			})));
+		const kinds = { webdav: 'WebDAV', dropbox: 'Dropbox', gdrive: 'Google Drive' };
+		const kind = h('select', {}, ...Object.entries(kinds).map(([value, label]) => h('option', { value }, label)));
+		const name = field('name, e.g. papers');
+		const where = field('https://dav.example.com/pdfs/', 'url'), user = field('user'), password = field('password', 'password');
+		const clientId = field('client ID (optional)'), clientSecret = field('client secret (your own Google client only)', 'password');
+		const code = field('the code Dropbox shows');
+		const hint = h('p', { className: 'meta' });
+		const finish = button('Finish sign-in', () => {});
+		let verifier = '';
+		const fields = { webdav: [user, password], dropbox: [clientId, code, finish], gdrive: [clientId, clientSecret] };
+		const sync = () => {
+			const k = kind.value as keyof typeof kinds;
+			for (const input of [user, password, clientId, clientSecret, code, finish]) input.hidden = !(fields[k] as HTMLElement[]).includes(input);
+			code.hidden = finish.hidden = k !== 'dropbox' || !verifier;
+			where.placeholder = k === 'webdav' ? 'https://dav.example.com/pdfs/' : k === 'dropbox' ? 'folder in the Dropbox app folder, e.g. pdfs' : 'folder in My Drive, e.g. yeda/pdfs';
+			hint.textContent = k === 'webdav'
+				? 'Adds or replaces [locations.<name>] in yeda.toml after a test login; the password goes to the Keystore.'
+				: k === 'dropbox'
+					? 'Opens Dropbox in the browser; allow yeda, then paste the code it shows. Leave the client ID empty to use yeda\'s own app.'
+					: 'Opens Google in the browser. yeda only sees the files and folders it made itself. Leave the client ID empty to use yeda\'s own app.';
+		};
+		kind.addEventListener('change', sync);
+		const saved = async () => {
+			say(`saved location ${name.value.trim()}`);
+			await refresh();
+			await showSettings();
+		};
+		finish.addEventListener('click', () => run(async () => {
+			await invoke('dropbox_finish', { name: name.value, folder: where.value, clientId: clientId.value, verifier, code: code.value });
+			await saved();
+		}));
+		const test = button('Test and save', () => run(async () => {
+			if (kind.value === 'webdav') {
+				await invoke('setup_webdav', { name: name.value, url: where.value, user: user.value, password: password.value });
+			} else if (kind.value === 'dropbox') {
+				const link = await invoke<{ url: string; verifier: string }>('dropbox_link', { folder: where.value, clientId: clientId.value });
+				verifier = link.verifier;
+				sync();
+				openUrl(link.url);
+				say('allow yeda in the browser, then paste the code Dropbox shows');
+				return;
+			} else {
+				const url = await invoke<string>('google_link', { folder: where.value, clientId: clientId.value, clientSecret: clientSecret.value });
+				openUrl(url);
+				say('waiting for the browser to sign in with Google…');
+				await invoke('google_finish', { name: name.value, folder: where.value, clientId: clientId.value });
+			}
+			await saved();
+		}));
+		sync();
+		return h('div', {}, hint, kind, name, where, user, password, clientId, clientSecret, code, test, finish);
 	}
 
 	function einkToggle() {

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use yeda_core::browse::SortField;
-use yeda_core::library::{Dav, Library, Ref, SavedSearch};
+use yeda_core::library::{Dav, Library, Ref, Remote, SavedSearch};
 use yeda_core::llm::{Auth, Bound, Profile, Protocol, Provider};
 use yeda_core::web_search::Provider as WebProvider;
 
@@ -12,7 +12,8 @@ pub enum Kind {
     /// A `[providers.<name>]` entry: where to connect, and how.
     Provider,
     Llm,
-    Webdav,
+    /// A `[locations.<name>]` table for PDFs: a WebDAV server, Dropbox or Google Drive.
+    Storage,
     /// Editing a saved search; nothing to test.
     Search,
     /// The optional OpenAlex API key, which only goes to the secret store.
@@ -57,6 +58,9 @@ pub struct SetupForm {
     pub old: Option<String>,
     /// A Codex sign-in waiting for the browser: the link the user was given.
     pub sign_in_url: Option<String>,
+    /// A Dropbox sign-in waiting for its code: the link the user was given, and the PKCE verifier
+    /// the code is exchanged with.
+    pub code_link: Option<(String, String)>,
     /// A table's columns that have description fields now, and every description typed, by column.
     shown: Vec<String>,
     described: BTreeMap<String, String>,
@@ -69,6 +73,7 @@ pub enum Choice {
     Protocols,
     Auth,
     BoundProviders,
+    StorageKinds,
     /// Filled from the network, not from the library.
     Models,
     Sort,
@@ -121,6 +126,9 @@ fn auth_of(name: &str) -> Auth {
 pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 
 const ALIAS_HINT: &str = "optional; names the environment variable for this secret when several share a server: YEDA_…_ALIAS_<ALIAS>";
+const NAME_HINT: &str = "used as pdf.location and in :attach";
+const CLIENT_HINT: &str = "optional; empty uses yeda's own app; for your own, see :help storage";
+const SIGN_IN_HINT: &str = "press Enter on an empty field to sign in in the browser; a saved sign-in is reused, type signin to sign in again";
 const CHOICE_HINT: &str = "all options shown · type to filter · ↓/↑ pick · Enter use · Esc restores · free text works";
 
 /// What the form saves, once its connection works.
@@ -129,6 +137,8 @@ pub enum Setup {
     Provider(String, Provider),
     Llm(String, Profile),
     Webdav(Dav),
+    /// A Dropbox or Google Drive location by name: its secret is a sign-in, which the form makes.
+    Cloud(String, Remote),
     Search(SavedSearch),
     Openalex,
     Reference(Ref),
@@ -147,10 +157,15 @@ impl SetupForm {
         let values = match kind {
             Kind::Provider => vec![String::new(); 7],
             Kind::Llm => vec![String::new(); 3],
-            Kind::Webdav => match lib.remotes.get(name) {
-                Some(d) => vec![name.into(), d.url.clone(), d.user.clone(), d.alias.clone().unwrap_or_default(), String::new()],
-                None => vec![name.into(), String::new(), String::new(), String::new(), String::new()],
-            },
+            Kind::Storage => {
+                let blank = |kind: &str, at: &str, client: &str, other: &str| [name, kind, at, client, other, ""].map(String::from).to_vec();
+                match lib.remotes.get(name) {
+                    Some(Remote::Webdav(d)) => blank("webdav", &d.url, &d.user, d.alias.as_deref().unwrap_or_default()),
+                    Some(Remote::Dropbox(c)) => blank("dropbox", &c.folder, c.client_id.as_deref().unwrap_or_default(), ""),
+                    Some(Remote::Gdrive(c)) => blank("gdrive", &c.folder, c.client_id.as_deref().unwrap_or_default(), ""),
+                    None => blank("", "", "", ""),
+                }
+            }
             Kind::Search => {
                 let s = lib.searches.get(name);
                 let sort = s.and_then(|s| Some(format!("{}{}", if s.descending { "-" } else { "" }, sort_name(s.sort?))));
@@ -190,7 +205,7 @@ impl SetupForm {
             _ => None,
         };
         let described = if kind == Kind::Table { lib.tables.get(name).map(|t| t.describe.clone()).unwrap_or_default() } else { BTreeMap::new() };
-        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, shown: Vec::new(), described };
+        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, code_link: None, shown: Vec::new(), described };
         form.sync_columns();
         form
     }
@@ -264,13 +279,40 @@ impl SetupForm {
                 ("Provider", CHOICE_HINT),
                 ("Model", CHOICE_HINT),
             ],
-            Kind::Webdav => &[
-                ("Name", "used as pdf.location and in :attach"),
-                ("URL", "the folder PDFs go in, e.g. https://dav.example.com/pdfs/"),
-                ("User", ""),
-                ("Alias", ALIAS_HINT),
-                ("Password", "kept in the secret store"),
-            ],
+            Kind::Storage => match self.values[1].trim().to_lowercase().as_str() {
+                "webdav" => &[
+                    ("Name", NAME_HINT),
+                    ("Kind", CHOICE_HINT),
+                    ("URL", "the folder PDFs go in, e.g. https://dav.example.com/pdfs/"),
+                    ("User", ""),
+                    ("Alias", ALIAS_HINT),
+                    ("Password", "kept in the secret store"),
+                ],
+                "dropbox" => &[
+                    ("Name", NAME_HINT),
+                    ("Kind", CHOICE_HINT),
+                    ("Folder", "inside yeda's Dropbox app folder, e.g. pdfs; empty is the app folder itself"),
+                    ("Client ID", CLIENT_HINT),
+                    ("", "not used"),
+                    ("Code", if self.code_link.is_some() { "paste the code Dropbox shows, then press Enter" } else { SIGN_IN_HINT }),
+                ],
+                "gdrive" => &[
+                    ("Name", NAME_HINT),
+                    ("Kind", CHOICE_HINT),
+                    ("Folder", "in My Drive, e.g. yeda/pdfs; yeda only sees the files and folders it made itself"),
+                    ("Client ID", CLIENT_HINT),
+                    ("Client secret", "only with your own client ID; kept in the secret store"),
+                    ("Sign-in", SIGN_IN_HINT),
+                ],
+                _ => &[
+                    ("Name", NAME_HINT),
+                    ("Kind", CHOICE_HINT),
+                    ("Where", "pick a kind first"),
+                    ("", "pick a kind first"),
+                    ("", "pick a kind first"),
+                    ("", "pick a kind first"),
+                ],
+            },
             Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
             Kind::Keenable => &[("API key", "optional; without one, search uses the shared public tier (1,000 requests/hour per IP); the test runs one real search and uses quota")],
             Kind::Exa => &[("API key", "optional; without one, search uses the shared free tier, which needs a direct IPv4 connection; the test runs one real search and uses quota")],
@@ -304,6 +346,7 @@ impl SetupForm {
             (Kind::Provider, 3) => Some(Choice::Protocols),
             (Kind::Provider, 4) => Some(Choice::Auth),
             (Kind::Llm, 1) => Some(Choice::BoundProviders),
+            (Kind::Storage, 1) => Some(Choice::StorageKinds),
             (Kind::Llm, 2) => Some(Choice::Models),
             (Kind::Search, 2) => Some(Choice::Sort),
             (Kind::Reference, 0) => Some(Choice::RefKind),
@@ -325,7 +368,7 @@ impl SetupForm {
     }
 
     fn has_secret(&self) -> bool {
-        matches!(self.kind, Kind::Provider | Kind::Webdav | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
+        matches!(self.kind, Kind::Provider | Kind::Storage | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
     }
 
     pub fn secret(&self) -> Option<String> {
@@ -333,7 +376,12 @@ impl SetupForm {
     }
 
     pub fn masked(&self, field: usize) -> bool {
-        self.has_secret() && field == self.values.len() - 1
+        self.has_secret() && (field == self.values.len() - 1 || (self.kind == Kind::Storage && field == 4 && self.values[1].trim() == "gdrive"))
+    }
+
+    /// The client secret typed for a Google Drive client of the user's own.
+    pub fn client_secret(&self) -> Option<String> {
+        Some(self.values.get(4)?.trim().to_string()).filter(|s| !s.is_empty() && self.kind == Kind::Storage)
     }
 
     /// The `[providers.<name>]`, `[llm.<name>]`, `[locations.<name>]` or `[tables.<name>]` table, or
@@ -384,19 +432,35 @@ impl SetupForm {
                 }
                 Setup::Llm(v[0].to_string(), p)
             }
-            Kind::Webdav => {
-                // The password goes with every request.
-                yeda_core::require_https(v[1])?;
-                if v[2].is_empty() || self.secret().is_none() {
-                    bail!("give the user name and password");
+            Kind::Storage => {
+                let kind = v[1].to_lowercase();
+                t.insert("kind".into(), kind.clone().into());
+                match kind.as_str() {
+                    "webdav" => {
+                        // The password goes with every request.
+                        yeda_core::require_https(v[2])?;
+                        if v[3].is_empty() || self.secret().is_none() {
+                            bail!("give the user name and password");
+                        }
+                        t.insert("url".into(), v[2].into());
+                        t.insert("user".into(), v[3].into());
+                        if !v[4].is_empty() {
+                            yeda_core::check_alias(v[4])?;
+                            t.insert("alias".into(), v[4].into());
+                        }
+                    }
+                    "dropbox" | "gdrive" => {
+                        t.insert("folder".into(), v[2].trim_matches('/').into());
+                        if !v[3].is_empty() {
+                            t.insert("client_id".into(), v[3].into());
+                        }
+                    }
+                    _ => bail!("the kind is webdav, dropbox or gdrive"),
                 }
-                t.insert("url".into(), v[1].into());
-                t.insert("user".into(), v[2].into());
-                if !v[3].is_empty() {
-                    yeda_core::check_alias(v[3])?;
-                    t.insert("alias".into(), v[3].into());
+                match Remote::deserialize(toml::Value::Table(t.clone()))? {
+                    Remote::Webdav(d) => Setup::Webdav(d),
+                    remote => Setup::Cloud(v[0].to_string(), remote),
                 }
-                Setup::Webdav(Dav::deserialize(toml::Value::Table(t.clone()))?)
             }
             Kind::Openalex if self.secret().is_none() => bail!("paste the API key"),
             Kind::Openalex => Setup::Openalex,
@@ -495,6 +559,7 @@ pub fn choices(choice: Choice, lib: &Library) -> Vec<(String, String)> {
             ("openai-responses", "openai-responses"),
         ],
         Choice::Auth => &[("api-key", "api-key"), ("oauth", "oauth"), ("none", "none")],
+        Choice::StorageKinds => &[("webdav: any WebDAV server", "webdav"), ("dropbox", "dropbox"), ("gdrive: Google Drive", "gdrive")],
         Choice::Sort => &[
             ("key", "key"),
             ("title", "title"),
@@ -536,10 +601,10 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
         rows.push(row(format!("LLM {name}"), format!("{} · {}{default}", p.provider, p.model), format!("setup llm {name}")));
     }
     rows.push(row("New LLM profile".into(), String::new(), "setup llm".into()));
-    for (name, d) in &lib.remotes {
-        rows.push(row(format!("WebDAV {name}"), format!("{}@{}", d.user, d.url), format!("setup webdav {name}")));
+    for (name, remote) in &lib.remotes {
+        rows.push(row(format!("Storage {name}"), remote.label(), format!("setup storage {name}")));
     }
-    rows.push(row("New WebDAV location".into(), String::new(), "setup webdav".into()));
+    rows.push(row("New storage location".into(), "WebDAV, Dropbox or Google Drive".into(), "setup storage".into()));
     rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
     let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
     let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
@@ -585,6 +650,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
             yeda_net::llm::ping(&bind(providers, name, p)?, secret)
         }
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
+        Setup::Cloud(_, remote) => yeda_net::remote::login(remote, secret.unwrap_or_default()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
         Setup::ApiKey(provider) => yeda_net::web_search::search(&yeda_net::web_search::Search {
@@ -619,6 +685,7 @@ pub fn account(setup: &Setup) -> String {
     match setup {
         Setup::Provider(name, p) => yeda_secrets::provider_account(name, p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
+        Setup::Cloud(name, remote) => yeda_secrets::remote_account(name, remote),
         Setup::Llm(..) | Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
         Setup::ApiKey(provider) => crate::websearch::account(*provider).into(),
@@ -820,17 +887,36 @@ mod tests {
     #[test]
     fn builds_and_checks_sections() {
         let lib = Library::parse(Some("[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n"), None, [], None).unwrap();
-        let mut f = SetupForm::new(Kind::Webdav, "dav", &lib);
-        f.values[1..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "work".into(), "pw".into()]);
+        let mut f = SetupForm::new(Kind::Storage, "dav", &lib);
+        f.values[1..].clone_from_slice(&["webdav".into(), "https://dav.example.com/pdfs".into(), "me".into(), "work".into(), "pw".into()]);
         let (t, s) = f.section().unwrap();
         assert!(!t.contains_key("password"));
-        assert_eq!(t["alias"].as_str(), Some("work"));
-        f.values[3] = "my-work".into();
+        assert_eq!((t["kind"].as_str(), t["alias"].as_str()), (Some("webdav"), Some("work")));
+        f.values[4] = "my-work".into();
         assert!(f.section().unwrap_err().to_string().contains("letters and digits"));
-        f.values[3] = "work".into();
-        f.values[1] = "http://nas.local/pdfs".into();
+        f.values[4] = "work".into();
+        f.values[2] = "http://nas.local/pdfs".into();
         assert!(f.section().unwrap_err().to_string().contains("only go over https://"));
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");
+
+        let mut cloud = SetupForm::new(Kind::Storage, "box", &lib);
+        assert!(cloud.section().unwrap_err().to_string().contains("webdav, dropbox or gdrive"));
+        cloud.values[1] = "dropbox".into();
+        cloud.values[2] = "/yeda/".into();
+        let (t, s) = cloud.section().unwrap();
+        assert_eq!((t["kind"].as_str(), t["folder"].as_str(), t.contains_key("client_id")), (Some("dropbox"), Some("yeda"), false));
+        assert_eq!(account(&s), "dropbox:box");
+        cloud.values[1] = "gdrive".into();
+        cloud.values[3] = "mine.apps.googleusercontent.com".into();
+        cloud.values[4] = "s3cret".into();
+        let (t, s) = cloud.section().unwrap();
+        assert_eq!((t["kind"].as_str(), t["client_id"].as_str()), (Some("gdrive"), Some("mine.apps.googleusercontent.com")));
+        assert_eq!((account(&s).as_str(), cloud.client_secret().as_deref()), ("gdrive:box", Some("s3cret")));
+        assert!(cloud.masked(4) && cloud.masked(5) && !cloud.masked(3));
+
+        let saved = Library::parse(Some("[locations.box]\nkind = \"dropbox\"\nfolder = \"pdfs\"\n"), None, [], None).unwrap();
+        let edit = SetupForm::new(Kind::Storage, "box", &saved);
+        assert_eq!(edit.values, ["box", "dropbox", "pdfs", "", "", ""]);
 
         let lib = Library::parse(Some("[searches]\nnew = { query = \"tag:x\", sort = \"author\", descending = true }\n"), None, [], None).unwrap();
         let copy = SetupForm::duplicate("new", &lib);

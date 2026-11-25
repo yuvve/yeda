@@ -445,6 +445,8 @@ enum OpenRef {
     MissingLocation { location: String },
     /// The password for `account` isn't in the Keystore, or the server rejected it.
     NeedsPassword { account: String, label: String, rejected: bool },
+    /// A cloud drive location has no sign-in, or the provider revoked it; only Settings signs in.
+    NeedsSignIn { location: String, label: String },
     Synced { message: String },
 }
 
@@ -478,6 +480,17 @@ async fn git_sync(app: AppHandle, state: State<'_, Shared>) -> Res<OpenRef> {
     Ok(out)
 }
 
+/// Saves `[locations.<name>]` to yeda.toml.
+fn save_location(app: &AppHandle, state: &Shared, name: String, remote: &library::Remote) -> Res<()> {
+    state.change(app, |b| {
+        let effect = b.lib.update_config(|t| {
+            config_section(t, "locations")?.insert(name, toml::Value::try_from(remote)?);
+            Ok(())
+        })?;
+        b.apply(vec![effect])
+    })
+}
+
 /// Tests a WebDAV login, then keeps the password in the Keystore and `[locations.<name>]` in yeda.toml.
 #[tauri::command]
 async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, url: String, user: String, password: String) -> Res<()> {
@@ -486,19 +499,84 @@ async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, ur
         return Err("give a name, an https:// URL, the user name and the password".into());
     }
     yeda_core::require_https(&url).map_err(err)?;
-    let dav = library::Dav { url, user, alias: None };
-    let login = dav.clone();
-    let pw = password.clone();
-    tauri::async_runtime::spawn_blocking(move || yeda_net::webdav::login(&login, &pw)).await.map_err(|e| e.to_string())?.map_err(err)?;
-    yeda_secrets::set(&yeda_secrets::webdav_account(&dav.user, &dav.url), &password).map_err(err)?;
-    state.change(&app, |b| {
-        let effect = b.lib.update_config(|t| {
-            let section = toml::Table::from_iter([("url".to_string(), dav.url.into()), ("user".to_string(), dav.user.into())]);
-            config_section(t, "locations")?.insert(name, section.into());
-            Ok(())
-        })?;
-        b.apply(vec![effect])
-    })
+    let remote = library::Remote::Webdav(library::Dav { url, user, alias: None });
+    let (login, pw) = (remote.clone(), password.clone());
+    tauri::async_runtime::spawn_blocking(move || yeda_net::remote::login(&login, &pw)).await.map_err(|e| e.to_string())?.map_err(err)?;
+    yeda_secrets::set(&yeda_secrets::remote_account(&name, &remote), &password).map_err(err)?;
+    save_location(&app, &state, name, &remote)
+}
+
+fn cloud_of(kind: &str, folder: String, client_id: String) -> Res<library::Remote> {
+    let cloud = library::Cloud { folder: folder.trim().trim_matches('/').to_string(), client_id: Some(client_id.trim().to_string()).filter(|c| !c.is_empty()) };
+    match kind {
+        "dropbox" => Ok(library::Remote::Dropbox(cloud)),
+        "gdrive" => Ok(library::Remote::Gdrive(cloud)),
+        _ => Err("the kind is dropbox or gdrive".into()),
+    }
+}
+
+/// Signs in to Dropbox or Google Drive, tests the sign-in, then keeps it in the Keystore and
+/// `[locations.<name>]` in yeda.toml.
+async fn finish_cloud(app: &AppHandle, state: &Shared, name: String, remote: library::Remote, secret: String) -> Res<()> {
+    let (login, token) = (remote.clone(), secret.clone());
+    tauri::async_runtime::spawn_blocking(move || yeda_net::remote::login(&login, &token)).await.map_err(|e| e.to_string())?.map_err(err)?;
+    yeda_secrets::set(&yeda_secrets::remote_account(&name, &remote), &secret).map_err(err)?;
+    save_location(app, state, name, &remote)
+}
+
+#[derive(Serialize)]
+struct DropboxLink {
+    url: String,
+    verifier: String,
+}
+
+/// The Dropbox link to open, and the verifier to give back with the code it shows.
+#[tauri::command]
+fn dropbox_link(folder: String, client_id: String) -> Res<DropboxLink> {
+    let library::Remote::Dropbox(cloud) = cloud_of("dropbox", folder, client_id)? else { unreachable!() };
+    let sign_in = yeda_net::dropbox::start(&cloud).map_err(err)?;
+    Ok(DropboxLink { url: sign_in.url, verifier: sign_in.verifier })
+}
+
+#[tauri::command]
+async fn dropbox_finish(app: AppHandle, state: State<'_, Shared>, name: String, folder: String, client_id: String, verifier: String, code: String) -> Res<()> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the location a name".into());
+    }
+    let remote = cloud_of("dropbox", folder, client_id)?;
+    let library::Remote::Dropbox(cloud) = remote.clone() else { unreachable!() };
+    let secret = tauri::async_runtime::spawn_blocking(move || yeda_net::dropbox::finish(&cloud, &verifier, &code)).await.map_err(|e| e.to_string())?.map_err(err)?;
+    finish_cloud(&app, &state, name, remote, secret).await
+}
+
+/// A Google sign-in whose loopback listener is waiting for the browser.
+#[derive(Default)]
+struct PendingGoogle(Mutex<Option<yeda_net::gdrive::SignIn>>);
+
+/// The Google link to open; `google_finish` waits for the browser to come back.
+#[tauri::command]
+fn google_link(pending: State<PendingGoogle>, folder: String, client_id: String, client_secret: String) -> Res<String> {
+    let library::Remote::Gdrive(cloud) = cloud_of("gdrive", folder, client_id)? else { unreachable!() };
+    if cloud.client_id.is_some() && client_secret.trim().is_empty() {
+        return Err("a Google client ID needs its client secret".into());
+    }
+    let sign_in = yeda_net::gdrive::start(&cloud, Some(client_secret.trim()).filter(|s| !s.is_empty())).map_err(err)?;
+    let url = sign_in.url.clone();
+    *pending.0.lock().unwrap() = Some(sign_in);
+    Ok(url)
+}
+
+#[tauri::command]
+async fn google_finish(app: AppHandle, state: State<'_, Shared>, pending: State<'_, PendingGoogle>, name: String, folder: String, client_id: String) -> Res<()> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the location a name".into());
+    }
+    let remote = cloud_of("gdrive", folder, client_id)?;
+    let sign_in = pending.0.lock().unwrap().take().ok_or("start the sign-in first")?;
+    let secret = tauri::async_runtime::spawn_blocking(move || sign_in.finish(std::time::Duration::from_secs(10 * 60))).await.map_err(|e| e.to_string())?.map_err(err)?;
+    finish_cloud(&app, &state, name, remote, secret).await
 }
 
 fn empty(dir: &Path) {
@@ -529,34 +607,35 @@ async fn git_clone(app: AppHandle, state: State<'_, Shared>, url: String, path: 
     Ok(out)
 }
 
-/// The password for `dav` from the Keystore, else what `open_ref` and `attach_pdf` answer.
-fn dav_password(dav: &library::Dav, rejected: bool) -> Result<String, OpenRef> {
-    let account = yeda_secrets::webdav_account(&dav.user, &dav.url);
-    let label = format!("{}@{}", dav.user, dav.url);
-    match yeda_secrets::get_as(&account, dav.alias.as_deref()) {
+/// The secret for location `name` from the Keystore, else what `open_ref` and `attach_pdf` answer.
+fn remote_secret(name: &str, remote: &library::Remote, rejected: bool) -> Result<String, OpenRef> {
+    let account = yeda_secrets::remote_account(name, remote);
+    match yeda_secrets::get_as(&account, remote.alias()) {
         Ok(Some(p)) if !rejected => Ok(p),
-        _ => Err(OpenRef::NeedsPassword { account, label, rejected }),
+        _ if matches!(remote, library::Remote::Webdav(_)) => Err(OpenRef::NeedsPassword { account, label: remote.label(), rejected }),
+        _ => Err(OpenRef::NeedsSignIn { location: name.to_string(), label: remote.label() }),
     }
 }
 
-/// Runs a WebDAV transfer off the main thread; a rejected password becomes `NeedsPassword`.
+/// Runs a transfer off the main thread; a rejected or missing secret becomes `NeedsPassword` or `NeedsSignIn`.
 async fn transfer(
-    dav: library::Dav,
-    run: impl FnOnce(&library::Dav, &str) -> anyhow::Result<()> + Send + 'static,
+    name: String,
+    remote: library::Remote,
+    run: impl FnOnce(&library::Remote, &str) -> anyhow::Result<()> + Send + 'static,
 ) -> Res<Option<OpenRef>> {
-    let password = match dav_password(&dav, false) {
+    let secret = match remote_secret(&name, &remote, false) {
         Ok(p) => p,
         Err(ask) => return Ok(Some(ask)),
     };
-    let (dav, result) = tauri::async_runtime::spawn_blocking(move || {
-        let result = run(&dav, &password);
-        (dav, result)
+    let (remote, result) = tauri::async_runtime::spawn_blocking(move || {
+        let result = run(&remote, &secret);
+        (remote, result)
     })
     .await
     .map_err(|e| e.to_string())?;
     match result {
         Ok(()) => Ok(None),
-        Err(e) if yeda_net::webdav::is_unauthorized(&e) => Ok(dav_password(&dav, true).err()),
+        Err(e) if yeda_net::remote::is_unauthorized(&e) => Ok(remote_secret(&name, &remote, true).err()),
         Err(e) => Err(err(e)),
     }
 }
@@ -567,16 +646,16 @@ async fn transfer(
 async fn open_ref(app: AppHandle, state: State<'_, Shared>, current: State<'_, Current>, key: String, pdf: String) -> Res<OpenRef> {
     let (path, remote, location, annotations) = state.with(&app, |b| {
         let p = b.get_pdf(&key, &pdf)?;
-        let remote = b.lib.remote_pdf(p).map(|rp| (rp.dav.clone(), rp.path));
+        let remote = b.lib.remote_pdf(p).map(|rp| (rp.location.to_string(), rp.remote.clone(), rp.path));
         Ok((b.lib.pdf_path(p).ok(), remote, p.location.clone(), b.path(&library::pdf_annotations_dir(&key, p))?))
     })?;
-    if let (Some(path), Some((dav, remote_path))) = (&path, remote) {
+    if let (Some(path), Some((name, remote, remote_path))) = (&path, remote) {
         let cached = path.clone();
-        let sync = move |dav: &library::Dav, password: &str| {
-            let is_current = |v: Option<&str>| Ok(yeda_net::webdav::current_version(dav, password, &remote_path)?.is_some_and(|c| Some(c.as_str()) == v));
-            yeda_fs::sync_cached(&cached, is_current, || yeda_net::webdav::download(dav, password, &remote_path))
+        let sync = move |remote: &library::Remote, secret: &str| {
+            let is_current = |v: Option<&str>| Ok(yeda_net::remote::current_version(remote, secret, &remote_path)?.is_some_and(|c| Some(c.as_str()) == v));
+            yeda_fs::sync_cached(&cached, is_current, || yeda_net::remote::download(remote, secret, &remote_path))
         };
-        match transfer(dav, sync).await {
+        match transfer(name, remote, sync).await {
             Ok(Some(ask)) => return Ok(ask),
             Ok(None) => {}
             // Offline, say: the cached copy will do.
@@ -611,19 +690,19 @@ async fn attach_pdf(app: AppHandle, state: State<'_, Shared>, key: String, path:
     let (r, dest, remote) = state.with(&app, |b| {
         let mut r = b.get(&key)?.clone();
         let pdf = b.lib.attach(&r, &location, &path.to_string_lossy())?;
-        let remote = b.lib.remote_pdf(&pdf).map(|rp| (rp.dav.clone(), rp.path));
+        let remote = b.lib.remote_pdf(&pdf).map(|rp| (rp.location.to_string(), rp.remote.clone(), rp.path));
         let dest = b.lib.pdf_path(&pdf)?;
         r.pdfs.push(pdf);
         Ok((r, dest, remote))
     })?;
-    if let Some((dav, remote_path)) = remote {
+    if let Some((name, remote, remote_path)) = remote {
         let upload_bytes = bytes.clone();
         let cached = dest.clone();
-        let upload = move |dav: &library::Dav, password: &str| {
-            yeda_net::webdav::upload(dav, password, &remote_path, &upload_bytes)?;
-            yeda_fs::set_cached_version(&cached, yeda_net::webdav::current_version(dav, password, &remote_path)?.as_deref())
+        let upload = move |remote: &library::Remote, secret: &str| {
+            yeda_net::remote::upload(remote, secret, &remote_path, &upload_bytes)?;
+            yeda_fs::set_cached_version(&cached, yeda_net::remote::current_version(remote, secret, &remote_path)?.as_deref())
         };
-        if let Some(ask) = transfer(dav, upload).await? {
+        if let Some(ask) = transfer(name, remote, upload).await? {
             return Ok(ask);
         }
     }
@@ -644,6 +723,10 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         set_library,
         set_location,
         setup_webdav,
+        dropbox_link,
+        dropbox_finish,
+        google_link,
+        google_finish,
         refresh,
         list,
         parse_query,
@@ -683,6 +766,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Current::default())
         .manage(Shared::default())
+        .manage(PendingGoogle::default())
         // Each generated handler consumes the call, so route by name instead of trying one then the other.
         .invoke_handler(move |invoke| {
             if yeda_reader_lib::COMMANDS.contains(&invoke.message.command()) { reader(invoke) } else { browser(invoke) }
