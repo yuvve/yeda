@@ -252,7 +252,11 @@ struct Outcome {
 
 fn cache_key(provider: Provider, keyed: bool, searxng: Option<&str>, query: &str, limit: usize, extra: &str) -> String {
     let searxng = searxng.and_then(yeda_core::web_search::searxng_host).unwrap_or_default();
-    format!("{}|{keyed}|{searxng}|{limit}|{extra}|{query}", provider.name())
+    let source = match provider {
+        Provider::Firecrawl | Provider::Searxng => "science",
+        _ => "web",
+    };
+    format!("{}|{source}|{keyed}|{searxng}|{limit}|{extra}|{query}", provider.name())
 }
 
 fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: Instant, states: &States) -> Vec<Outcome> {
@@ -569,5 +573,8 @@ mod tests {
         cached.cached = 2;
         assert_eq!(search_note(&[cached], None).unwrap(), "web search: keenable (cached)");
         assert!(cache_key(Provider::Exa, false, None, "q", 15, "") != cache_key(Provider::Exa, true, None, "q", 15, ""));
+        assert!(cache_key(Provider::Firecrawl, false, None, "q", 15, "").starts_with("firecrawl|science|"));
+        assert!(cache_key(Provider::Searxng, false, None, "q", 15, "").starts_with("searxng|science|"));
+        assert!(cache_key(Provider::Exa, false, None, "q", 15, "").starts_with("exa|web|"));
     }
 }
