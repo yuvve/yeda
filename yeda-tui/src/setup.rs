@@ -12,7 +12,7 @@ pub enum Kind {
     /// A `[providers.<name>]` entry: where to connect, and how.
     Provider,
     Llm,
-    /// A `[locations.<name>]` table for PDFs: a WebDAV server, Dropbox or Google Drive.
+    /// A `[locations.<name>]` table for PDFs: a local folder, a WebDAV server or Dropbox.
     Storage,
     /// Editing a saved search; nothing to test.
     Search,
@@ -127,7 +127,6 @@ pub const EXTRAS: [&str; 4] = ["url", "journal", "publisher", "abstract"];
 
 const ALIAS_HINT: &str = "optional; names the environment variable for this secret when several share a server: YEDA_…_ALIAS_<ALIAS>";
 const NAME_HINT: &str = "used as pdf.location and in :attach";
-const CLIENT_HINT: &str = "optional; empty uses yeda's own app; for your own, see :help storage";
 const SIGN_IN_HINT: &str = "press Enter on an empty field to sign in in the browser; a saved sign-in is reused, type signin to sign in again";
 const CHOICE_HINT: &str = "all options shown · type to filter · ↓/↑ pick · Enter use · Esc restores · free text works";
 
@@ -137,8 +136,10 @@ pub enum Setup {
     Provider(String, Provider),
     Llm(String, Profile),
     Webdav(Dav),
-    /// A Dropbox or Google Drive location by name: its secret is a sign-in, which the form makes.
+    /// A Dropbox location by name: its secret is a sign-in, which the form makes.
     Cloud(String, Remote),
+    /// A local folder, kept in the device config because its path belongs to this device.
+    Local(String, String),
     Search(SavedSearch),
     Openalex,
     Reference(Ref),
@@ -158,12 +159,12 @@ impl SetupForm {
             Kind::Provider => vec![String::new(); 7],
             Kind::Llm => vec![String::new(); 3],
             Kind::Storage => {
-                let blank = |kind: &str, at: &str, client: &str, other: &str| [name, kind, at, client, other, ""].map(String::from).to_vec();
-                match lib.remotes.get(name) {
-                    Some(Remote::Webdav(d)) => blank("webdav", &d.url, &d.user, d.alias.as_deref().unwrap_or_default()),
-                    Some(Remote::Dropbox(c)) => blank("dropbox", &c.folder, c.client_id.as_deref().unwrap_or_default(), ""),
-                    Some(Remote::Gdrive(c)) => blank("gdrive", &c.folder, c.client_id.as_deref().unwrap_or_default(), ""),
-                    None => blank("", "", "", ""),
+                let row = |cells: &[&str]| cells.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+                match (lib.remotes.get(name), lib.locations.get(name)) {
+                    (Some(Remote::Webdav(d)), _) => row(&[name, "webdav", &d.url, &d.user, d.alias.as_deref().unwrap_or_default(), ""]),
+                    (Some(Remote::Dropbox(c)), _) => row(&[name, "dropbox", &c.folder, ""]),
+                    (None, Some(path)) => row(&[name, "local", &path.to_string_lossy()]),
+                    (None, None) => row(&[name, ""]),
                 }
             }
             Kind::Search => {
@@ -233,6 +234,22 @@ impl SetupForm {
         form
     }
 
+    /// The Kind field was edited: the form gets that kind's fields, and keeps the name and the
+    /// path, URL or folder, which every kind has.
+    pub fn storage_kind_changed(&mut self) {
+        let wanted = match self.values[1].trim().to_lowercase().as_str() {
+            "local" => 3,
+            "webdav" => 6,
+            "dropbox" => 4,
+            _ => 2,
+        };
+        if self.values.len() != wanted {
+            self.values.truncate(wanted.min(3));
+            self.values.resize(wanted, String::new());
+            self.code_link = None;
+        }
+    }
+
     /// A known preset replaces the base URL, protocol and auth, unless a URL was typed that no
     /// preset has.
     pub fn provider_changed(&mut self) {
@@ -280,6 +297,7 @@ impl SetupForm {
                 ("Model", CHOICE_HINT),
             ],
             Kind::Storage => match self.values[1].trim().to_lowercase().as_str() {
+                "local" => &[("Name", NAME_HINT), ("Kind", CHOICE_HINT), ("Path", "this device's folder for the PDFs, e.g. ~/papers; made if missing")],
                 "webdav" => &[
                     ("Name", NAME_HINT),
                     ("Kind", CHOICE_HINT),
@@ -292,26 +310,9 @@ impl SetupForm {
                     ("Name", NAME_HINT),
                     ("Kind", CHOICE_HINT),
                     ("Folder", "inside yeda's Dropbox app folder, e.g. pdfs; empty is the app folder itself"),
-                    ("Client ID", CLIENT_HINT),
-                    ("", "not used"),
                     ("Code", if self.code_link.is_some() { "paste the code Dropbox shows, then press Enter" } else { SIGN_IN_HINT }),
                 ],
-                "gdrive" => &[
-                    ("Name", NAME_HINT),
-                    ("Kind", CHOICE_HINT),
-                    ("Folder", "in My Drive, e.g. yeda/pdfs; yeda only sees the files and folders it made itself"),
-                    ("Client ID", CLIENT_HINT),
-                    ("Client secret", "only with your own client ID; kept in the secret store"),
-                    ("Sign-in", SIGN_IN_HINT),
-                ],
-                _ => &[
-                    ("Name", NAME_HINT),
-                    ("Kind", CHOICE_HINT),
-                    ("Where", "pick a kind first"),
-                    ("", "pick a kind first"),
-                    ("", "pick a kind first"),
-                    ("", "pick a kind first"),
-                ],
+                _ => &[("Name", NAME_HINT), ("Kind", CHOICE_HINT)],
             },
             Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
             Kind::Keenable => &[("API key", "optional; without one, search uses the shared public tier (1,000 requests/hour per IP); the test runs one real search and uses quota")],
@@ -368,7 +369,10 @@ impl SetupForm {
     }
 
     fn has_secret(&self) -> bool {
-        matches!(self.kind, Kind::Provider | Kind::Storage | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
+        if self.kind == Kind::Storage {
+            return matches!(self.values[1].trim().to_lowercase().as_str(), "webdav" | "dropbox");
+        }
+        matches!(self.kind, Kind::Provider | Kind::Openalex | Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl)
     }
 
     pub fn secret(&self) -> Option<String> {
@@ -376,12 +380,7 @@ impl SetupForm {
     }
 
     pub fn masked(&self, field: usize) -> bool {
-        self.has_secret() && (field == self.values.len() - 1 || (self.kind == Kind::Storage && field == 4 && self.values[1].trim() == "gdrive"))
-    }
-
-    /// The client secret typed for a Google Drive client of the user's own.
-    pub fn client_secret(&self) -> Option<String> {
-        Some(self.values.get(4)?.trim().to_string()).filter(|s| !s.is_empty() && self.kind == Kind::Storage)
+        self.has_secret() && field == self.values.len() - 1
     }
 
     /// The `[providers.<name>]`, `[llm.<name>]`, `[locations.<name>]` or `[tables.<name>]` table, or
@@ -434,6 +433,12 @@ impl SetupForm {
             }
             Kind::Storage => {
                 let kind = v[1].to_lowercase();
+                if kind == "local" {
+                    if v[2].is_empty() {
+                        bail!("give the folder's path");
+                    }
+                    return Ok((toml::Table::new(), Setup::Local(v[0].to_string(), v[2].to_string())));
+                }
                 t.insert("kind".into(), kind.clone().into());
                 match kind.as_str() {
                     "webdav" => {
@@ -449,13 +454,10 @@ impl SetupForm {
                             t.insert("alias".into(), v[4].into());
                         }
                     }
-                    "dropbox" | "gdrive" => {
+                    "dropbox" => {
                         t.insert("folder".into(), v[2].trim_matches('/').into());
-                        if !v[3].is_empty() {
-                            t.insert("client_id".into(), v[3].into());
-                        }
                     }
-                    _ => bail!("the kind is webdav, dropbox or gdrive"),
+                    _ => bail!("the kind is local, webdav or dropbox"),
                 }
                 match Remote::deserialize(toml::Value::Table(t.clone()))? {
                     Remote::Webdav(d) => Setup::Webdav(d),
@@ -559,7 +561,7 @@ pub fn choices(choice: Choice, lib: &Library) -> Vec<(String, String)> {
             ("openai-responses", "openai-responses"),
         ],
         Choice::Auth => &[("api-key", "api-key"), ("oauth", "oauth"), ("none", "none")],
-        Choice::StorageKinds => &[("webdav: any WebDAV server", "webdav"), ("dropbox", "dropbox"), ("gdrive: Google Drive", "gdrive")],
+        Choice::StorageKinds => &[("local: a folder on this device", "local"), ("webdav: any WebDAV server", "webdav"), ("dropbox", "dropbox")],
         Choice::Sort => &[
             ("key", "key"),
             ("title", "title"),
@@ -601,10 +603,13 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
         rows.push(row(format!("LLM {name}"), format!("{} · {}{default}", p.provider, p.model), format!("setup llm {name}")));
     }
     rows.push(row("New LLM profile".into(), String::new(), "setup llm".into()));
+    for (name, path) in &lib.locations {
+        rows.push(row(format!("Storage {name}"), format!("local {}", path.display()), format!("setup storage {name}")));
+    }
     for (name, remote) in &lib.remotes {
         rows.push(row(format!("Storage {name}"), remote.label(), format!("setup storage {name}")));
     }
-    rows.push(row("New storage location".into(), "WebDAV, Dropbox or Google Drive".into(), "setup storage".into()));
+    rows.push(row("New storage location".into(), "local folder, WebDAV or Dropbox".into(), "setup storage".into()));
     rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
     let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
     let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
@@ -651,6 +656,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
         }
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Cloud(_, remote) => yeda_net::remote::login(remote, secret.unwrap_or_default()),
+        Setup::Local(..) => Ok(()),
         Setup::Search(_) | Setup::Reference(_) | Setup::Untested => Ok(()),
         Setup::Openalex => yeda_net::openalex::Client::new(secret.map(String::from)).one_by_doi("10.1038/nature16961").map(drop),
         Setup::ApiKey(provider) => yeda_net::web_search::search(&yeda_net::web_search::Search {
@@ -686,6 +692,7 @@ pub fn account(setup: &Setup) -> String {
         Setup::Provider(name, p) => yeda_secrets::provider_account(name, p.url()),
         Setup::Webdav(d) => yeda_secrets::webdav_account(&d.user, &d.url),
         Setup::Cloud(name, remote) => yeda_secrets::remote_account(name, remote),
+        Setup::Local(..) => String::new(),
         Setup::Llm(..) | Setup::Search(_) | Setup::Reference(_) | Setup::Untested => String::new(),
         Setup::Openalex => yeda_secrets::OPENALEX.into(),
         Setup::ApiKey(provider) => crate::websearch::account(*provider).into(),
@@ -888,7 +895,11 @@ mod tests {
     fn builds_and_checks_sections() {
         let lib = Library::parse(Some("[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n"), None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Storage, "dav", &lib);
-        f.values[1..].clone_from_slice(&["webdav".into(), "https://dav.example.com/pdfs".into(), "me".into(), "work".into(), "pw".into()]);
+        assert_eq!(f.values, ["dav", ""]);
+        f.values[1] = "webdav".into();
+        f.storage_kind_changed();
+        assert_eq!((f.values.len(), f.fields().len(), f.masked(5)), (6, 6, true));
+        f.values[2..].clone_from_slice(&["https://dav.example.com/pdfs".into(), "me".into(), "work".into(), "pw".into()]);
         let (t, s) = f.section().unwrap();
         assert!(!t.contains_key("password"));
         assert_eq!((t["kind"].as_str(), t["alias"].as_str()), (Some("webdav"), Some("work")));
@@ -900,23 +911,31 @@ mod tests {
         assert_eq!(account(&s), "webdav:me@https://dav.example.com/pdfs");
 
         let mut cloud = SetupForm::new(Kind::Storage, "box", &lib);
-        assert!(cloud.section().unwrap_err().to_string().contains("webdav, dropbox or gdrive"));
+        assert!(cloud.section().unwrap_err().to_string().contains("local, webdav or dropbox"));
         cloud.values[1] = "dropbox".into();
+        cloud.storage_kind_changed();
         cloud.values[2] = "/yeda/".into();
         let (t, s) = cloud.section().unwrap();
-        assert_eq!((t["kind"].as_str(), t["folder"].as_str(), t.contains_key("client_id")), (Some("dropbox"), Some("yeda"), false));
+        assert_eq!((t["kind"].as_str(), t["folder"].as_str(), cloud.values.len()), (Some("dropbox"), Some("yeda"), 4));
         assert_eq!(account(&s), "dropbox:box");
-        cloud.values[1] = "gdrive".into();
-        cloud.values[3] = "mine.apps.googleusercontent.com".into();
-        cloud.values[4] = "s3cret".into();
-        let (t, s) = cloud.section().unwrap();
-        assert_eq!((t["kind"].as_str(), t["client_id"].as_str()), (Some("gdrive"), Some("mine.apps.googleusercontent.com")));
-        assert_eq!((account(&s).as_str(), cloud.client_secret().as_deref()), ("gdrive:box", Some("s3cret")));
-        assert!(cloud.masked(4) && cloud.masked(5) && !cloud.masked(3));
+        assert!(cloud.masked(3) && !cloud.masked(2));
 
-        let saved = Library::parse(Some("[locations.box]\nkind = \"dropbox\"\nfolder = \"pdfs\"\n"), None, [], None).unwrap();
-        let edit = SetupForm::new(Kind::Storage, "box", &saved);
-        assert_eq!(edit.values, ["box", "dropbox", "pdfs", "", "", ""]);
+        // Switching kind keeps the name and the where, and drops the rest.
+        cloud.values[3] = "a code".into();
+        cloud.values[1] = "local".into();
+        cloud.storage_kind_changed();
+        assert_eq!(cloud.values, ["box", "local", "/yeda/"]);
+        assert!(!cloud.masked(2) && cloud.secret().is_none());
+        let (t, s) = cloud.section().unwrap();
+        assert!(t.is_empty());
+        assert!(matches!(&s, Setup::Local(name, path) if name == "box" && path == "/yeda/"));
+        assert_eq!(account(&s), "");
+        cloud.values[2].clear();
+        assert!(cloud.section().unwrap_err().to_string().contains("path"));
+
+        let saved = Library::parse(Some("[locations.box]\nkind = \"dropbox\"\nfolder = \"pdfs\"\n\n[locations.here]\nkind = \"local\"\npath = \"/p\"\n"), None, [], None).unwrap();
+        assert_eq!(SetupForm::new(Kind::Storage, "box", &saved).values, ["box", "dropbox", "pdfs", ""]);
+        assert_eq!(SetupForm::new(Kind::Storage, "here", &saved).values, ["here", "local", "/p"]);
 
         let lib = Library::parse(Some("[searches]\nnew = { query = \"tag:x\", sort = \"author\", descending = true }\n"), None, [], None).unwrap();
         let copy = SetupForm::duplicate("new", &lib);

@@ -1,8 +1,8 @@
-//! PDF storage on a remote: WebDAV, Dropbox or Google Drive behind one set of operations. The
-//! `secret` every function takes is what the secret store holds for the location: the WebDAV
-//! password, or a cloud drive's sign-in.
+//! PDF storage on a remote: WebDAV or Dropbox behind one set of operations. The `secret` every
+//! function takes is what the secret store holds for the location: the WebDAV password, or the
+//! Dropbox refresh token.
 
-use crate::{MAX_BYTES, dropbox, gdrive, webdav};
+use crate::{MAX_BYTES, dropbox, webdav};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -31,7 +31,6 @@ pub fn download(remote: &Remote, secret: &str, path: &str) -> Result<(Vec<u8>, O
     match remote {
         Remote::Webdav(d) => webdav::download(d, secret, path),
         Remote::Dropbox(c) => dropbox::download(c, secret, path),
-        Remote::Gdrive(c) => gdrive::download(c, secret, path),
     }
 }
 
@@ -41,7 +40,6 @@ pub fn current_version(remote: &Remote, secret: &str, path: &str) -> Result<Opti
     match remote {
         Remote::Webdav(d) => webdav::current_version(d, secret, path),
         Remote::Dropbox(c) => dropbox::current_version(c, secret, path),
-        Remote::Gdrive(c) => gdrive::current_version(c, secret, path),
     }
 }
 
@@ -50,7 +48,6 @@ pub fn upload(remote: &Remote, secret: &str, path: &str, bytes: &[u8]) -> Result
     match remote {
         Remote::Webdav(d) => webdav::upload(d, secret, path, bytes),
         Remote::Dropbox(c) => dropbox::upload(c, secret, path, bytes),
-        Remote::Gdrive(c) => gdrive::upload(c, secret, path, bytes),
     }
 }
 
@@ -59,7 +56,6 @@ pub fn login(remote: &Remote, secret: &str) -> Result<()> {
     match remote {
         Remote::Webdav(d) => webdav::login(d, secret),
         Remote::Dropbox(c) => dropbox::login(c, secret),
-        Remote::Gdrive(c) => gdrive::login(c, secret),
     }
 }
 
@@ -103,62 +99,29 @@ pub(crate) fn check_status(what: &str, status: u16, body: &str) -> Result<()> {
     }
 }
 
-/// The secret a cloud drive keeps: the refresh token, plus the client secret of an OAuth client the
-/// user registered. A bare string is a refresh token.
-pub(crate) struct Credentials {
-    pub refresh_token: String,
-    pub client_secret: Option<String>,
-}
-
-impl Credentials {
-    pub fn parse(secret: &str) -> Credentials {
-        match serde_json::from_str::<Value>(secret) {
-            Ok(v) if v["refresh_token"].is_string() => {
-                Credentials { refresh_token: v["refresh_token"].as_str().unwrap_or_default().into(), client_secret: v["client_secret"].as_str().map(String::from) }
-            }
-            _ => Credentials { refresh_token: secret.trim().into(), client_secret: None },
-        }
-    }
-
-    pub fn to_secret(&self) -> String {
-        let mut v = serde_json::json!({"refresh_token": self.refresh_token});
-        if let Some(s) = &self.client_secret {
-            v["client_secret"] = s.clone().into();
-        }
-        v.to_string()
-    }
-}
-
-/// An OAuth client: the one yeda was built with, or the user's own.
-pub(crate) struct Client {
-    pub id: String,
-    pub secret: Option<String>,
-}
-
-pub(crate) fn client_for(kind: &str, cloud: &Cloud, own_secret: Option<&str>, built_in: (&str, &str)) -> Result<Client> {
+/// The OAuth client a Dropbox location signs in with: the one yeda was built with, or the
+/// `client_id` the location names.
+pub(crate) fn client_id(cloud: &Cloud, built_in: &str) -> Result<String> {
     if let Some(id) = cloud.client_id.as_deref().filter(|id| !id.is_empty()) {
-        return Ok(Client { id: id.into(), secret: own_secret.map(String::from) });
+        return Ok(id.into());
     }
-    if built_in.0.is_empty() {
-        bail!("this build of yeda has no {kind} app; register your own and set client_id on the location (see :help storage)");
+    if built_in.is_empty() {
+        bail!("this build of yeda has no Dropbox app; register your own and set client_id on the location (see :help storage)");
     }
-    Ok(Client { id: built_in.0.into(), secret: Some(built_in.1).filter(|s| !s.is_empty()).map(String::from) })
+    Ok(built_in.into())
 }
 
 type Cache = Mutex<BTreeMap<String, (String, Instant)>>;
 
 /// An access token for the refresh token, from the endpoint at most once until it nears its end.
-pub(crate) fn access_token(cache: &'static Cache, endpoint: &str, client: &Client, refresh_token: &str) -> Result<String> {
-    let key = format!("{}:{refresh_token}", client.id);
+pub(crate) fn access_token(cache: &'static Cache, endpoint: &str, client_id: &str, refresh_token: &str) -> Result<String> {
+    let key = format!("{client_id}:{refresh_token}");
     if let Some((token, expires)) = cache.lock().unwrap().get(&key)
         && Instant::now() + Duration::from_secs(60) < *expires
     {
         return Ok(token.clone());
     }
-    let mut form = vec![("grant_type", "refresh_token"), ("refresh_token", refresh_token), ("client_id", client.id.as_str())];
-    if let Some(secret) = &client.secret {
-        form.push(("client_secret", secret));
-    }
+    let form = [("grant_type", "refresh_token"), ("refresh_token", refresh_token), ("client_id", client_id)];
     let body = form.iter().map(|(k, v)| format!("{k}={}", crate::oauth::encode(v))).collect::<Vec<_>>().join("&");
     let mut resp = agent().post(endpoint).header("content-type", "application/x-www-form-urlencoded").send(body).with_context(|| endpoint.to_string())?;
     let status = resp.status().as_u16();
@@ -179,23 +142,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_secret_is_a_refresh_token_or_its_json() {
-        let bare = Credentials::parse("1//abc\n");
-        assert_eq!((bare.refresh_token.as_str(), bare.client_secret), ("1//abc", None));
-        let own = Credentials { refresh_token: "r".into(), client_secret: Some("s".into()) };
-        let back = Credentials::parse(&own.to_secret());
-        assert_eq!((back.refresh_token.as_str(), back.client_secret.as_deref()), ("r", Some("s")));
-        assert_eq!(Credentials { refresh_token: "r".into(), client_secret: None }.to_secret(), r#"{"refresh_token":"r"}"#);
-    }
-
-    #[test]
     fn a_missing_built_in_client_points_at_the_guide() {
         let cloud = Cloud { folder: String::new(), client_id: None };
-        let err = client_for("Dropbox", &cloud, None, ("", "")).err().unwrap().to_string();
+        let err = client_id(&cloud, "").unwrap_err().to_string();
         assert!(err.contains("client_id") && err.contains(":help storage"), "{err}");
         let own = Cloud { folder: String::new(), client_id: Some("mine".into()) };
-        assert_eq!(client_for("Dropbox", &own, Some("s"), ("", "")).unwrap().id, "mine");
-        assert_eq!(client_for("Dropbox", &cloud, None, ("built", "in")).unwrap().secret.as_deref(), Some("in"));
+        assert_eq!(client_id(&own, "").unwrap(), "mine");
+        assert_eq!(client_id(&cloud, "built").unwrap(), "built");
+        assert_eq!(client_id(&own, "built").unwrap(), "mine");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! Sign-in has no redirect: Dropbox shows a code, which the user pastes back.
 
 use crate::oauth::{encode, pkce, token_response};
-use crate::remote::{Client, Credentials, access_token, agent, check_status, client_for, json_or_error, read_limited};
+use crate::remote::{access_token, agent, check_status, client_id, json_or_error, read_limited};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -28,15 +28,12 @@ pub struct SignIn {
     pub verifier: String,
 }
 
-fn client(cloud: &Cloud) -> Result<Client> {
-    client_for("Dropbox", cloud, None, (APP_KEY, ""))
-}
 
 pub fn start(cloud: &Cloud) -> Result<SignIn> {
-    let client = client(cloud)?;
+    let client_id = client_id(cloud, APP_KEY)?;
     let (verifier, challenge) = pkce();
     let query = [
-        ("client_id", client.id.as_str()),
+        ("client_id", client_id.as_str()),
         ("response_type", "code"),
         ("token_access_type", "offline"),
         ("code_challenge", &challenge),
@@ -47,10 +44,10 @@ pub fn start(cloud: &Cloud) -> Result<SignIn> {
     Ok(SignIn { url: format!("{AUTHORIZE}?{query}"), verifier })
 }
 
-/// Trades the pasted code for the secret to keep.
+/// Trades the pasted code for the secret to keep: the refresh token.
 pub fn finish(cloud: &Cloud, verifier: &str, code: &str) -> Result<String> {
-    let client = client(cloud)?;
-    let form = [("grant_type", "authorization_code"), ("code", code.trim()), ("code_verifier", verifier), ("client_id", client.id.as_str())]
+    let client_id = client_id(cloud, APP_KEY)?;
+    let form = [("grant_type", "authorization_code"), ("code", code.trim()), ("code_verifier", verifier), ("client_id", client_id.as_str())]
         .map(|(k, v)| format!("{k}={}", encode(v)))
         .join("&");
     let mut resp = agent().post(TOKEN).header("content-type", "application/x-www-form-urlencoded").send(form).with_context(|| TOKEN.to_string())?;
@@ -60,13 +57,11 @@ pub fn finish(cloud: &Cloud, verifier: &str, code: &str) -> Result<String> {
         bail!("Dropbox refused the code: it is wrong or expired; press Enter for a new link");
     }
     let v = token_response(TOKEN, status, &text)?;
-    let refresh_token = v["refresh_token"].as_str().context("Dropbox returned no refresh token")?.to_string();
-    Ok(Credentials { refresh_token, client_secret: None }.to_secret())
+    Ok(v["refresh_token"].as_str().context("Dropbox returned no refresh token")?.to_string())
 }
 
 fn token(cloud: &Cloud, secret: &str) -> Result<String> {
-    let credentials = Credentials::parse(secret);
-    access_token(&TOKENS, TOKEN, &client(cloud)?, &credentials.refresh_token)
+    access_token(&TOKENS, TOKEN, &client_id(cloud, APP_KEY)?, secret.trim())
 }
 
 /// `path` inside the location's folder, as Dropbox writes it: `/folder/path`.

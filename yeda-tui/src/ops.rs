@@ -71,6 +71,27 @@ pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password
     Ok(r)
 }
 
+/// Sets `[locations.<name>]` in this device's config to the local folder `path`, making the folder.
+/// A new location is appended, so the file's comments stay; changing one rewrites the file.
+pub fn save_device_location(config: &Path, name: &str, path: &str) -> Result<()> {
+    let folder = expand_home(path);
+    fs::create_dir_all(&folder).map_err(|e| anyhow::anyhow!("{}: {e}", folder.display()))?;
+    crate::sync::write_new(&folder.join(".stignore"), "*.tmp\n")?;
+    let text = fs::read_to_string(config).unwrap_or_default();
+    let mut device: toml::Table = toml::from_str(&text).context("device config")?;
+    let known = device.get("locations").and_then(|l| l.get(name)).is_some();
+    let locations = yeda_core::library::config_section(&mut device, "locations")?;
+    locations.insert(name.into(), yeda_core::library::local_location(path));
+    let written = if known {
+        toml::to_string(&device)?
+    } else {
+        let only = toml::Table::from_iter([("locations".to_string(), toml::Value::Table(toml::Table::from_iter([(name.to_string(), yeda_core::library::local_location(path))])))]);
+        format!("{}{}{}", text, if text.is_empty() || text.ends_with("\n\n") { "" } else { "\n" }, toml::to_string(&only)?)
+    };
+    yeda_fs::write_atomic(config, written.as_bytes())?;
+    Ok(())
+}
+
 /// Refuses a PDF from the fetch window that doesn't look like `r`, since any link could have been clicked there.
 pub fn check_download(r: &Ref, file: &Path) -> Result<()> {
     let text = poppler::pdf_text(file).unwrap_or_default();
@@ -177,4 +198,30 @@ pub fn finish_graph(lib: &mut Library, f: citations::Fetched) -> (Graph, Vec<Res
 
 pub fn ref_index(lib: &Library, key: &str) -> Result<usize> {
     lib.refs.iter().position(|r| r.key == key).with_context(|| format!("no reference with key '{key}'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_location_keeps_the_comments_until_it_changes() {
+        let dir = std::env::temp_dir().join(format!("yeda-device-{}", std::process::id()));
+        let config = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&config, "# Settings for this device.\nlibrary = \"~/l\"\n").unwrap();
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        save_device_location(&config, "papers", a.to_str().unwrap()).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.starts_with("# Settings for this device.\nlibrary = \"~/l\"\n"), "{text}");
+        assert!(a.join(".stignore").is_file());
+        let lib = Library::parse(None, Some(&text), [], None).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(lib.locations["papers"], a);
+
+        save_device_location(&config, "papers", b.to_str().unwrap()).unwrap();
+        save_device_location(&config, "more", a.to_str().unwrap()).unwrap();
+        let lib = Library::parse(None, Some(&fs::read_to_string(&config).unwrap()), [], None).unwrap();
+        assert_eq!((lib.locations["papers"].clone(), lib.locations["more"].clone()), (b, a));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

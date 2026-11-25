@@ -1,4 +1,4 @@
-//! Secrets (WebDAV passwords, cloud drive sign-ins, LLM API keys) in the system's secret store: the Secret Service on
+//! Secrets (WebDAV passwords, Dropbox sign-ins, LLM API keys) in the system's secret store: the Secret Service on
 //! Linux (GNOME Keyring, KWallet, KeePassXC) and the Keystore on Android. Never in a file.
 
 use anyhow::{Context, Result};
@@ -46,10 +46,9 @@ pub fn env_names(account: &str, alias: Option<&str>) -> Vec<String> {
         EXA => ("KEY", "https://api.exa.ai"),
         PARALLEL => ("KEY", "https://api.parallel.ai"),
         FIRECRAWL => ("KEY", "https://api.firecrawl.dev"),
-        _ if account.starts_with(DROPBOX_PREFIX) || account.starts_with(GDRIVE_PREFIX) => {
-            let (prefix, name) = account.split_once(':').unwrap_or_default();
-            let Some(name) = env_name(name) else { return Vec::new() };
-            return vec![format!("YEDA_{}_{name}", prefix.to_ascii_uppercase())];
+        _ if account.starts_with(DROPBOX_PREFIX) => {
+            let Some(name) = env_name(&account[DROPBOX_PREFIX.len()..]) else { return Vec::new() };
+            return vec![format!("YEDA_DROPBOX_{name}")];
         }
         _ => {
             let prefix = if account.starts_with("provider:") {
@@ -123,16 +122,14 @@ pub fn webdav_account(user: &str, url: &str) -> String {
 }
 
 const DROPBOX_PREFIX: &str = "dropbox:";
-const GDRIVE_PREFIX: &str = "gdrive:";
 
-/// The account of the location `name`: a WebDAV login, or a cloud drive's sign-in. A cloud sign-in
-/// is only ever sent to its provider's fixed servers, so the location's name is enough to find it.
+/// The account of the location `name`: a WebDAV login, or a Dropbox sign-in. A Dropbox sign-in is
+/// only ever sent to Dropbox's fixed servers, so the location's name is enough to find it.
 pub fn remote_account(name: &str, remote: &yeda_core::library::Remote) -> String {
     use yeda_core::library::Remote;
     match remote {
         Remote::Webdav(d) => webdav_account(&d.user, &d.url),
         Remote::Dropbox(_) => format!("{DROPBOX_PREFIX}{name}"),
-        Remote::Gdrive(_) => format!("{GDRIVE_PREFIX}{name}"),
     }
 }
 
@@ -177,8 +174,8 @@ mod tests {
         assert_eq!(names(super::OPENALEX, None), ["YEDA_KEY_API_OPENALEX_ORG_443"]);
         assert_eq!(names(super::FIRECRAWL, None), ["YEDA_KEY_API_FIRECRAWL_DEV_443"]);
         assert_eq!(names("dropbox:my-box", None), ["YEDA_DROPBOX_MY__BOX"]);
-        assert_eq!(names("gdrive:papers", Some("x")), ["YEDA_GDRIVE_PAPERS"]);
-        assert!(names("gdrive:my.drive", None).is_empty());
+        assert_eq!(names("dropbox:papers", Some("x")), ["YEDA_DROPBOX_PAPERS"]);
+        assert!(names("dropbox:my.box", None).is_empty());
         assert!(names(&super::git_account("https://github.com/a/b"), None).is_empty());
         assert!(names(&super::provider_account("x", "http://plain.example"), None).is_empty());
     }

@@ -72,7 +72,7 @@ fn wizard(import: bool) -> Result<()> {
             None => {
                 fs::create_dir_all(&a.folder)?;
                 sync::write_new(&a.folder.join(".stignore"), "*.tmp\n")?;
-                a.folder.to_string_lossy().into_owned().into()
+                library::local_location(&a.folder.to_string_lossy())
             }
         };
         let effect = lib.update_config(|t| {
@@ -139,8 +139,9 @@ const CONFIG_TEMPLATE: &str = r#"# Settings for this device. Everything else goe
 # reader = "default"
 
 # This device's folders for the library's PDF locations.
-# [locations]
-# zotero = "~/Zotero/storage"
+# [locations.zotero]
+# kind = "local"
+# path = "~/Zotero/storage"
 
 # Key bindings, per context (normal, library, graph, cluster, table, annotations); "" unbinds a key.
 # [keys.normal]

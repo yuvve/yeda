@@ -559,26 +559,22 @@ export function showBrowser(openReader: () => void): () => boolean {
 
 	function storageForm() {
 		const field = (placeholder: string, type = 'text') => h('input', { type, placeholder, autocapitalize: 'off' });
-		const kinds = { webdav: 'WebDAV', dropbox: 'Dropbox', gdrive: 'Google Drive' };
+		const kinds = { webdav: 'WebDAV', dropbox: 'Dropbox' };
 		const kind = h('select', {}, ...Object.entries(kinds).map(([value, label]) => h('option', { value }, label)));
 		const name = field('name, e.g. papers');
 		const where = field('https://dav.example.com/pdfs/', 'url'), user = field('user'), password = field('password', 'password');
-		const clientId = field('client ID (optional)'), clientSecret = field('client secret (your own Google client only)', 'password');
 		const code = field('the code Dropbox shows');
 		const hint = h('p', { className: 'meta' });
 		const finish = button('Finish sign-in', () => {});
 		let verifier = '';
-		const fields = { webdav: [user, password], dropbox: [clientId, code, finish], gdrive: [clientId, clientSecret] };
 		const sync = () => {
-			const k = kind.value as keyof typeof kinds;
-			for (const input of [user, password, clientId, clientSecret, code, finish]) input.hidden = !(fields[k] as HTMLElement[]).includes(input);
-			code.hidden = finish.hidden = k !== 'dropbox' || !verifier;
-			where.placeholder = k === 'webdav' ? 'https://dav.example.com/pdfs/' : k === 'dropbox' ? 'folder in the Dropbox app folder, e.g. pdfs' : 'folder in My Drive, e.g. yeda/pdfs';
-			hint.textContent = k === 'webdav'
-				? 'Adds or replaces [locations.<name>] in yeda.toml after a test login; the password goes to the Keystore.'
-				: k === 'dropbox'
-					? 'Opens Dropbox in the browser; allow yeda, then paste the code it shows. Leave the client ID empty to use yeda\'s own app.'
-					: 'Opens Google in the browser. yeda only sees the files and folders it made itself. Leave the client ID empty to use yeda\'s own app.';
+			const dropbox = kind.value === 'dropbox';
+			user.hidden = password.hidden = dropbox;
+			code.hidden = finish.hidden = !dropbox || !verifier;
+			where.placeholder = dropbox ? 'folder in the Dropbox app folder, e.g. pdfs' : 'https://dav.example.com/pdfs/';
+			hint.textContent = dropbox
+				? 'Opens Dropbox in the browser; allow yeda, then paste the code it shows.'
+				: 'Adds or replaces [locations.<name>] in yeda.toml after a test login; the password goes to the Keystore.';
 		};
 		kind.addEventListener('change', sync);
 		const saved = async () => {
@@ -587,29 +583,23 @@ export function showBrowser(openReader: () => void): () => boolean {
 			await showSettings();
 		};
 		finish.addEventListener('click', () => run(async () => {
-			await invoke('dropbox_finish', { name: name.value, folder: where.value, clientId: clientId.value, verifier, code: code.value });
+			await invoke('dropbox_finish', { name: name.value, folder: where.value, verifier, code: code.value });
 			await saved();
 		}));
 		const test = button('Test and save', () => run(async () => {
 			if (kind.value === 'webdav') {
 				await invoke('setup_webdav', { name: name.value, url: where.value, user: user.value, password: password.value });
-			} else if (kind.value === 'dropbox') {
-				const link = await invoke<{ url: string; verifier: string }>('dropbox_link', { folder: where.value, clientId: clientId.value });
-				verifier = link.verifier;
-				sync();
-				openUrl(link.url);
-				say('allow yeda in the browser, then paste the code Dropbox shows');
+				await saved();
 				return;
-			} else {
-				const url = await invoke<string>('google_link', { folder: where.value, clientId: clientId.value, clientSecret: clientSecret.value });
-				openUrl(url);
-				say('waiting for the browser to sign in with Google…');
-				await invoke('google_finish', { name: name.value, folder: where.value, clientId: clientId.value });
 			}
-			await saved();
+			const link = await invoke<{ url: string; verifier: string }>('dropbox_link', { folder: where.value });
+			verifier = link.verifier;
+			sync();
+			openUrl(link.url);
+			say('allow yeda in the browser, then paste the code Dropbox shows');
 		}));
 		sync();
-		return h('div', {}, hint, kind, name, where, user, password, clientId, clientSecret, code, test, finish);
+		return h('div', {}, hint, kind, name, where, user, password, code, test, finish);
 	}
 
 	function einkToggle() {

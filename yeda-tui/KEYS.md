@@ -138,7 +138,7 @@ the command line, searches, forms and pickers
 | `:found` | the papers the last :discover found |
 | `:history` | past commands; Enter puts one on the command line (Ctrl-R there) |
 | `:setup` | list everything :setup sets, as it is set now; Enter changes one |
-| `:setup provider\|llm\|storage [name]` | add or change a provider, an LLM profile or a storage location (WebDAV, Dropbox, Google Drive) in yeda.toml, testing it first |
+| `:setup provider\|llm\|storage [name]` | add or change a provider, an LLM profile or a storage location (local, WebDAV, Dropbox) in yeda.toml, testing it first |
 | `:setup openalex` | set the optional OpenAlex API key, testing it first |
 | `:setup web-search [keenable\|exa\|parallel\|firecrawl\|searxng]` | the search providers :discover uses, or one provider's optional key or SearXNG URL, testing it first |
 | `:setup proxy` | set the library proxies :fetch opens papers through |

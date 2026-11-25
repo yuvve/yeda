@@ -1,5 +1,6 @@
-[locations]
-papers = "~/yeda-pdfs"
+[locations.papers]
+kind = "local"
+path = "~/yeda-pdfs"
 
 [tag_colors]
 "swarm" = "green"

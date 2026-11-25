@@ -144,7 +144,7 @@ fn set_library(app: AppHandle, state: State<Shared>, path: PathBuf) -> Res<()> {
 fn set_location(app: AppHandle, state: State<Shared>, name: String, path: PathBuf) -> Res<()> {
     let path = path.to_string_lossy().into_owned();
     let mut edit = Ok(());
-    update_settings(&app, |s| edit = config_section(&mut s.machine, "locations").map(|l| drop(l.insert(name, path.into()))))
+    update_settings(&app, |s| edit = config_section(&mut s.machine, "locations").map(|l| drop(l.insert(name, library::local_location(&path)))))
         .map_err(err)?;
     edit.map_err(err)?;
     state.change(&app, |_| Ok(()))
@@ -506,22 +506,8 @@ async fn setup_webdav(app: AppHandle, state: State<'_, Shared>, name: String, ur
     save_location(&app, &state, name, &remote)
 }
 
-fn cloud_of(kind: &str, folder: String, client_id: String) -> Res<library::Remote> {
-    let cloud = library::Cloud { folder: folder.trim().trim_matches('/').to_string(), client_id: Some(client_id.trim().to_string()).filter(|c| !c.is_empty()) };
-    match kind {
-        "dropbox" => Ok(library::Remote::Dropbox(cloud)),
-        "gdrive" => Ok(library::Remote::Gdrive(cloud)),
-        _ => Err("the kind is dropbox or gdrive".into()),
-    }
-}
-
-/// Signs in to Dropbox or Google Drive, tests the sign-in, then keeps it in the Keystore and
-/// `[locations.<name>]` in yeda.toml.
-async fn finish_cloud(app: &AppHandle, state: &Shared, name: String, remote: library::Remote, secret: String) -> Res<()> {
-    let (login, token) = (remote.clone(), secret.clone());
-    tauri::async_runtime::spawn_blocking(move || yeda_net::remote::login(&login, &token)).await.map_err(|e| e.to_string())?.map_err(err)?;
-    yeda_secrets::set(&yeda_secrets::remote_account(&name, &remote), &secret).map_err(err)?;
-    save_location(app, state, name, &remote)
+fn dropbox_of(folder: String) -> library::Cloud {
+    library::Cloud { folder: folder.trim().trim_matches('/').to_string(), client_id: None }
 }
 
 #[derive(Serialize)]
@@ -532,52 +518,26 @@ struct DropboxLink {
 
 /// The Dropbox link to open, and the verifier to give back with the code it shows.
 #[tauri::command]
-fn dropbox_link(folder: String, client_id: String) -> Res<DropboxLink> {
-    let library::Remote::Dropbox(cloud) = cloud_of("dropbox", folder, client_id)? else { unreachable!() };
-    let sign_in = yeda_net::dropbox::start(&cloud).map_err(err)?;
+fn dropbox_link(folder: String) -> Res<DropboxLink> {
+    let sign_in = yeda_net::dropbox::start(&dropbox_of(folder)).map_err(err)?;
     Ok(DropboxLink { url: sign_in.url, verifier: sign_in.verifier })
 }
 
 #[tauri::command]
-async fn dropbox_finish(app: AppHandle, state: State<'_, Shared>, name: String, folder: String, client_id: String, verifier: String, code: String) -> Res<()> {
+async fn dropbox_finish(app: AppHandle, state: State<'_, Shared>, name: String, folder: String, verifier: String, code: String) -> Res<()> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("give the location a name".into());
     }
-    let remote = cloud_of("dropbox", folder, client_id)?;
-    let library::Remote::Dropbox(cloud) = remote.clone() else { unreachable!() };
+    let cloud = dropbox_of(folder);
+    let remote = library::Remote::Dropbox(cloud.clone());
     let secret = tauri::async_runtime::spawn_blocking(move || yeda_net::dropbox::finish(&cloud, &verifier, &code)).await.map_err(|e| e.to_string())?.map_err(err)?;
-    finish_cloud(&app, &state, name, remote, secret).await
+    let (login, token) = (remote.clone(), secret.clone());
+    tauri::async_runtime::spawn_blocking(move || yeda_net::remote::login(&login, &token)).await.map_err(|e| e.to_string())?.map_err(err)?;
+    yeda_secrets::set(&yeda_secrets::remote_account(&name, &remote), &secret).map_err(err)?;
+    save_location(&app, &state, name, &remote)
 }
 
-/// A Google sign-in whose loopback listener is waiting for the browser.
-#[derive(Default)]
-struct PendingGoogle(Mutex<Option<yeda_net::gdrive::SignIn>>);
-
-/// The Google link to open; `google_finish` waits for the browser to come back.
-#[tauri::command]
-fn google_link(pending: State<PendingGoogle>, folder: String, client_id: String, client_secret: String) -> Res<String> {
-    let library::Remote::Gdrive(cloud) = cloud_of("gdrive", folder, client_id)? else { unreachable!() };
-    if cloud.client_id.is_some() && client_secret.trim().is_empty() {
-        return Err("a Google client ID needs its client secret".into());
-    }
-    let sign_in = yeda_net::gdrive::start(&cloud, Some(client_secret.trim()).filter(|s| !s.is_empty())).map_err(err)?;
-    let url = sign_in.url.clone();
-    *pending.0.lock().unwrap() = Some(sign_in);
-    Ok(url)
-}
-
-#[tauri::command]
-async fn google_finish(app: AppHandle, state: State<'_, Shared>, pending: State<'_, PendingGoogle>, name: String, folder: String, client_id: String) -> Res<()> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("give the location a name".into());
-    }
-    let remote = cloud_of("gdrive", folder, client_id)?;
-    let sign_in = pending.0.lock().unwrap().take().ok_or("start the sign-in first")?;
-    let secret = tauri::async_runtime::spawn_blocking(move || sign_in.finish(std::time::Duration::from_secs(10 * 60))).await.map_err(|e| e.to_string())?.map_err(err)?;
-    finish_cloud(&app, &state, name, remote, secret).await
-}
 
 fn empty(dir: &Path) {
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -725,8 +685,6 @@ fn browser_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'sta
         setup_webdav,
         dropbox_link,
         dropbox_finish,
-        google_link,
-        google_finish,
         refresh,
         list,
         parse_query,
@@ -766,7 +724,6 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Current::default())
         .manage(Shared::default())
-        .manage(PendingGoogle::default())
         // Each generated handler consumes the call, so route by name instead of trying one then the other.
         .invoke_handler(move |invoke| {
             if yeda_reader_lib::COMMANDS.contains(&invoke.message.command()) { reader(invoke) } else { browser(invoke) }

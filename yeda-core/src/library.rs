@@ -74,13 +74,13 @@ pub struct Dav {
     pub alias: Option<String>,
 }
 
-/// A cloud drive holding PDFs under `folder`. Its sign-in token is never part of the library.
+/// A Dropbox folder holding PDFs. Its sign-in token is never part of the library.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cloud {
-    /// Where PDFs go: inside the app's folder for Dropbox, under My Drive for Google Drive.
+    /// Where PDFs go, inside yeda's Dropbox app folder.
     #[serde(default)]
     pub folder: String,
-    /// Replaces the OAuth client yeda was built with.
+    /// Replaces the Dropbox app yeda was built with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
 }
@@ -98,17 +98,16 @@ impl Cloud {
 pub enum Remote {
     Webdav(Dav),
     Dropbox(Cloud),
-    Gdrive(Cloud),
 }
 
-pub const REMOTE_KINDS: [&str; 3] = ["webdav", "dropbox", "gdrive"];
+/// Every `kind` a `[locations.<name>]` table may have.
+pub const LOCATION_KINDS: [&str; 3] = ["local", "webdav", "dropbox"];
 
 impl Remote {
     pub fn kind(&self) -> &'static str {
         match self {
             Remote::Webdav(_) => "webdav",
             Remote::Dropbox(_) => "dropbox",
-            Remote::Gdrive(_) => "gdrive",
         }
     }
 
@@ -124,7 +123,6 @@ impl Remote {
         match self {
             Remote::Webdav(d) => format!("WebDAV {}@{}", d.user, d.url),
             Remote::Dropbox(c) => format!("Dropbox /{}", c.folder.trim_matches('/')),
-            Remote::Gdrive(c) => format!("Google Drive /{}", c.folder.trim_matches('/')),
         }
     }
 }
@@ -161,25 +159,27 @@ impl SavedSearch {
     }
 }
 
-/// A `[locations]` entry: a local folder, or a table describing a remote.
+/// A `[locations]` entry: a `kind = "local"` folder, or a remote.
 enum Location {
     Folder(String),
     Remote(Box<Remote>),
 }
 
+/// The `[locations.<name>]` table for the local folder `path`.
+pub fn local_location(path: &str) -> toml::Value {
+    toml::Table::from_iter([("kind".to_string(), "local".into()), ("path".to_string(), path.into())]).into()
+}
+
 fn parse_location(name: &str, value: toml::Value) -> Result<Location> {
-    match value {
-        toml::Value::String(p) => Ok(Location::Folder(p)),
-        toml::Value::Table(t) => {
-            let kind = t.get("kind").and_then(|k| k.as_str()).map(String::from);
-            let hint = || format!("locations.{name}: a location is a folder path or a table with kind = {}", REMOTE_KINDS.map(|k| format!("\"{k}\"")).join(", "));
-            match kind {
-                None => bail!("{}", hint()),
-                Some(k) if !REMOTE_KINDS.contains(&k.as_str()) => bail!("{}", hint()),
-                Some(_) => Ok(Location::Remote(Box::new(Remote::deserialize(toml::Value::Table(t)).with_context(|| format!("locations.{name}"))?))),
-            }
+    let hint = || format!("locations.{name}: a location is a table with kind = {}", LOCATION_KINDS.map(|k| format!("\"{k}\"")).join(", "));
+    let toml::Value::Table(t) = value else { bail!("{}", hint()) };
+    match t.get("kind").and_then(|k| k.as_str()) {
+        Some("local") => {
+            let path = t.get("path").and_then(|p| p.as_str()).filter(|p| !p.is_empty());
+            Ok(Location::Folder(path.with_context(|| format!("locations.{name}: a local location needs a path"))?.to_string()))
         }
-        _ => bail!("locations.{name}: a location is a folder path or a table"),
+        Some(kind) if LOCATION_KINDS.contains(&kind) => Ok(Location::Remote(Box::new(Remote::deserialize(toml::Value::Table(t)).with_context(|| format!("locations.{name}"))?))),
+        _ => bail!("{}", hint()),
     }
 }
 
@@ -679,7 +679,7 @@ mod tests {
         let Effect::Write { path: ai, bytes: ai_bytes } = Library::default().save_ai(&r).unwrap() else { panic!() };
         assert_eq!(ai, "notes/smith2020.ai.toml");
         assert_eq!(ai_key("smith2020.ai.toml"), Some("smith2020"));
-        let shared = "[locations]\npapers = \"~/papers\"\n";
+        let shared = "[locations.papers]\nkind = \"local\"\npath = \"~/papers\"\n";
         let mut lib = Library::parse(Some(shared), None, [("smith2020".into(), String::from_utf8(bytes).unwrap())], Some(Path::new("/h"))).unwrap();
         lib.load_ai("smith2020", &String::from_utf8(ai_bytes).unwrap());
         assert_eq!(lib.refs, vec![r]);
@@ -697,8 +697,8 @@ mod tests {
     #[test]
     fn device_folders_win_and_edits_keep_unknown_keys() {
         let mut lib = Library::parse(
-            Some("future_key = 1\n[locations]\npapers = \"/shared\"\n"),
-            Some("[locations]\npapers = \"/mine\"\n"),
+            Some("future_key = 1\n[locations.papers]\nkind = \"local\"\npath = \"/shared\"\n"),
+            Some("[locations.papers]\nkind = \"local\"\npath = \"/mine\"\n"),
             [],
             None,
         )
@@ -714,7 +714,7 @@ mod tests {
             panic!()
         };
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.contains("future_key = 1") && text.contains("papers = \"/shared\"") && text.contains("ml = \"red\""));
+        assert!(text.contains("future_key = 1") && text.contains("path = \"/shared\"") && text.contains("ml = \"red\""));
     }
 
     #[test]
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn webdav_locations_and_attachments() {
-        let shared = "[locations]\npapers = \"/p\"\n\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
+        let shared = "[locations.papers]\nkind = \"local\"\npath = \"/p\"\n\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/zotero/\"\nuser = \"me\"\n";
         let refs = [("a2020".to_string(), "[[pdf]]\nid = \"1\"\nlocation = \"dav\"\npath = \"ABCD2345/a.pdf\"\n".to_string())];
         let mut lib = Library::parse(Some(shared), None, refs, None).unwrap();
         assert!(lib.pdf_path(&lib.refs[0].pdfs[0]).is_err());
@@ -747,22 +747,28 @@ mod tests {
         assert!(lib.attach(&r, "papers", "Paper.pdf").is_err());
         assert!(lib.attach(&lib.refs[0], "nowhere", "x.pdf").is_err());
 
-        let local = Library::parse(Some(shared), Some("[locations]\ndav = \"/mirror\"\n"), [], None).unwrap();
+        let local = Library::parse(Some(shared), Some("[locations.dav]\nkind = \"local\"\npath = \"/mirror\"\n"), [], None).unwrap();
         assert!(local.remotes.is_empty());
         assert_eq!(local.locations["dav"], Path::new("/mirror"));
     }
 
     #[test]
-    fn cloud_locations_need_a_known_kind() {
-        let shared = "[locations.box]\nkind = \"dropbox\"\nfolder = \"/yeda\"\n\n[locations.drive]\nkind = \"gdrive\"\nfolder = \"yeda/pdfs\"\nclient_id = \"mine\"\n";
+    fn locations_need_a_known_kind() {
+        let shared = "[locations.box]\nkind = \"dropbox\"\nfolder = \"/yeda\"\nclient_id = \"mine\"\n";
         let lib = Library::parse(Some(shared), None, [], None).unwrap();
-        assert_eq!(lib.remotes["box"], Remote::Dropbox(Cloud { folder: "/yeda".into(), client_id: None }));
-        let Remote::Gdrive(drive) = &lib.remotes["drive"] else { panic!() };
-        assert_eq!((drive.folder_segments(), drive.client_id.as_deref()), (vec!["yeda", "pdfs"], Some("mine")));
+        let Remote::Dropbox(box_) = &lib.remotes["box"] else { panic!() };
+        assert_eq!((box_.folder_segments(), box_.client_id.as_deref()), (vec!["yeda"], Some("mine")));
         assert_eq!(lib.remotes["box"].label(), "Dropbox /yeda");
 
-        for bad in ["[locations.a]\nurl = \"https://x/\"\nuser = \"u\"\n", "[locations.a]\nkind = \"ftp\"\n", "[locations]\na = 3\n"] {
-            let err = format!("{:#}", Library::parse(Some(bad), None, [], None).unwrap_err());
+        let bad = [
+            "[locations.a]\nurl = \"https://x/\"\nuser = \"u\"\n",
+            "[locations.a]\nkind = \"ftp\"\n",
+            "[locations.a]\nkind = \"gdrive\"\nfolder = \"x\"\n",
+            "[locations.a]\nkind = \"local\"\n",
+            "[locations]\na = \"/bare/string\"\n",
+        ];
+        for text in bad {
+            let err = format!("{:#}", Library::parse(Some(text), None, [], None).unwrap_err());
             assert!(err.contains("locations.a"), "{err}");
         }
     }

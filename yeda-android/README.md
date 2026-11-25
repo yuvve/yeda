@@ -23,7 +23,7 @@ On first start, pick the library folder and allow all-files access. Get a librar
 - **Reader:** the same as on the desktop, with Zotero-compatible annotations, column mode and a pen mode (the pen draws, a finger pans, a palm is ignored). An e-ink mode (Settings → Display → E-ink screen) shows one page at a time, turned by swiping, with black ink.
 - **Open with:** PDFs from outside the library open with their annotations in a `<file>.annotations/` folder.
 - **Sync:** commits, merges `origin` and pushes over HTTPS. Conflicting annotation files are merged annotation by annotation; any other conflict stops the sync.
-- **PDFs:** from local folders, WebDAV, Dropbox or Google Drive. Passwords and tokens are kept in the Android Keystore. Settings has the form that adds a storage location.
+- **PDFs:** from local folders, WebDAV or Dropbox. Passwords and tokens are kept in the Android Keystore. Settings has the form that adds a storage location.
 
 The app icon is from Flaticon: [Knowledge graph icons created by Jagat Icon - Flaticon](https://www.flaticon.com/free-icons/knowledge-graph).
 <!-- /embed -->

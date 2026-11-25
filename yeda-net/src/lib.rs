@@ -7,7 +7,6 @@ pub mod web_search;
 pub mod webdav;
 pub mod remote;
 pub mod dropbox;
-pub mod gdrive;
 pub mod openalex;
 pub mod fulltext;
 pub mod codex;

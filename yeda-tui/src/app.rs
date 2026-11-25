@@ -1740,6 +1740,9 @@ impl App {
             if form.kind == setup::Kind::Provider && field == 1 {
                 form.provider_changed();
             }
+            if form.kind == setup::Kind::Storage && field == 1 {
+                form.storage_kind_changed();
+            }
         }
         self.cursor_back = 0;
     }
@@ -1894,6 +1897,14 @@ impl App {
                     self.setup_job = Some(SetupJob { rx, section, setup: s });
                 }
                 Ok((section, setup::Setup::Cloud(name, remote))) => self.submit_cloud(section, name, remote),
+                Ok((_, setup::Setup::Local(name, path))) => match anyhow::Context::context(dirs::config_dir(), "no config folder on this device").and_then(|d| ops::save_device_location(&d.join("yeda/config.toml"), &name, &path)) {
+                    Ok(()) => {
+                        self.close_setup();
+                        self.reload();
+                        self.status = format!("saved [locations.{name}] to this device's config.toml");
+                    }
+                    Err(e) => self.status = format!("{e:#}"),
+                },
                 Ok((section, setup)) => {
                     let secret = form.secret();
                     let (tx, rx) = mpsc::channel();
@@ -1960,6 +1971,9 @@ impl App {
         if let Some(form) = &mut self.setup {
             if form.kind == setup::Kind::Provider && form.sel == 1 {
                 form.provider_changed();
+            }
+            if form.kind == setup::Kind::Storage && form.sel == 1 {
+                form.storage_kind_changed();
             }
             form.sync_columns();
         }
@@ -2178,15 +2192,13 @@ impl App {
         self.save_setup(job.section, &stored);
     }
 
-    /// Enter on a Dropbox or Google Drive form: signs in when there is no sign-in to use, else
-    /// tests the one typed or saved. Dropbox shows a link and waits for the code pasted back;
-    /// Google returns to a loopback listener.
+    /// Enter on a Dropbox form: with no sign-in to use, shows the link and waits for the code
+    /// pasted back; otherwise tests the sign-in typed or saved.
     fn submit_cloud(&mut self, section: toml::Table, name: String, remote: library::Remote) {
         let Some(form) = &mut self.setup else { return };
         let typed = form.secret();
         let again = typed.as_deref() == Some("signin");
         let typed = typed.filter(|_| !again);
-        let own_secret = form.client_secret();
         let pending = form.code_link.take();
         let account = yeda_secrets::remote_account(&name, &remote);
         let saved = if again { None } else { yeda_secrets::get(&account).ok().flatten() };
@@ -2203,13 +2215,11 @@ impl App {
                     });
                     let _ = tx.send(result);
                 });
-                self.status = "testing the connection…".into();
             }
             (_, Some(secret)) => {
                 std::thread::spawn(move || {
                     let _ = tx.send(yeda_net::remote::login(&remote, &secret).map(|()| Some(secret)));
                 });
-                self.status = "testing the connection…".into();
             }
             (library::Remote::Dropbox(cloud), None) => {
                 match yeda_net::dropbox::start(cloud) {
@@ -2222,29 +2232,9 @@ impl App {
                 }
                 return;
             }
-            (library::Remote::Gdrive(cloud), None) => {
-                if cloud.client_id.is_some() && own_secret.is_none() {
-                    self.status = "a Google client ID needs its client secret".into();
-                    return;
-                }
-                let sign_in = match yeda_net::gdrive::start(cloud, own_secret.as_deref()) {
-                    Ok(s) => s,
-                    Err(e) => return self.status = format!("{e:#}"),
-                };
-                let url = sign_in.url.clone();
-                form.sign_in_url = Some(url.clone());
-                std::thread::spawn(move || {
-                    let result = sign_in.finish(std::time::Duration::from_secs(10 * 60)).and_then(|secret| {
-                        let _ = yeda_secrets::set(&account, &secret);
-                        yeda_net::remote::login(&remote, &secret).map(|()| Some(secret))
-                    });
-                    let _ = tx.send(result);
-                });
-                self.status = "waiting for the browser to sign in with Google…".into();
-                self.xdg_open(&url);
-            }
             (library::Remote::Webdav(_), None) => return,
         }
+        self.status = "testing the connection…".into();
         if let Some(form) = &mut self.setup {
             form.testing = true;
         }
@@ -2261,7 +2251,7 @@ impl App {
             setup::Kind::Llm => (vec!["llm", &name], &[]),
             setup::Kind::Table => (vec!["tables", &name], &["describe"]),
             setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
-            setup::Kind::Storage => (vec!["locations", &name], &["kind", "url", "user", "alias", "folder", "client_id"]),
+            setup::Kind::Storage => (vec!["locations", &name], &["kind", "url", "user", "alias", "folder"]),
             _ => (vec!["locations", &name], &[]),
         };
         let result = self.lib.update_config(|t| {

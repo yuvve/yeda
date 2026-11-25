@@ -9,7 +9,7 @@ I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the 
 
 ## About
 
-yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local folder, on WebDAV, in Dropbox or in Google Drive. An Android app reads and annotates the same library.
+yeda is a reference manager for the terminal, and an alternative to Zotero. Your library is a folder of plain TOML and Markdown files that works with git and Syncthing; PDFs live in a local folder, on WebDAV, or in Dropbox. An Android app reads and annotates the same library.
 
 ![Main window](screenshots/main.png)
 

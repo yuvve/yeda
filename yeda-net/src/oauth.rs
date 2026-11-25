@@ -17,10 +17,6 @@ pub fn pkce() -> (String, String) {
     (verifier, challenge)
 }
 
-pub fn random_state() -> String {
-    uuid::Uuid::new_v4().simple().to_string()
-}
-
 /// The callback's query parameters, from the request line only: answering before the browser
 /// closes the connection keeps it from hanging on a keep-alive.
 pub fn callback_query(stream: &mut TcpStream, expected_state: &str) -> Result<std::collections::HashMap<String, String>> {
@@ -136,7 +132,6 @@ mod tests {
         assert!((43..=128).contains(&n), "{n}");
         assert!(verifier.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c)));
         assert_eq!(challenge.len(), 43);
-        assert_ne!(verifier, random_state());
     }
 
     #[test]
