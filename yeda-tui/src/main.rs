@@ -67,9 +67,13 @@ fn wizard(import: bool) -> Result<()> {
     }
     if a.dest != wizard::Dest::Nowhere {
         let mut lib = load_library(dir)?;
-        let location: toml::Value = match &a.dav {
-            Some((dav, _)) => toml::Table::from_iter([("kind".to_string(), "webdav".into()), ("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
-            None => {
+        let location: toml::Value = match (&a.dav, a.dest) {
+            (Some((dav, _)), _) => toml::Table::from_iter([("kind".to_string(), "webdav".into()), ("url".to_string(), dav.url.clone().into()), ("user".to_string(), dav.user.clone().into())]).into(),
+            (None, wizard::Dest::Dropbox) => {
+                let cloud = dropbox_sign_in(&a.name, &a.folder)?;
+                toml::Table::from_iter([("kind".to_string(), "dropbox".into()), ("folder".to_string(), cloud.folder.into())]).into()
+            }
+            (None, _) => {
                 fs::create_dir_all(&a.folder)?;
                 sync::write_new(&a.folder.join(".stignore"), "*.tmp\n")?;
                 library::local_location(&a.folder.to_string_lossy())
@@ -366,6 +370,24 @@ static KNOWN_PASSWORDS: std::sync::Mutex<std::collections::BTreeMap<String, Stri
 
 fn remember_password(dav: &library::Dav, password: &str) {
     KNOWN_PASSWORDS.lock().unwrap().insert(yeda_secrets::webdav_account(&dav.user, &dav.url), password.into());
+}
+
+/// Signs in to yeda's Dropbox app for a new location: prints the link, opens it, and asks for the
+/// code Dropbox shows. The sign-in goes to the secret store under the location's name.
+fn dropbox_sign_in(name: &str, folder: &Path) -> Result<library::Cloud> {
+    let cloud = library::Cloud { folder: folder.to_string_lossy().trim_matches('/').to_string(), client_id: None };
+    let sign_in = yeda_net::dropbox::start(&cloud)?;
+    println!("\nAllow yeda access to its Dropbox folder:\n\n  {}\n", sign_in.url);
+    let _ = Command::new("xdg-open").arg(&sign_in.url).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    eprint!("paste the code Dropbox shows: ");
+    std::io::stderr().flush()?;
+    let mut code = String::new();
+    std::io::stdin().read_line(&mut code)?;
+    let secret = yeda_net::dropbox::finish(&cloud, &sign_in.verifier, code.trim())?;
+    let remote = library::Remote::Dropbox(cloud.clone());
+    yeda_net::remote::login(&remote, &secret)?;
+    yeda_secrets::set(&yeda_secrets::remote_account(name, &remote), &secret)?;
+    Ok(cloud)
 }
 
 /// A file from Zotero's WebDAV, where attachment `KEY/file` is stored as `KEY.zip`. Only reads.
