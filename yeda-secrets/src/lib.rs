@@ -55,6 +55,8 @@ pub fn env_names(account: &str, alias: Option<&str>) -> Vec<String> {
                 "KEY"
             } else if account.starts_with("webdav:") {
                 "DAV"
+            } else if account.starts_with("searxng:") {
+                "AUTH"
             } else {
                 return Vec::new();
             };
@@ -140,6 +142,11 @@ fn env_name(name: &str) -> Option<String> {
     ok.then(|| name.to_ascii_uppercase().replace('-', "__"))
 }
 
+/// The account for a SearXNG instance's `user:password`, which `:setup searxng` keeps out of the URL.
+pub fn searxng_account(url: &str) -> String {
+    format!("searxng:{url}")
+}
+
 /// The account for the optional OpenAlex API key.
 pub const OPENALEX: &str = "api:openalex";
 
@@ -171,6 +178,7 @@ mod tests {
         assert_eq!(names(&claude, Some("work")), ["YEDA_KEY_API_ANTHROPIC_COM_443_ALIAS_WORK", "YEDA_KEY_API_ANTHROPIC_COM_443"]);
         assert_eq!(names(&claude, Some("my-work")), ["YEDA_KEY_API_ANTHROPIC_COM_443"]);
         assert_eq!(names(&super::webdav_account("me", "https://dav.example.com/yeda/"), Some("a")), ["YEDA_DAV_DAV_EXAMPLE_COM_443_ALIAS_A", "YEDA_DAV_DAV_EXAMPLE_COM_443"]);
+        assert_eq!(names(&super::searxng_account("https://searx.example.org/"), None), ["YEDA_AUTH_SEARX_EXAMPLE_ORG_443"]);
         assert_eq!(names(super::OPENALEX, None), ["YEDA_KEY_API_OPENALEX_ORG_443"]);
         assert_eq!(names(super::FIRECRAWL, None), ["YEDA_KEY_API_FIRECRAWL_DEV_443"]);
         assert_eq!(names("dropbox:my-box", None), ["YEDA_DROPBOX_MY__BOX"]);

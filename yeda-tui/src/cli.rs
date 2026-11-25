@@ -571,6 +571,7 @@ fn discover(lib: &Library, a: &Args) -> Result<()> {
             keys.insert(provider, k);
         }
     }
+    keys.extend(crate::websearch::searxng_login(&lib.web_search));
     eprintln!("asking {name} at {}…", profile.url());
     let input = discover::Input {
         profile,

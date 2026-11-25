@@ -190,7 +190,7 @@ pub fn check_searxng_url(url: &str) -> Result<()> {
     let rest = &url["https://".len()..];
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     if authority.contains('@') {
-        bail!("must not contain a user name or password; yeda.toml is synced through git");
+        bail!("must not contain a user name or password; yeda.toml is synced through git, so they go in the form's own fields");
     }
     Ok(())
 }
