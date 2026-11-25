@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use yeda_core::library::Cloud;
 
-/// The app key of yeda's Dropbox app; empty until one is registered (see `:help storage`).
-const APP_KEY: &str = "";
+/// The app key of yeda's Dropbox app. Not a secret: the browser sees it in every sign-in link.
+const APP_KEY: &str = "gzhh7xgpiedqdb9";
 const AUTHORIZE: &str = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN: &str = "https://api.dropboxapi.com/oauth2/token";
 const RPC: &str = "https://api.dropboxapi.com/2/";
@@ -215,11 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn without_an_app_the_link_cannot_be_made() {
-        if !APP_KEY.is_empty() {
-            return;
-        }
+    fn without_a_client_id_the_built_in_app_is_used() {
         let none = Cloud { folder: String::new(), client_id: None };
-        assert!(start(&none).err().unwrap().to_string().contains("client_id"));
+        let sign_in = start(&none).unwrap();
+        assert!(sign_in.url.contains(&format!("client_id={APP_KEY}")), "{}", sign_in.url);
     }
 }
