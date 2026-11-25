@@ -9,15 +9,17 @@ use std::path::PathBuf;
 use yeda_core::library::Dav;
 
 /// Where the PDFs go; `Nowhere` keeps imported ones in Zotero's storage, or sets no location yet.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dest {
     Folder,
     Webdav,
+    Dropbox,
     Nowhere,
 }
 
-const IMPORT_DESTS: [(Dest, &str); 3] = [(Dest::Folder, "copy to a folder"), (Dest::Webdav, "upload to WebDAV"), (Dest::Nowhere, "leave in Zotero's storage")];
-const INIT_DESTS: [(Dest, &str); 3] = [(Dest::Folder, "a folder"), (Dest::Webdav, "a WebDAV folder"), (Dest::Nowhere, "none yet")];
+const IMPORT_DESTS: [(Dest, &str); 4] =
+    [(Dest::Folder, "copy to a folder"), (Dest::Webdav, "upload to WebDAV"), (Dest::Dropbox, "upload to Dropbox"), (Dest::Nowhere, "leave in Zotero's storage")];
+const INIT_DESTS: [(Dest, &str); 4] = [(Dest::Folder, "a folder"), (Dest::Webdav, "a WebDAV folder"), (Dest::Dropbox, "a Dropbox folder"), (Dest::Nowhere, "none yet")];
 
 /// What `yeda import` or `yeda init` was told.
 pub struct Answers {
@@ -72,7 +74,7 @@ impl Form {
         self.values[f as usize].trim()
     }
 
-    fn dests(&self) -> &'static [(Dest, &'static str); 3] {
+    fn dests(&self) -> &'static [(Dest, &'static str); 4] {
         if self.import { &IMPORT_DESTS } else { &INIT_DESTS }
     }
 
@@ -81,7 +83,7 @@ impl Form {
         (0..FIELDS.len())
             .filter(|&i| match FIELDS[i].0 {
                 F::Zotero => self.import,
-                F::Folder => dest == Dest::Folder,
+                F::Folder => matches!(dest, Dest::Folder | Dest::Dropbox),
                 F::Url | F::User | F::Password => dest == Dest::Webdav,
                 F::Name => dest != Dest::Nowhere,
                 _ => true,
@@ -93,6 +95,7 @@ impl Form {
         match (FIELDS[self.sel].0, self.import) {
             (F::Library, false) => "the new library's folder: created if missing",
             (F::Dest, false) => "←/→ picks where PDFs you add or fetch are kept; more locations can be added later",
+            (F::Folder, false) if self.dests()[self.dest].0 == Dest::Dropbox => "inside yeda's Dropbox app folder, as <citekey>/<file>; empty is its root",
             (F::Folder, false) => "where PDFs are kept, as <citekey>/<file>; created if missing",
             _ => FIELDS[self.sel].2,
         }
@@ -108,11 +111,15 @@ impl Form {
         match FIELDS[self.sel].0 {
             F::Dest => {
                 let before = self.dests()[self.dest].0;
-                self.dest = (self.dest as isize + by).rem_euclid(3) as usize;
-                let after = default_name(self.dests()[self.dest].0);
+                self.dest = (self.dest as isize + by).rem_euclid(4) as usize;
+                let after = self.dests()[self.dest].0;
                 let name = &mut self.values[F::Name as usize];
                 if *name == default_name(before) {
-                    *name = after.into();
+                    *name = default_name(after).into();
+                }
+                let folder = &mut self.values[F::Folder as usize];
+                if *folder == default_folder(before) {
+                    *folder = default_folder(after).into();
                 }
             }
             F::Default => self.make_default = !self.make_default,
@@ -136,8 +143,9 @@ impl Form {
         if dest != Dest::Nowhere && (name.is_empty() || ["zotero", "home", "files"].contains(&name.as_str())) {
             return Err("name the location (zotero, home and files are taken by the import)".into());
         }
-        let folder = expand(self.get(F::Folder));
-        if dest == Dest::Folder && folder.as_os_str().is_empty() {
+        // A Dropbox folder is a path inside the app folder, not on this machine.
+        let folder = if dest == Dest::Dropbox { PathBuf::from(self.get(F::Folder)) } else { expand(self.get(F::Folder)) };
+        if (dest == Dest::Folder && folder.as_os_str().is_empty()) || (dest == Dest::Dropbox && !folder.components().all(|c| matches!(c, std::path::Component::Normal(_)))) {
             return Err("give the folder for the PDFs".into());
         }
         let dav = match dest {
@@ -160,7 +168,16 @@ impl Form {
 fn default_name(dest: Dest) -> &'static str {
     match dest {
         Dest::Webdav => "dav",
+        Dest::Dropbox => "dropbox",
         _ => "pdfs",
+    }
+}
+
+/// Dropbox folders sit inside the app folder, so the default is not a path under `~`.
+fn default_folder(dest: Dest) -> &'static str {
+    match dest {
+        Dest::Dropbox => "pdfs",
+        _ => "~/yeda-pdfs",
     }
 }
 
@@ -246,4 +263,34 @@ fn draw(f: &mut ratatui::Frame, form: &Form) {
     f.render_widget(Clear, area);
     let title = if form.import { " Import from Zotero · Tab/↓ next · Enter start · Esc quit " } else { " New library · Tab/↓ next · Enter create · Esc quit " };
     f.render_widget(Paragraph::new(lines).block(Block::bordered().title(title).border_style(Color::Cyan)), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn form() -> Form {
+        let mut values = vec![String::new(); FIELDS.len()];
+        values[F::Library as usize] = std::env::temp_dir().join(format!("yeda-wizard-{}", std::process::id())).to_string_lossy().into();
+        values[F::Folder as usize] = default_folder(Dest::Folder).into();
+        values[F::Name as usize] = default_name(Dest::Folder).into();
+        Form { import: false, values, dest: 0, make_default: true, sel: F::Dest as usize, error: String::new() }
+    }
+
+    #[test]
+    fn choosing_dropbox_takes_the_paths_back_to_its_app_folder() {
+        let mut f = form();
+        f.choose(1);
+        assert_eq!(f.dests()[f.dest].0, Dest::Webdav);
+        f.choose(1);
+        assert_eq!(f.dests()[f.dest].0, Dest::Dropbox);
+        assert_eq!((f.get(F::Name), f.get(F::Folder)), ("dropbox", "pdfs"));
+        // The Dropbox folder is checked for escapes, not for a `~/` path.
+        f.values[F::Folder as usize] = "../etc".into();
+        assert!(f.answers().is_err());
+        f.values[F::Folder as usize] = String::new();
+        assert!(f.answers().unwrap().folder.as_os_str().is_empty());
+        f.choose(1);
+        assert_eq!(f.dests()[f.dest].0, Dest::Nowhere);
+    }
 }
