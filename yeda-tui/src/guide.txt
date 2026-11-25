@@ -466,6 +466,12 @@ STORAGE  ( :setup storage [name] )
   used again when the form is saved later; type signin in Code to sign in
   again. :secrets lists them and :cache downloads the remote PDFs.
 
+  :storage migrate <location> copies every PDF of the default location
+  ([fulltext] location in yeda.toml, else the only location) to <location>,
+  keeping each PDF's id so its annotations stay with it, and then makes
+  <location> the default. The originals stay where they are. A failure stops
+  it before yeda.toml or the references change; run it again to retry.
+
   yeda has a Dropbox app of its own. To use yours instead, register it once
   and put its key in yeda.toml as client_id = "<App key>" on the location:
 

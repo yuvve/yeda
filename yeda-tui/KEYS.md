@@ -127,6 +127,7 @@ the command line, searches, forms and pickers
 | `:attach <file.pdf> [location]` | add a PDF, copying or uploading it to a location |
 | `:new` | add a reference by hand, into the selected collection; saved on Enter |
 | `:cache` | download the selected or marked references' remote PDFs that are missing here or changed on the server |
+| `:storage migrate <location>` | copy the PDFs in the default location there, keeping their annotations, then make it the default; the originals stay |
 | `:detach` | remove one of the selected reference's PDFs with its annotations; the file stays where it is |
 | `:sync` | commit, pull and push the library with git |
 | `:diff` | the library's changes since the last :sync; v marks, d d undoes the selected or marked files |

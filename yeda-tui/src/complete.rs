@@ -56,7 +56,9 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
         ("config", 0) => ["device", "library"].map(String::from).to_vec(),
         ("setup", 1) if args[0] == "llm" => lib.llm.keys().cloned().collect(),
         ("setup", 1) if args[0] == "provider" => lib.providers.keys().cloned().collect(),
-        ("setup", 1) if args[0] == "storage" => lib.remotes.keys().cloned().collect(),
+        ("setup", 1) if args[0] == "storage" => locations(),
+        ("storage", 0) => ["migrate"].map(String::from).to_vec(),
+        ("storage", 1) if args[0] == "migrate" => locations(),
         ("cite", 0) => ["bibtex", "ident"].into_iter().chain(cite::style_names()).map(String::from).collect(),
         _ => Vec::new(),
     };

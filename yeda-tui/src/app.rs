@@ -366,6 +366,13 @@ struct CacheJob {
     rejected: bool,
 }
 
+/// `:storage migrate`: the moved references, once every PDF is copied.
+struct MigrateJob {
+    rx: Receiver<Result<(Vec<Ref>, usize), String>>,
+    from: String,
+    to: String,
+}
+
 struct FetchJob {
     rx: Receiver<fetch::Msg>,
     step: undo::Step,
@@ -500,6 +507,7 @@ pub struct App {
     text_indexed: HashSet<PathBuf>,
     text_job: Option<TextJob>,
     cache_job: Option<CacheJob>,
+    migrate_job: Option<MigrateJob>,
     pub query: String,
     pub mode: Mode,
     pub input: String,
@@ -665,6 +673,7 @@ impl App {
             text_indexed: HashSet::new(),
             text_job: None,
             cache_job: None,
+            migrate_job: None,
             query: String::new(),
             mode: Mode::Normal,
             input: String::new(),
@@ -2797,6 +2806,7 @@ impl App {
                 },
                 ("export", args) => self.export(args),
                 ("attach", args) => self.attach(args, text),
+                ("storage", args) => self.storage(args, text),
                 ("detach", _) => self.detach(text),
                 ("cache", _) => self.cache_pdfs(text),
                 ("new", _) => {
@@ -3406,6 +3416,7 @@ impl App {
             (self.graph_job.is_some(), "graph"),
             (self.text_job.is_some(), "text extraction"),
             (self.cache_job.is_some(), "cache"),
+            (self.migrate_job.is_some(), "migration"),
         ]
         .into_iter()
         .filter_map(|(running, what)| running.then_some(what))
@@ -3795,6 +3806,98 @@ impl App {
             if self.text_job.is_none() && self.searches_text() {
                 self.index_text();
             }
+        }
+    }
+
+    /// `:storage migrate <location>`: copies every PDF of the default location there, then makes
+    /// it the default. The originals stay.
+    fn storage(&mut self, args: &str, command: &str) {
+        let (sub, to) = args.trim().split_once(' ').unwrap_or((args.trim(), ""));
+        let to = to.trim();
+        if sub != "migrate" || to.is_empty() {
+            return self.status = "usage: :storage migrate <location>".into();
+        }
+        if self.migrate_job.is_some() {
+            return self.status = "a migration is already running".into();
+        }
+        if !self.lib.locations.contains_key(to) && !self.lib.remotes.contains_key(to) {
+            return self.status = format!("no location named '{to}'; :setup storage lists them");
+        }
+        let names: Vec<&String> = self.lib.locations.keys().chain(self.lib.remotes.keys()).collect();
+        let from = match (&self.lib.fulltext.location, names.as_slice()) {
+            (Some(l), _) => l.clone(),
+            (None, [only]) => only.to_string(),
+            (None, _) => {
+                return self.status = format!("name the default location in [fulltext] location of yeda.toml ({})", names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+            }
+        };
+        if from == to {
+            return self.status = format!("{to} is the default location already");
+        }
+        let refs = self.lib.refs.iter().filter(|r| r.pdfs.iter().any(|p| p.location == from)).count();
+        if refs == 0 {
+            return self.status = format!("no PDFs in {from}");
+        }
+        if !self.confirm_many(&format!("move the PDFs of {from} to {to} for"), refs, command) {
+            return;
+        }
+        let from_secret = if self.lib.remotes.contains_key(&from) {
+            match self.remote_secret(&from, Retry::Command(command.into())) {
+                Some(s) => Some(s),
+                None => return,
+            }
+        } else {
+            None
+        };
+        let to_secret = if self.lib.remotes.contains_key(to) {
+            match self.remote_secret(to, Retry::Command(command.into())) {
+                Some(s) => Some(s),
+                None => return,
+            }
+        } else {
+            None
+        };
+        let lib = self.lib.clone();
+        let (from_name, to_name) = (from.clone(), to.to_string());
+        let (tx, rx) = mpsc::channel();
+        self.status = format!("moving {refs} of the PDFs in {from} to {to}…");
+        std::thread::spawn(move || {
+            let result = ops::migrate(&lib, &from_name, &to_name, from_secret.as_deref(), to_secret.as_deref())
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+        });
+        self.migrate_job = Some(MigrateJob { rx, from, to: to.to_string() });
+    }
+
+    /// Applies a finished `:storage migrate`; called from the event loop.
+    pub fn poll_migrate(&mut self) {
+        let Some(job) = &self.migrate_job else { return };
+        let result = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the migration stopped".into()),
+        };
+        let job = self.migrate_job.take().unwrap();
+        let (refs, moved) = match result {
+            Ok(r) => r,
+            Err(e) => return self.status = format!("not moved: {e}"),
+        };
+        let effects: Vec<Effect> = refs.iter().filter_map(|r| self.lib.save(r).ok()).collect();
+        let config = self.lib.update_config(|t| {
+            config_section(t, "fulltext")?.insert("location".into(), job.to.clone().into());
+            Ok(())
+        });
+        let effects = match config {
+            Ok(effect) => {
+                let mut all = effects;
+                all.push(effect);
+                Ok(all)
+            }
+            Err(e) => Err(e),
+        };
+        if self.apply(effects) {
+            self.reload();
+            self.status = format!("moved {moved} PDFs to {}; the originals stay in {}", job.to, job.from);
         }
     }
 

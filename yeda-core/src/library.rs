@@ -213,7 +213,7 @@ const DEVICE_KEYS: [&str; 4] = ["library", "reader", "keys", "locations"];
 
 pub const STATUSES: [&str; 5] = ["New", "To Read", "In Progress", "Read", "Not Reading"];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Library {
     /// Local folders, by location name.
     pub locations: BTreeMap<String, PathBuf>,

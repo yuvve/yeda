@@ -71,6 +71,49 @@ pub fn attach_file(lib: &Library, r: &Ref, file: &Path, location: &str, password
     Ok(r)
 }
 
+/// Copies `pdf` to `target`, which is already in another location. `source_secret` and
+/// `target_secret` are the sign-ins of the two locations, for the remote ones.
+pub fn copy_pdf(lib: &Library, pdf: &Pdf, target: &Pdf, source_secret: Option<&str>, target_secret: Option<&str>) -> Result<()> {
+    let bytes = match lib.remote_pdf(pdf) {
+        Some(remote) => yeda_net::remote::download(remote.remote, source_secret.unwrap_or_default(), &remote.path)?.0,
+        None => {
+            let path = lib.pdf_path(pdf)?;
+            fs::read(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?
+        }
+    };
+    let path = lib.pdf_path(target)?;
+    yeda_fs::write_atomic(&path, &bytes).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    if let Some(remote) = lib.remote_pdf(target) {
+        let secret = target_secret.unwrap_or_default();
+        yeda_net::remote::upload(remote.remote, secret, &remote.path, &bytes)?;
+        let version = yeda_net::remote::current_version(remote.remote, secret, &remote.path)?;
+        yeda_fs::set_cached_version(&path, version.as_deref())?;
+    }
+    Ok(())
+}
+
+/// Copies every PDF at `from` to `to`, keeping each PDF's id so its annotations stay with it, and
+/// returns the references now pointing at the copies. The originals stay where they are.
+pub fn migrate(lib: &Library, from: &str, to: &str, from_secret: Option<&str>, to_secret: Option<&str>) -> Result<(Vec<Ref>, usize)> {
+    let mut updated = Vec::new();
+    let mut moved = 0;
+    for r in lib.refs.iter().filter(|r| r.pdfs.iter().any(|p| p.location == from)) {
+        let mut r = r.clone();
+        let todo: Vec<Pdf> = r.pdfs.iter().filter(|p| p.location == from).cloned().collect();
+        for pdf in todo {
+            // attach names the copy `<citekey>/<file>` and gives it a new id; the id has to stay.
+            let target = Pdf { id: pdf.id.clone(), ..lib.attach(&r, to, &pdf.path)? };
+            copy_pdf(lib, &pdf, &target, from_secret, to_secret)?;
+            if let Some(slot) = r.pdfs.iter_mut().find(|p| p.id == pdf.id) {
+                *slot = target;
+            }
+            moved += 1;
+        }
+        updated.push(r);
+    }
+    Ok((updated, moved))
+}
+
 /// Sets `[locations.<name>]` in this device's config to the local folder `path`, making the folder.
 /// A new location is appended, so the file's comments stay; changing one rewrites the file.
 pub fn save_device_location(config: &Path, name: &str, path: &str) -> Result<()> {
@@ -203,6 +246,31 @@ pub fn ref_index(lib: &Library, key: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_copies_keeps_ids_and_leaves_the_originals() {
+        let dir = std::env::temp_dir().join(format!("yeda-migrate-{}", std::process::id()));
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        fs::create_dir_all(a.join("smith2020")).unwrap();
+        fs::write(a.join("smith2020/paper.pdf"), b"%PDF-a").unwrap();
+        let shared = format!(
+            "[locations.a]\nkind = \"local\"\npath = \"{}\"\n\n[locations.b]\nkind = \"local\"\npath = \"{}\"\n",
+            a.display(),
+            b.display()
+        );
+        let refs = [("smith2020".to_string(), "title = \"A\"\n[[pdf]]\nid = \"1\"\nlocation = \"a\"\npath = \"smith2020/paper.pdf\"\n".to_string())];
+        let lib = Library::parse(Some(&shared), None, refs, None).unwrap();
+        let (updated, moved) = migrate(&lib, "a", "b", None, None).unwrap();
+        assert_eq!(moved, 1);
+        let pdf = &updated[0].pdfs[0];
+        assert_eq!((pdf.id.as_str(), pdf.location.as_str(), pdf.path.as_str()), ("1", "b", "smith2020/paper.pdf"));
+        assert_eq!(fs::read(b.join("smith2020/paper.pdf")).unwrap(), b"%PDF-a");
+        assert!(a.join("smith2020/paper.pdf").is_file());
+        // A missing file fails the whole run, before any reference changes.
+        fs::remove_file(a.join("smith2020/paper.pdf")).unwrap();
+        assert!(migrate(&lib, "a", "b", None, None).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_device_location_keeps_the_comments_until_it_changes() {
