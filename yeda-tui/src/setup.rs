@@ -66,6 +66,8 @@ pub struct SetupForm {
     /// Waiting for y/n: the provider's key would be sent to a new URL.
     pub confirm_move: bool,
     pub moving_confirmed: bool,
+    /// An OpenAlex key is in the secret store already.
+    pub key_stored: bool,
     /// A table's columns that have description fields now, and every description typed, by column.
     shown: Vec<String>,
     described: BTreeMap<String, String>,
@@ -222,7 +224,7 @@ impl SetupForm {
         };
         let described = if kind == Kind::Table { lib.tables.get(name).map(|t| t.describe.clone()).unwrap_or_default() } else { BTreeMap::new() };
         let origin = lib.providers.get(name).filter(|_| kind == Kind::Provider).map(|p| (name.to_string(), p.url().to_string()));
-        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, code_link: None, origin, confirm_move: false, moving_confirmed: false, shown: Vec::new(), described };
+        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, code_link: None, origin, confirm_move: false, moving_confirmed: false, key_stored: false, shown: Vec::new(), described };
         form.sync_columns();
         form
     }
@@ -331,7 +333,8 @@ impl SetupForm {
                 ],
                 _ => &[("Name", NAME_HINT), ("Kind", CHOICE_HINT)],
             },
-            Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
+            Kind::Openalex if self.key_stored => &[("API key", "a key is stored in the secret store; type a new one to replace it")],
+            Kind::Openalex => &[("API key", "not set; free at openalex.org/settings/api; kept in the secret store")],
             Kind::Keenable => &[("API key", "optional; without one, search uses the shared public tier (1,000 requests/hour per IP); the test runs one real search and uses quota")],
             Kind::Exa => &[("API key", "optional; without one, search uses the shared free tier, which needs a direct IPv4 connection; the test runs one real search and uses quota")],
             Kind::Parallel => &[("API key", "optional; without one, search uses the shared free tier; keyed use is billed by Parallel; the test runs one real search and uses quota")],
@@ -658,24 +661,21 @@ pub fn entries(kind: Kind, lib: &Library) -> Vec<(String, String)> {
     }
 }
 
-/// The `:setup` list: what each row sets, how it is set now, and the command that changes it.
-pub fn overview(lib: &Library) -> Vec<[String; 3]> {
-    let row = |what: String, now: String, command: String| [what, now, command];
-    let mut rows = vec![
-        row("LLM providers".into(), String::new(), "setup provider".into()),
-        row("LLM profiles".into(), String::new(), "setup llm".into()),
-        row("Storage".into(), String::new(), "setup storage".into()),
-        row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()),
-    ];
-    let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
-    let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
-    rows.push(row("Web search".into(), web, "setup web-search".into()));
-    let proxies = if lib.fulltext.proxies.is_empty() { "none".into() } else { lib.fulltext.proxies.join(" ") };
-    rows.push(row("Library proxies".into(), proxies, "setup proxy".into()));
-    rows.push(row("Tables".into(), String::new(), "setup table".into()));
-    rows.push(row("yeda.toml".into(), "everything else in the library's config".into(), "config library".into()));
-    rows.push(row("config.toml".into(), "this device's config".into(), "config device".into()));
-    rows
+/// The `:setup` list: what each row sets, what it is for, and the command that changes it.
+pub fn overview() -> Vec<[String; 3]> {
+    [
+        ("LLM providers", "the servers that answer LLM requests, and how to sign in to them", "setup provider"),
+        ("LLM profiles", "a provider and a model; the default one runs :summarize and :discover", "setup llm"),
+        ("Storage", "where the PDFs are kept", "setup storage"),
+        ("OpenAlex API key", "lifts OpenAlex's daily limit on metadata lookups", "setup openalex"),
+        ("Web search", "the search providers :discover uses", "setup web-search"),
+        ("Library proxies", "the proxies :fetch opens paywalled papers through", "setup proxy"),
+        ("Tables", "one row per paper, one column per question the LLM answers", "setup table"),
+        ("yeda.toml", "everything else in the library's config", "config library"),
+        ("config.toml", "this device's config", "config device"),
+    ]
+    .map(|(what, about, command)| [what.into(), about.into(), command.into()])
+    .into()
 }
 
 /// The profile bound to the provider it names.
@@ -944,16 +944,10 @@ mod tests {
     }
 
     #[test]
-    fn overview_lists_providers_before_profiles() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"m\"\n";
-        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
-        let rows = overview(&lib);
-        let names: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
-        let provider = names.iter().position(|r| *r == "LLM providers").unwrap();
-        let profile = names.iter().position(|r| *r == "LLM profiles").unwrap();
-        assert!(provider < profile, "{names:?}");
-        assert_eq!((rows[provider][1].as_str(), rows[provider][2].as_str()), ("", "setup provider"));
-        assert_eq!(rows[profile][1], "");
+    fn overview_explains_each_setting_and_lists_none() {
+        let rows = overview();
+        assert!(rows.iter().all(|r| !r[1].is_empty()));
+        assert_eq!((rows[0][0].as_str(), rows[0][2].as_str()), ("LLM providers", "setup provider"));
     }
 
     #[test]

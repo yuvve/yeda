@@ -2093,7 +2093,7 @@ impl App {
     }
 
     fn open_setup_menu(&mut self) {
-        self.setup_menu = setup::overview(&self.lib);
+        self.setup_menu = setup::overview();
         self.setup_menu_sel = self.setup_menu_sel.min(self.setup_menu.len() - 1);
         self.mode = Mode::SetupMenu;
     }
@@ -2945,7 +2945,9 @@ impl App {
                     if setup::listed(kind) {
                         self.open_setup_picker(kind);
                     } else {
-                        self.setup = Some(SetupForm::new(kind, "", &self.lib));
+                        let mut form = SetupForm::new(kind, "", &self.lib);
+                        form.key_stored = kind == setup::Kind::Openalex && yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten().is_some();
+                        self.setup = Some(form);
                         self.mode = Mode::Setup;
                     }
                 }
