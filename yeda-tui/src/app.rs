@@ -1931,10 +1931,7 @@ impl App {
                         }
                     };
                     let account = yeda_secrets::provider_account(&bound.provider, bound.url());
-                    let key = match bound.protocol() {
-                        yeda_core::llm::Protocol::OpenaiResponses => self.renewed_codex(&bound, account, key),
-                        _ => key,
-                    };
+                    let key = self.renewed_codex(&bound, account, key);
                     let (tx, rx) = mpsc::channel();
                     let probe = s.clone();
                     std::thread::spawn(move || {
@@ -2302,8 +2299,7 @@ impl App {
         let alias = self.lib.providers.get(&old_name).and_then(|o| o.alias.clone());
         let stored = self.secrets.get(&old).cloned().or_else(|| yeda_secrets::stored(&old).ok().flatten());
         let from_env = yeda_secrets::from_env(&new, p.alias.as_deref()).is_some();
-        let codex = p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses;
-        if old_url != p.url() && codex {
+        if old_url != p.url() && p.auth == yeda_core::llm::Auth::Codex {
             return self.test_and_save_setup(section, setup::Setup::Provider(name, p));
         }
         if stored.is_none() && !from_env && yeda_secrets::from_env(&old, alias.as_deref()).is_none() {
@@ -2347,7 +2343,7 @@ impl App {
         // An empty field asks a Codex provider to sign in instead: stored credentials
         // reauthorize with their own client and host id, a missing one registers anew.
         let codex_empty = secret.is_none()
-            && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
+            && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Codex);
         if codex_empty {
             let (issued, host, hint) = yeda_secrets::stored(&account)
                 .ok()
@@ -3099,9 +3095,8 @@ impl App {
     fn llm_key(&mut self, b: &yeda_core::llm::Bound, command: &str) -> Option<Option<String>> {
         let account = yeda_secrets::provider_account(&b.provider, b.url());
         let got = if b.needs_key() {
-            let what = match (b.auth(), b.protocol()) {
-                (yeda_core::llm::Auth::Oauth, yeda_core::llm::Protocol::OpenaiResponses) => "OAuth credentials (the compacted `~/.codex/auth.json`)",
-                (yeda_core::llm::Auth::Oauth, _) => "OAuth token (from `claude setup-token`)",
+            let what = match b.auth() {
+                yeda_core::llm::Auth::Codex => "Codex credentials (the compacted `~/.codex/auth.json`)",
                 _ => "API key",
             };
             let prompt = format!("{what} for provider '{}', used by {}, sent to {}", b.provider, b.profile, b.url());
@@ -3115,7 +3110,7 @@ impl App {
     /// Replaces Codex credentials that are about to expire; a failed renewal keeps the old ones,
     /// whose expiry the request reports.
     fn renewed_codex(&mut self, b: &yeda_core::llm::Bound, account: String, key: Option<String>) -> Option<String> {
-        if b.protocol() != yeda_core::llm::Protocol::OpenaiResponses {
+        if b.auth() != yeda_core::llm::Auth::Codex {
             return key;
         }
         if yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
@@ -3749,11 +3744,10 @@ impl App {
             items.push((yeda_secrets::remote_account(name, remote), format!("Storage {name}: {what} for {}", remote.label())));
         }
         for (name, p) in &self.lib.providers {
-            let what = match (p.auth, p.protocol) {
-                (yeda_core::llm::Auth::None, _) => "no credential",
-                (yeda_core::llm::Auth::Oauth, yeda_core::llm::Protocol::OpenaiResponses) => "OAuth credentials (the compacted `~/.codex/auth.json`)",
-                (yeda_core::llm::Auth::Oauth, _) => "OAuth token",
-                _ => "API key",
+            let what = match p.auth {
+                yeda_core::llm::Auth::None => "no credential",
+                yeda_core::llm::Auth::Codex => "Codex credentials (the compacted `~/.codex/auth.json`)",
+                yeda_core::llm::Auth::ApiKey => "API key",
             };
             let profiles: Vec<&str> = self.lib.llm.iter().filter(|(_, q)| q.provider == *name).map(|(n, _)| n.as_str()).collect();
             let for_profiles = if profiles.is_empty() { String::new() } else { format!(", shared by {}", profiles.join(", ")) };
@@ -5184,10 +5178,10 @@ mod tests {
 
     #[test]
     fn envvars_name_the_variables_and_the_secrets_needing_an_alias() {
-        let toml = "[providers.a]\nbase_url = \"https://api.example.com/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
-                    [providers.b]\nbase_url = \"https://api.example.com/v2\"\nprotocol = \"openai\"\nauth = \"api-key\"\n\
-                    [providers.c]\nbase_url = \"https://other.example.com\"\nprotocol = \"openai\"\nauth = \"api-key\"\nalias = \"c\"\n\
-                    [providers.d]\nbase_url = \"https://x.alias\"\nprotocol = \"openai\"\nauth = \"api-key\"\n";
+        let toml = "[providers.a]\nbase_url = \"https://api.example.com/v1\"\nauth = \"api-key\"\n\
+                    [providers.b]\nbase_url = \"https://api.example.com/v2\"\nauth = \"api-key\"\n\
+                    [providers.c]\nbase_url = \"https://other.example.com\"\nauth = \"api-key\"\nalias = \"c\"\n\
+                    [providers.d]\nbase_url = \"https://x.alias\"\nauth = \"api-key\"\n";
         let lib = yeda_core::library::Library::parse(Some(toml), None, [], None).unwrap();
         let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         app.open_envvars();
@@ -5260,7 +5254,7 @@ mod tests {
 
     #[test]
     fn the_setup_picker_lists_entries_and_offers_a_new_one() {
-        let lib = yeda_core::library::Library::parse(Some("default_llm = \"a\"\n[providers.p]\nbase_url = \"https://x.example\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("default_llm = \"a\"\n[providers.p]\nbase_url = \"https://x.example\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         app.submit(super::Prompt::Command, "setup llm");
         assert!(app.mode == super::Mode::SetupPick);
@@ -5275,9 +5269,9 @@ mod tests {
 
     #[test]
     fn combo_keys_are_nested_inside_the_setup_form() {
-        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nauth = \"codex\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "", &lib);
-        assert_eq!(form.values, [""; 7], "a new provider form starts empty");
+        assert_eq!(form.values, [""; 6], "a new provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,
@@ -5293,7 +5287,7 @@ mod tests {
         {
             let c = app.combo.as_ref().unwrap();
             assert!(c.open);
-            assert_eq!(c.options.len(), 7, "all options show on focus");
+            assert_eq!(c.options.len(), 2, "all options show on focus");
             assert_eq!(c.options[c.sel].1, "codex", "the first preset is highlighted");
         }
         app.setup_key(key(KeyCode::Esc));
@@ -5305,15 +5299,15 @@ mod tests {
         app.setup_key(key(KeyCode::BackTab));
         assert!(app.combo.as_ref().unwrap().open);
         assert!(app.combo.as_ref().unwrap().query.is_empty(), "the filter starts empty");
-        for ch in "clau".chars() {
+        for ch in "openai-".chars() {
             app.setup_key(key(KeyCode::Char(ch)));
         }
-        assert_eq!(app.setup.as_ref().unwrap().values[1], "clau");
-        assert_eq!(app.combo.as_ref().unwrap().options[0].1, "claude");
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "openai-");
+        assert_eq!(app.combo.as_ref().unwrap().options[0].1, "openai-compatible");
         app.setup_key(key(KeyCode::Enter));
         let form = app.setup.as_ref().unwrap();
-        assert_eq!(form.values[1], "claude");
-        assert_eq!(form.values[3], "anthropic", "picking a preset fills its protocol");
+        assert_eq!(form.values[1], "openai-compatible");
+        assert_eq!(form.values[3], "api-key", "picking a preset fills its auth");
         assert!(!app.combo.as_ref().unwrap().open, "Enter picks the value and closes the dropdown");
 
         app.setup_key(key(KeyCode::Tab));

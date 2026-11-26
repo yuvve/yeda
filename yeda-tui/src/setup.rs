@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use yeda_core::browse::SortField;
 use yeda_core::library::{Dav, Library, Ref, Remote, SavedSearch};
-use yeda_core::llm::{Auth, Bound, Profile, Protocol, Provider};
+use yeda_core::llm::{Auth, Bound, Profile, Provider};
 use yeda_core::web_search::Provider as WebProvider;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -77,7 +77,6 @@ pub struct SetupForm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Choice {
     Presets,
-    Protocols,
     Auth,
     BoundProviders,
     StorageKinds,
@@ -91,39 +90,22 @@ pub enum Choice {
 pub struct Preset {
     pub name: &'static str,
     pub base_url: &'static str,
-    pub protocol: &'static str,
     pub auth: &'static str,
 }
 
-/// Providers the form knows. The last allows any OpenAI-compatible server at a typed URL.
-pub const PRESETS: [Preset; 7] = [
-    Preset { name: "codex", base_url: "https://api.openai.com/v1", protocol: "openai-responses", auth: "oauth" },
-    Preset { name: "claude", base_url: "https://api.anthropic.com", protocol: "anthropic", auth: "oauth" },
-    Preset { name: "mistral", base_url: "https://api.mistral.ai/v1", protocol: "mistral", auth: "api-key" },
-    Preset { name: "openrouter", base_url: "https://openrouter.ai/api/v1", protocol: "openrouter", auth: "api-key" },
-    Preset { name: "opencode-go", base_url: "https://opencode.ai/inference/go/openai/v1", protocol: "opencode-go", auth: "api-key" },
-    Preset { name: "gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", protocol: "openai", auth: "api-key" },
-    Preset { name: "openai-compatible", base_url: "", protocol: "openai", auth: "api-key" },
+/// Providers the form knows: the Codex sign-in, and any OpenAI-compatible server at a typed URL.
+pub const PRESETS: [Preset; 2] = [
+    Preset { name: "codex", base_url: "https://api.openai.com/v1", auth: "codex" },
+    Preset { name: "openai-compatible", base_url: "", auth: "api-key" },
 ];
 
 fn preset(name: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.name == name.trim().to_lowercase())
 }
 
-fn protocol_of(name: &str) -> Protocol {
-    match name {
-        "anthropic" => Protocol::Anthropic,
-        "mistral" => Protocol::Mistral,
-        "openrouter" => Protocol::Openrouter,
-        "opencode-go" => Protocol::OpencodeGo,
-        "openai-responses" => Protocol::OpenaiResponses,
-        _ => Protocol::Openai,
-    }
-}
-
 fn auth_of(name: &str) -> Auth {
     match name {
-        "oauth" => Auth::Oauth,
+        "codex" => Auth::Codex,
         "none" => Auth::None,
         _ => Auth::ApiKey,
     }
@@ -166,9 +148,9 @@ impl SetupForm {
             Kind::Provider => match lib.providers.get(name) {
                 Some(p) => {
                     let preset = PRESETS.iter().find(|q| q.base_url == p.url()).map_or("", |q| q.name);
-                    [name, preset, p.url(), p.protocol.name(), p.auth.name(), p.alias.as_deref().unwrap_or_default(), ""].map(String::from).to_vec()
+                    [name, preset, p.url(), p.auth.name(), p.alias.as_deref().unwrap_or_default(), ""].map(String::from).to_vec()
                 }
-                None => [name, "", "", "", "", "", ""].map(String::from).to_vec(),
+                None => [name, "", "", "", "", ""].map(String::from).to_vec(),
             },
             Kind::Llm => match lib.llm.get(name) {
                 Some(p) => vec![name.into(), p.provider.clone(), p.model.clone()],
@@ -268,7 +250,7 @@ impl SetupForm {
         }
     }
 
-    /// A known preset replaces the base URL, protocol and auth, unless a URL was typed that no
+    /// A known preset replaces the base URL and auth, unless a URL was typed that no
     /// preset has.
     pub fn provider_changed(&mut self) {
         let url = self.values[2].trim();
@@ -276,19 +258,18 @@ impl SetupForm {
             && (url.is_empty() || PRESETS.iter().any(|q| q.base_url == url))
         {
             self.values[2] = p.base_url.into();
-            self.values[3] = p.protocol.into();
-            self.values[4] = p.auth.into();
+            self.values[3] = p.auth.into();
         }
     }
 
-    /// Whether the field cannot be typed in: an OAuth provider's URL is fixed.
+    /// Whether the field cannot be typed in: a Codex provider's URL is fixed.
     pub fn locked(&self, field: usize) -> bool {
-        self.kind == Kind::Provider && field == 2 && Provider::fixed_url(protocol_of(&self.values[3]), auth_of(&self.values[4])).is_some()
+        self.kind == Kind::Provider && field == 2 && Provider::fixed_url(auth_of(&self.values[3])).is_some()
     }
 
-    /// Shows the fixed URL while the protocol and auth call for one.
+    /// Shows the fixed URL while the auth calls for one.
     pub fn lock_url(&mut self) {
-        if let Some(url) = (self.kind == Kind::Provider).then(|| Provider::fixed_url(protocol_of(&self.values[3]), auth_of(&self.values[4]))).flatten() {
+        if let Some(url) = (self.kind == Kind::Provider).then(|| Provider::fixed_url(auth_of(&self.values[3]))).flatten() {
             self.values[2] = url.into();
         }
     }
@@ -303,20 +284,16 @@ impl SetupForm {
             }
             Kind::Proxy => &[("Proxies", "tried in order, separated by spaces; {url} is where the paper's address goes")],
             Kind::Provider => {
-                let protocol = protocol_of(&self.values[3]);
-                let auth = auth_of(&self.values[4]);
-                let token = match (auth, protocol) {
-                    (Auth::None, _) => "none: this server takes no key",
-                    (Auth::Oauth, Protocol::OpenaiResponses) => "press Enter and open the link yeda shows",
-                    (Auth::Oauth, _) => "paste a token from `claude setup-token`",
-                    _ if self.origin.is_some() => "blank keeps the stored key, moved to the new name or URL if either changed; type one to replace it",
-                    _ => "API key",
+                let token = match auth_of(&self.values[3]) {
+                    Auth::None => "none: this server takes no key",
+                    Auth::Codex => "press Enter and open the link yeda shows",
+                    Auth::ApiKey if self.origin.is_some() => "blank keeps the stored key, moved to the new name or URL if either changed; type one to replace it",
+                    Auth::ApiKey => "API key",
                 };
                 &[
                     ("Name", "profiles name it: [llm.<name>] provider = \"…\""),
                     ("Preset", CHOICE_HINT),
-                    ("Base URL", if self.locked(2) { "fixed: an OAuth sign-in only works on this server" } else { "filled in by the preset; any https server for openai-compatible" }),
-                    ("Protocol", CHOICE_HINT),
+                    ("Base URL", if self.locked(2) { "fixed: a Codex sign-in only works on this server" } else { "filled in by the preset; any https server for openai-compatible" }),
                     ("Auth", CHOICE_HINT),
                     ("Alias", ALIAS_HINT),
                     ("Key / token", token),
@@ -380,8 +357,7 @@ impl SetupForm {
     pub fn choice(&self, field: usize) -> Option<Choice> {
         match (self.kind, field) {
             (Kind::Provider, 1) => Some(Choice::Presets),
-            (Kind::Provider, 3) => Some(Choice::Protocols),
-            (Kind::Provider, 4) => Some(Choice::Auth),
+            (Kind::Provider, 3) => Some(Choice::Auth),
             (Kind::Llm, 1) => Some(Choice::BoundProviders),
             (Kind::Storage, 1) => Some(Choice::StorageKinds),
             (Kind::Llm, 2) => Some(Choice::Models),
@@ -438,30 +414,24 @@ impl SetupForm {
         let mut t = toml::Table::new();
         let setup = match self.kind {
             Kind::Provider => {
-                if Provider::fixed_url(protocol_of(v[3]), auth_of(v[4])).is_none() {
+                if Provider::fixed_url(auth_of(v[3])).is_none() {
                     t.insert("base_url".into(), v[2].trim_end_matches('/').into());
                 }
-                t.insert("protocol".into(), v[3].to_lowercase().into());
-                t.insert("auth".into(), v[4].to_lowercase().into());
-                if !v[5].is_empty() {
-                    t.insert("alias".into(), v[5].into());
+                t.insert("auth".into(), v[3].to_lowercase().into());
+                if !v[4].is_empty() {
+                    t.insert("alias".into(), v[4].into());
                 }
-                let p = Provider::deserialize(toml::Value::Table(t.clone())).map_err(|_| {
-                    anyhow::anyhow!("the protocol is one of anthropic, openai, mistral, openrouter, opencode-go, openai-responses, and the auth api-key, oauth or none")
-                })?;
+                let p = Provider::deserialize(toml::Value::Table(t.clone())).map_err(|_| anyhow::anyhow!("the auth is api-key, codex or none"))?;
                 p.check()?;
                 if let Some(alias) = &p.alias {
                     yeda_core::check_alias(alias)?;
                 }
-                // Codex signs in when the field is empty; every other credential has to be pasted,
+                // Codex signs in when the field is empty; an API key has to be pasted,
                 // since its key is bound to this URL and a new one has none yet.
                 // An edited provider has its stored key moved along, which the app looks up.
                 let editing = self.origin.is_some();
                 if p.auth == Auth::ApiKey && self.secret().is_none() && !editing {
                     bail!("{} needs an API key", v[0]);
-                }
-                if p.auth == Auth::Oauth && p.protocol == Protocol::Anthropic && self.secret().is_none() && !editing {
-                    bail!("paste the token from `claude setup-token`");
                 }
                 Setup::Provider(v[0].to_string(), p)
             }
@@ -604,15 +574,7 @@ pub fn choices(choice: Choice, lib: &Library) -> Vec<(String, String)> {
         Choice::Presets => return PRESETS.iter().map(|p| (p.name.to_string(), p.name.to_string())).collect(),
         Choice::BoundProviders => return lib.providers.keys().map(|n| (n.clone(), n.clone())).collect(),
         Choice::Models => return Vec::new(),
-        Choice::Protocols => &[
-            ("anthropic", "anthropic"),
-            ("openai", "openai"),
-            ("mistral", "mistral"),
-            ("openrouter", "openrouter"),
-            ("opencode-go", "opencode-go"),
-            ("openai-responses", "openai-responses"),
-        ],
-        Choice::Auth => &[("api-key", "api-key"), ("oauth", "oauth"), ("none", "none")],
+        Choice::Auth => &[("api-key", "api-key"), ("codex", "codex"), ("none", "none")],
         Choice::StorageKinds => &[("local: a folder on this device", "local"), ("webdav: any WebDAV server", "webdav"), ("dropbox", "dropbox")],
         Choice::Sort => &[
             ("key", "key"),
@@ -662,7 +624,7 @@ pub fn kind_name(kind: Kind) -> &'static str {
 pub fn entries(kind: Kind, lib: &Library) -> Vec<(String, String)> {
     let default_mark = |is_default: bool| if is_default { " · default" } else { "" };
     match kind {
-        Kind::Provider => lib.providers.iter().map(|(n, p)| (n.clone(), format!("{} · {} · {}", p.protocol.name(), p.auth.name(), p.url()))).collect(),
+        Kind::Provider => lib.providers.iter().map(|(n, p)| (n.clone(), format!("{} · {}", p.auth.name(), p.url()))).collect(),
         Kind::Llm => lib.llm.iter().map(|(n, p)| (n.clone(), format!("{} · {}{}", p.provider, p.model, default_mark(lib.default_llm.as_deref() == Some(n))))).collect(),
         Kind::Storage => {
             let local = lib.locations.iter().map(|(n, path)| (n.clone(), format!("local {}", path.display())));
@@ -782,7 +744,7 @@ mod tests {
 
     #[test]
     fn choice_fields_offer_known_values() {
-        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n";
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let llm = SetupForm::new(Kind::Llm, "new", &lib);
         assert_eq!(llm.choice(1), Some(Choice::BoundProviders));
@@ -791,7 +753,7 @@ mod tests {
         assert!(choices(Choice::Models, &lib).is_empty());
         let provider = SetupForm::new(Kind::Provider, "", &lib);
         assert_eq!(provider.choice(1), Some(Choice::Presets));
-        assert_eq!(provider.choice(5), None);
+        assert_eq!(provider.choice(4), None);
         let search = SetupForm::new(Kind::Search, "", &lib);
         assert_eq!(search.choice(2), Some(Choice::Sort));
         assert!(choices(Choice::Sort, &lib).contains(&("year descending".into(), "-year".into())));
@@ -835,67 +797,55 @@ mod tests {
     fn builds_providers_from_presets() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "", &lib);
-        assert_eq!(f.values, [""; 7], "a new provider form starts empty");
+        assert_eq!(f.values, [""; 6], "a new provider form starts empty");
         f.values[0] = "codex".into();
         f.values[1] = "codex".into();
         f.provider_changed();
-        assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", "", ""]);
+        assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "codex", "", ""]);
         // Codex signs in with an empty field, so the section builds without a credential.
         let (t, s) = f.section().unwrap();
-        assert_eq!(t.to_string(), "protocol = \"openai-responses\"\nauth = \"oauth\"\n");
+        assert_eq!(t.to_string(), "auth = \"codex\"\n");
         assert_eq!(account(&s), "provider:codex:https://api.openai.com/v1");
 
-        f.values[1] = "claude".into();
-        f.provider_changed();
-        assert_eq!(f.values[2..5], ["https://api.anthropic.com", "anthropic", "oauth"]);
-        assert!(f.section().unwrap_err().to_string().contains("claude setup-token"));
-        f.values[6] = "sk-ant-oat01-x".into();
-        let (_, s) = f.section().unwrap();
-        assert_eq!(account(&s), "provider:codex:https://api.anthropic.com");
-
         // A URL that no preset has stays; a preset's own URL is replaced with the preset's.
-        f.values[1] = "mistral".into();
-        f.provider_changed();
-        f.values[2] = "https://mistral.example.edu/v1".into();
-        f.values[6] = "k".into();
-        let (t, _) = f.section().unwrap();
-        assert_eq!(t["base_url"].as_str(), Some("https://mistral.example.edu/v1"));
-        assert_eq!(t["protocol"].as_str(), Some("mistral"));
-        let saved = Library::parse(Some(&format!("[providers.mistral]\n{t}")), None, [], None).unwrap();
-        let edited = SetupForm::new(Kind::Provider, "mistral", &saved);
-        assert_eq!(edited.values, ["mistral", "", "https://mistral.example.edu/v1", "mistral", "api-key", "", ""], "editing fills the form");
-
-        let mut g = SetupForm::new(Kind::Provider, "local", &lib);
-        g.values[0] = "local".into();
+        let mut g = SetupForm::new(Kind::Provider, "claude", &lib);
+        g.values[0] = "claude".into();
         g.values[1] = "openai-compatible".into();
         g.provider_changed();
-        assert_eq!(g.values[2..5], ["", "openai", "api-key"]);
+        assert_eq!(g.values[2..4], ["", "api-key"]);
+        g.values[2] = "https://api.anthropic.com/v1/".into();
+        g.provider_changed();
+        assert_eq!(g.values[2], "https://api.anthropic.com/v1/");
+        assert!(g.section().unwrap_err().to_string().contains("needs an API key"));
+        g.values[5] = "k".into();
+        let (t, s) = g.section().unwrap();
+        assert_eq!((t["base_url"].as_str(), t["auth"].as_str(), t.contains_key("protocol")), (Some("https://api.anthropic.com/v1"), Some("api-key"), false));
+        assert_eq!(account(&s), "provider:claude:https://api.anthropic.com/v1");
+        let saved = Library::parse(Some(&format!("[providers.claude]\n{t}")), None, [], None).unwrap();
+        let edited = SetupForm::new(Kind::Provider, "claude", &saved);
+        assert_eq!(edited.values, ["claude", "", "https://api.anthropic.com/v1", "api-key", "", ""], "editing fills the form");
+
         g.values[2] = "https://localhost:8080/v1".into();
-        g.values[4] = "none".into();
+        g.values[3] = "none".into();
         let (t, _) = g.section().unwrap();
         assert_eq!(t["auth"].as_str(), Some("none"));
         g.values[2] = "http://localhost:8080/v1".into();
         assert!(g.section().unwrap_err().to_string().contains("https://"));
         g.values[2] = "https://localhost:8080/v1".into();
-        g.values[3] = "anthropic".into();
-        assert!(g.section().unwrap_err().to_string().contains("anthropic does not take auth"));
-        g.values[3] = "gemini".into();
+        g.values[3] = "oauth".into();
         assert!(g.section().is_err());
-        g.values[3] = "openai".into();
-        g.values[4] = "api-key".into();
-        assert!(g.section().unwrap_err().to_string().contains("needs an API key"));
 
         let hints = |f: &SetupForm| f.fields().iter().map(|(l, h)| (l.clone(), *h)).collect::<Vec<_>>();
         let mut hinted = SetupForm::new(Kind::Provider, "cx", &lib);
         hinted.values[1] = "codex".into();
         hinted.provider_changed();
         let (_, token) = hints(&hinted).into_iter().find(|(l, _)| l == "Key / token").unwrap();
-        assert!(token.contains("press Enter") && !token.contains("claude"), "{token}");
+        assert!(token.contains("press Enter"), "{token}");
     }
 
     #[test]
     fn builds_profiles_on_saved_providers() {
-        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[providers.codex]\nauth = \"codex\"\n";
         let lib = Library::parse(Some(&format!("{cfg}[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n")), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "cx", &lib);
         assert_eq!(f.values, ["cx", "codex", "gpt-5.1"], "an existing profile fills its form");
@@ -925,7 +875,7 @@ mod tests {
 
     #[test]
     fn a_profile_tests_with_its_providers_credential() {
-        let cfg = "[providers.cx]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"cx\"\nmodel = \"gpt-5.1\"\n[llm.b]\nprovider = \"cx\"\nmodel = \"gpt-5.1-mini\"\n[llm.c]\nprovider = \"local\"\nmodel = \"qwen\"\n";
+        let cfg = "[providers.cx]\nauth = \"codex\"\n[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nauth = \"none\"\n[llm.a]\nprovider = \"cx\"\nmodel = \"gpt-5.1\"\n[llm.b]\nprovider = \"cx\"\nmodel = \"gpt-5.1-mini\"\n[llm.c]\nprovider = \"local\"\nmodel = \"qwen\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let lookup = |account: &str| Ok::<_, anyhow::Error>((account == "provider:cx:https://api.openai.com/v1").then(|| "cred".to_string()));
         let (a, key) = profile_credential(&lib.providers, "a", &lib.llm["a"], lookup).unwrap();
@@ -948,7 +898,7 @@ mod tests {
     fn a_profile_test_sends_the_credential_it_is_given() {
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         server.set_nonblocking(true).unwrap();
-        let provider = Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), protocol: Protocol::OpenaiResponses, auth: Auth::Oauth, alias: None };
+        let provider = Provider { base_url: format!("http://{}/v1", server.local_addr().unwrap()), auth: Auth::Codex, alias: None };
         let providers = BTreeMap::from([("cx".to_string(), provider)]);
         let setup = Setup::Llm("a".into(), Profile { provider: "cx".into(), model: "gpt-5.1".into() });
         // Past the credential check, the plain-http address is what stops the request.
@@ -965,23 +915,23 @@ mod tests {
     }
 
     #[test]
-    fn an_oauth_provider_has_a_fixed_url_that_is_not_saved() {
+    fn a_codex_provider_has_a_fixed_url_that_is_not_saved() {
         let lib = Library::parse(None, None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "", &lib);
-        f.values[..6].clone_from_slice(&["c".into(), String::new(), "https://elsewhere.example".into(), "openai-responses".into(), "oauth".into(), String::new()]);
+        f.values[..5].clone_from_slice(&["c".into(), String::new(), "https://elsewhere.example".into(), "codex".into(), String::new()]);
         assert!(f.locked(2) && !f.locked(1));
         f.lock_url();
         assert_eq!(f.values[2], "https://api.openai.com/v1");
         let (t, setup) = f.section().unwrap();
         assert!(!t.contains_key("base_url"));
         assert_eq!(account(&setup), "provider:c:https://api.openai.com/v1");
-        f.values[4] = "api-key".into();
+        f.values[3] = "api-key".into();
         assert!(!f.locked(2));
     }
 
     #[test]
     fn entries_mark_the_default() {
-        let cfg = "default_llm = \"b\"\n[providers.p]\nbase_url = \"https://x.example\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"n\"\n[fulltext]\nlocation = \"dav\"\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/\"\nuser = \"u\"\n";
+        let cfg = "default_llm = \"b\"\n[providers.p]\nbase_url = \"https://x.example\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"n\"\n[fulltext]\nlocation = \"dav\"\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/\"\nuser = \"u\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let llm = entries(Kind::Llm, &lib);
         assert_eq!((llm[0].1.as_str(), llm[1].1.as_str()), ("p · m", "p · n · default"));
@@ -991,25 +941,25 @@ mod tests {
 
     #[test]
     fn an_existing_provider_fills_its_form_and_keeps_its_key() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"api-key\"\nalias = \"work\"\n";
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\nalias = \"work\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Provider, "claude", &lib);
-        assert_eq!(f.values, ["claude", "claude", "https://api.anthropic.com", "anthropic", "api-key", "work", ""]);
-        assert_eq!(f.origin, Some(("claude".into(), "https://api.anthropic.com".into())));
+        assert_eq!(f.values, ["claude", "", "https://api.anthropic.com/v1", "api-key", "work", ""]);
+        assert_eq!(f.origin, Some(("claude".into(), "https://api.anthropic.com/v1".into())));
         let (t, setup) = f.section().unwrap();
-        assert_eq!(t["base_url"].as_str(), Some("https://api.anthropic.com"));
-        assert_eq!(account(&setup), "provider:claude:https://api.anthropic.com");
+        assert_eq!(t["base_url"].as_str(), Some("https://api.anthropic.com/v1"));
+        assert_eq!(account(&setup), "provider:claude:https://api.anthropic.com/v1");
         f.values[2] = "https://proxy.example".into();
         let (_, setup) = f.section().unwrap();
         assert_eq!(account(&setup), "provider:claude:https://proxy.example");
         let mut fresh = SetupForm::new(Kind::Provider, "other", &lib);
-        fresh.values[2..5].clone_from_slice(&["https://x.example".into(), "openai".into(), "api-key".into()]);
+        fresh.values[2..4].clone_from_slice(&["https://x.example".into(), "api-key".into()]);
         assert!(fresh.origin.is_none() && fresh.section().unwrap_err().to_string().contains("needs an API key"));
     }
 
     #[test]
     fn builds_and_checks_sections() {
-        let lib = Library::parse(Some("[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n"), None, [], None).unwrap();
+        let lib = Library::parse(Some("[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nauth = \"none\"\n"), None, [], None).unwrap();
         let mut f = SetupForm::new(Kind::Storage, "dav", &lib);
         assert_eq!(f.values, ["dav", ""]);
         f.values[1] = "webdav".into();

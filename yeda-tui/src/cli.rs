@@ -543,7 +543,7 @@ fn llm_key(b: &yeda_core::llm::Bound) -> Result<Option<String>> {
     let alias = b.settings.alias.as_deref();
     let mut key = yeda_secrets::get_as(&account, alias)?;
     anyhow::ensure!(key.is_some() || !b.needs_key(), "no credential stored for provider '{}'; set it in yeda with :setup provider", b.provider);
-    if b.protocol() == yeda_core::llm::Protocol::OpenaiResponses && yeda_secrets::from_env(&account, alias).is_none() && key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+    if b.auth() == yeda_core::llm::Auth::Codex && yeda_secrets::from_env(&account, alias).is_none() && key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
         key = Some(yeda_net::llm::codex_refresh(key.as_deref().unwrap_or_default())?);
         yeda_secrets::set(&account, key.as_deref().unwrap_or_default())?;
     }
