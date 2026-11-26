@@ -24,6 +24,7 @@ pub struct Table {
 pub type Row = BTreeMap<String, String>;
 
 /// One paper's summarization request; the caller sends it with the PDF at `pdf`, if that exists.
+#[derive(Clone)]
 pub struct Job {
     pub key: String,
     pub columns: Vec<String>,

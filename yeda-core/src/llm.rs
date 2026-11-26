@@ -3,50 +3,22 @@ use serde_json::{Value, json};
 
 use anyhow::Result;
 
-/// The wire dialect a provider speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Protocol {
-    Anthropic,
-    /// OpenAI chat completions: OpenAI, Ollama, llama.cpp, LM Studio, vLLM, …
-    Openai,
-    Mistral,
-    Openrouter,
-    /// The OpenCode Go subscription, through its OpenAI-compatible endpoint.
-    #[serde(rename = "opencode-go")]
-    OpencodeGo,
-    /// OpenAI's Responses API, which Codex OAuth tokens are accepted by.
-    #[serde(rename = "openai-responses")]
-    OpenaiResponses,
-}
-
-impl Protocol {
-    pub fn name(self) -> &'static str {
-        match self {
-            Protocol::Anthropic => "anthropic",
-            Protocol::Openai => "openai",
-            Protocol::Mistral => "mistral",
-            Protocol::Openrouter => "openrouter",
-            Protocol::OpencodeGo => "opencode-go",
-            Protocol::OpenaiResponses => "openai-responses",
-        }
-    }
-}
-
+/// `Codex` is the ChatGPT sign-in, spoken to OpenAI's Responses API; the others are OpenAI Chat
+/// Completions servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Auth {
     ApiKey,
-    Oauth,
     None,
+    Codex,
 }
 
 impl Auth {
     pub fn name(self) -> &'static str {
         match self {
             Auth::ApiKey => "api-key",
-            Auth::Oauth => "oauth",
             Auth::None => "none",
+            Auth::Codex => "codex",
         }
     }
 }
@@ -56,10 +28,9 @@ impl Auth {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
-    /// Required, except where the protocol and auth fix it: see [`Provider::fixed_url`].
+    /// Required, except where the auth fixes it: see [`Provider::fixed_url`].
     #[serde(default)]
     pub base_url: String,
-    pub protocol: Protocol,
     pub auth: Auth,
     /// Distinguishes this provider's environment variable from others on the same server.
     #[serde(default)]
@@ -67,18 +38,14 @@ pub struct Provider {
 }
 
 impl Provider {
-    /// The one server an OAuth credential works on; its URL is not configurable.
-    pub fn fixed_url(protocol: Protocol, auth: Auth) -> Option<&'static str> {
-        match (protocol, auth) {
-            (Protocol::OpenaiResponses, Auth::Oauth) => Some("https://api.openai.com/v1"),
-            (Protocol::Anthropic, Auth::Oauth) => Some("https://api.anthropic.com"),
-            _ => None,
-        }
+    /// The one server a Codex credential works on; its URL is not configurable.
+    pub fn fixed_url(auth: Auth) -> Option<&'static str> {
+        (auth == Auth::Codex).then_some("https://api.openai.com/v1")
     }
 
     /// Where requests, and so the credential, go.
     pub fn url(&self) -> &str {
-        match Self::fixed_url(self.protocol, self.auth) {
+        match Self::fixed_url(self.auth) {
             Some(fixed) if self.base_url.is_empty() => fixed,
             _ => self.base_url.trim_end_matches('/'),
         }
@@ -88,21 +55,14 @@ impl Provider {
         self.auth != Auth::None
     }
 
-    /// Checks what a request would otherwise fail on: the address, and a credential the protocol
-    /// cannot use.
+    /// Checks what a request would otherwise fail on: the address.
     pub fn check(&self) -> Result<()> {
-        if let Some(fixed) = Self::fixed_url(self.protocol, self.auth) {
-            anyhow::ensure!(self.base_url.is_empty(), "{} with auth = \"{}\" always uses {fixed}: remove base_url", self.protocol.name(), self.auth.name());
+        if let Some(fixed) = Self::fixed_url(self.auth) {
+            anyhow::ensure!(self.base_url.is_empty(), "auth = \"{}\" always uses {fixed}: remove base_url", self.auth.name());
         } else if !self.base_url.starts_with("https://") {
             anyhow::bail!("{}: the base URL starts with https://", self.base_url);
         }
-        match (self.protocol, self.auth) {
-            (Protocol::Openai, Auth::ApiKey | Auth::None) => Ok(()),
-            (Protocol::Anthropic, Auth::ApiKey | Auth::Oauth) => Ok(()),
-            (Protocol::OpenaiResponses, Auth::Oauth) => Ok(()),
-            (Protocol::Mistral | Protocol::Openrouter | Protocol::OpencodeGo, Auth::ApiKey) => Ok(()),
-            (protocol, auth) => anyhow::bail!("{} does not take auth = \"{}\"", protocol.name(), auth.name()),
-        }
+        Ok(())
     }
 }
 
@@ -133,10 +93,6 @@ impl Bound {
         self.settings.url()
     }
 
-    pub fn protocol(&self) -> Protocol {
-        self.settings.protocol
-    }
-
     pub fn auth(&self) -> Auth {
         self.settings.auth
     }
@@ -155,26 +111,21 @@ mod tests {
     }
 
     #[test]
-    fn providers_check_their_address_and_auth_pair() {
-        let codex = provider("protocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap();
-        assert_eq!((codex.url(), codex.protocol, codex.auth, codex.needs_key()), ("https://api.openai.com/v1", Protocol::OpenaiResponses, Auth::Oauth, true));
+    fn providers_check_their_address() {
+        let codex = provider("auth = \"codex\"\n").unwrap();
+        assert_eq!((codex.url(), codex.auth, codex.needs_key()), ("https://api.openai.com/v1", Auth::Codex, true));
         codex.check().unwrap();
-        let local = provider("base_url = \"https://localhost:8080/v1/\"\nprotocol = \"openai\"\nauth = \"none\"\n").unwrap();
+        let local = provider("base_url = \"https://localhost:8080/v1/\"\nauth = \"none\"\n").unwrap();
         assert_eq!(local.url(), "https://localhost:8080/v1");
         assert!(!local.needs_key());
         local.check().unwrap();
-        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"anthropic\"\nauth = \"none\"\n").unwrap().check().unwrap_err().to_string().contains("anthropic does not take auth = \"none\""));
-        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"opencode-go\"\nauth = \"oauth\"\n").unwrap().check().is_err());
-        assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"openai-responses\"\nauth = \"api-key\"\n").unwrap().check().is_err());
-        assert!(provider("base_url = \"http://x.test/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n").unwrap().check().unwrap_err().to_string().contains("https://"));
-        let err = provider("base_url = \"https://x.test/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap().check().unwrap_err().to_string();
+        provider("base_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n").unwrap().check().unwrap();
+        assert!(provider("base_url = \"http://x.test/v1\"\nauth = \"api-key\"\n").unwrap().check().unwrap_err().to_string().contains("https://"));
+        let err = provider("base_url = \"https://x.test/v1\"\nauth = \"codex\"\n").unwrap().check().unwrap_err().to_string();
         assert!(err.contains("always uses https://api.openai.com/v1") && err.contains("remove base_url"), "{err}");
-        assert!(provider("base_url = \"https://x.test\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n").unwrap().check().is_err());
-        let claude = provider("protocol = \"anthropic\"\nauth = \"oauth\"\n").unwrap();
-        claude.check().unwrap();
-        assert_eq!(claude.url(), "https://api.anthropic.com");
-        assert!(provider("protocol = \"openai\"\nauth = \"api-key\"\n").unwrap().check().is_err());
-        assert!(provider("base_url = \"https://x.test\"\nprotocol = \"gemini\"\nauth = \"api-key\"\n").is_err());
+        assert!(provider("auth = \"api-key\"\n").unwrap().check().is_err());
+        assert!(provider("base_url = \"https://x.test\"\nauth = \"oauth\"\n").is_err());
+        assert!(provider("base_url = \"https://x.test\"\nprotocol = \"openai\"\nauth = \"api-key\"\n").is_err());
     }
 
     #[test]

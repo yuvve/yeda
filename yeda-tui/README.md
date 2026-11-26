@@ -63,12 +63,17 @@ Highlights, underlines, notes, text, image areas and ink, saved in the library n
 
 LLM features use a profile from `yeda.toml`: a provider (where to connect and how to authenticate) and a model. `:setup provider` and `:setup llm` add them.
 
+Any OpenAI-compatible server works (`auth = "api-key"`, or `"none"` for a local one). `auth = "codex"` signs in with a ChatGPT plan and needs no `base_url`. The paper goes to the server as a PDF; a server that refuses it gets the extracted text.
+
 ```toml
 default_llm = "claude"
 
 [providers.claude]
-protocol = "anthropic"
-auth = "oauth"                    # fixes the server; other providers need a base_url
+base_url = "https://api.anthropic.com/v1"
+auth = "api-key"
+
+[providers.codex]
+auth = "codex"                    # fixes the server
 
 [llm.claude]
 provider = "claude"

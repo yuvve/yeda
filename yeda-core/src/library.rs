@@ -624,17 +624,17 @@ mod tests {
 
     #[test]
     fn binds_profiles_to_their_provider_and_refuses_a_missing_one() {
-        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let (name, a) = lib.llm_profile(Some("a")).unwrap();
         let (_, b) = lib.llm_profile(Some("b")).unwrap();
-        assert_eq!((name.as_str(), a.url(), b.url()), ("a", "https://api.anthropic.com", "https://api.anthropic.com"));
+        assert_eq!((name.as_str(), a.url(), b.url()), ("a", "https://api.anthropic.com/v1", "https://api.anthropic.com/v1"));
         assert_eq!((a.model.as_str(), b.model.as_str()), ("claude-opus-5-5", "claude-sonnet-5-5"));
 
         let orphan = Library::parse(Some("[llm.a]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let err = orphan.llm_profile(Some("a")).unwrap_err().to_string();
         assert!(err.contains("names provider 'nowhere'"), "{err}");
-        let broken = Library::parse(Some("[providers.x]\nbase_url = \"http://x.test/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n"), None, [], None);
+        let broken = Library::parse(Some("[providers.x]\nbase_url = \"http://x.test/v1\"\nauth = \"api-key\"\n"), None, [], None);
         assert!(format!("{:#}", broken.unwrap_err()).contains("providers.x: http://x.test/v1"));
     }
 

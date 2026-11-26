@@ -299,7 +299,7 @@ pub fn parse_plan(answer: &str, lib: &Library, request: &str) -> Result<Plan> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = "[providers.p]\nbase_url = \"https://x.test\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.fast]\nprovider = \"p\"\nmodel = \"m\"\n\
+    const CONFIG: &str = "[providers.p]\nbase_url = \"https://x.test\"\nauth = \"none\"\n[llm.fast]\nprovider = \"p\"\nmodel = \"m\"\n\
                           [tables.lit]\ncolumns = [\"group\"]\n[tables.other]\ncolumns = [\"x\"]\n";
 
     fn lib() -> Library {

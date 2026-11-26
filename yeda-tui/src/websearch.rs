@@ -167,7 +167,7 @@ impl WebSearchForm {
                     Provider::Firecrawl if self.key_set.get(&p).copied().unwrap_or(false) => "own key, higher limits; e replaces it".into(),
                     Provider::Firecrawl => "shared free tier, lower limits; e sets an API key".into(),
                     Provider::Searxng => "your own instance; https only; e edits the URL and its basic-auth login".into(),
-                    Provider::ModelProviderWebSearch => "the LLM profile's search: anthropic, mistral, openrouter; none on openai, opencode-go; uses the LLM key".into(),
+                    Provider::ModelProviderWebSearch => "the LLM profile's answer from what the model knows, without web search; uses the LLM key".into(),
                 }
             }
             Some(Row::Queries) => "queries the model writes per :discover; each is one search".into(),
