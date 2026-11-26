@@ -55,8 +55,10 @@ pub fn complete(b: &Bound, prompt: &Prompt, key: Option<&str>) -> Result<Reply> 
         Auth::ApiKey | Auth::None => {
             let (body, note) = chat_body(b, prompt, pdf)?;
             let v = post(&format!("{}/chat/completions", b.url()), &openai_headers(key), &body)?;
-            if matches!(v["choices"][0]["finish_reason"].as_str(), Some("length" | "model_length")) {
-                bail!("output was cut off at the token limit; ask for less in the prompt");
+            match v["choices"][0]["finish_reason"].as_str() {
+                Some("length" | "model_length") => bail!("output was cut off at the token limit; ask for less in the prompt"),
+                Some("content_filter") => bail!("the model declined to answer"),
+                _ => {}
             }
             Ok((v["choices"][0]["message"]["content"].as_str().context("no message content in response")?.to_string(), note))
         }
@@ -85,12 +87,15 @@ fn send_paper<T>(b: &Bound, prompt: &Prompt, send: impl Fn(bool) -> Result<(T, O
 static SESSION: OnceLock<String> = OnceLock::new();
 
 /// The same headers go to every server. Some (OpenCode Go) reject a request without a session id
-/// and ask clients to name themselves; one session per process groups a run's requests.
+/// and ask clients to name themselves; one session per process groups a run's requests. OpenRouter
+/// reads the referer and title to show the traffic as yeda rather than "Unknown app".
 fn openai_headers(key: Option<&str>) -> Vec<(&'static str, String)> {
     let mut headers: Vec<_> = key.map(|k| ("authorization", format!("Bearer {k}"))).into_iter().collect();
     let session = SESSION.get_or_init(|| format!("ses_{}", uuid::Uuid::new_v4().simple()));
     headers.push(("x-opencode-session", session.clone()));
     headers.push(("user-agent", format!("yeda/{}", env!("CARGO_PKG_VERSION"))));
+    headers.push(("http-referer", "https://github.com/yuvve/yeda".into()));
+    headers.push(("x-openrouter-title", "yeda".into()));
     headers
 }
 
@@ -274,6 +279,10 @@ fn sse_response(lines: impl Iterator<Item = std::io::Result<String>>) -> Result<
                 }
                 completed = Some(response);
                 break;
+            }
+            Some("response.incomplete") if event["response"]["incomplete_details"]["reason"] == "content_filter" => bail!("the model declined to answer"),
+            Some("response.incomplete") if event["response"]["incomplete_details"]["reason"] == "max_output_tokens" => {
+                bail!("output was cut off at the token limit; ask for less in the prompt")
             }
             Some("response.failed" | "response.incomplete") | None if event["error"].is_object() => {
                 bail!("{}: {}", event["type"].as_str().unwrap_or("error"), event["error"]["message"].as_str().unwrap_or("no message"))
@@ -534,6 +543,12 @@ mod tests {
         let failed = sse_response(["data: {\"type\":\"response.failed\",\"error\":{\"message\":\"no credit\"}}"].into_iter().map(|l| Ok::<_, std::io::Error>(l.to_string()))).unwrap_err();
         assert!(failed.to_string().contains("no credit"), "{failed}");
 
+        for (reason, said) in [("content_filter", "declined"), ("max_output_tokens", "cut off")] {
+            let line = format!("data: {{\"type\":\"response.incomplete\",\"response\":{{\"incomplete_details\":{{\"reason\":\"{reason}\"}}}}}}");
+            let err = sse_response([line].into_iter().map(Ok::<_, std::io::Error>)).unwrap_err();
+            assert!(err.to_string().contains(said), "{err}");
+        }
+
         let empty = sse_response(["data: not json"].into_iter().map(|l| Ok::<_, std::io::Error>(l.to_string()))).unwrap_err();
         assert!(empty.to_string().contains("ended without a completed event"), "{empty}");
     }
@@ -565,6 +580,8 @@ mod tests {
         assert!(session.starts_with("ses_") && session.len() == 36, "{session}");
         assert_eq!(header(&openai_headers(None), "x-opencode-session"), Some(session));
         assert_eq!(header(&openai_headers(None), "authorization"), None);
+        assert_eq!(header(&h, "http-referer"), Some("https://github.com/yuvve/yeda"));
+        assert_eq!(header(&h, "x-openrouter-title"), Some("yeda"));
     }
 
     #[test]

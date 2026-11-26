@@ -712,7 +712,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
 /// True when stored Codex OAuth credentials expire soon enough to be worth renewing now.
 pub fn codex_refresh_due(key: &str) -> bool {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_secs() as i64).unwrap_or_default();
-    yeda_core::llm::CodexCredential::parse(key).is_ok_and(|c| c.needs_refresh(10 * 60, now))
+    yeda_core::llm::CodexCredential::parse(key).is_ok_and(|c| c.needs_refresh(5 * 60, now))
 }
 
 /// The secret-store account the secret is kept under.
