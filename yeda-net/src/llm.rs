@@ -122,6 +122,11 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+/// True when the server refused the credential.
+pub fn is_unauthorized(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<HttpError>().is_some_and(|e| e.status == 401)
+}
+
 fn post(url: &str, headers: &[(&str, String)], body: &Value) -> Result<Value> {
     // The key goes in a header, so only to https servers.
     yeda_core::require_https(url)?;
@@ -488,6 +493,13 @@ mod tests {
         calls.borrow_mut().clear();
         assert_eq!(send_paper(&b, &prompt, send).unwrap(), ("answer", None));
         assert_eq!(*calls.borrow(), [false]);
+    }
+
+    #[test]
+    fn only_a_401_is_unauthorized() {
+        assert!(is_unauthorized(&http_error(401)));
+        assert!(!is_unauthorized(&http_error(400)));
+        assert!(!is_unauthorized(&anyhow::anyhow!("HTTP 401")));
     }
 
     #[test]

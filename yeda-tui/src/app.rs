@@ -3094,6 +3094,10 @@ impl App {
     /// which `command` runs again. `None` while prompting.
     fn llm_key(&mut self, b: &yeda_core::llm::Bound, command: &str) -> Option<Option<String>> {
         let account = yeda_secrets::provider_account(&b.provider, b.url());
+        // A running summary saves renewed Codex credentials itself, so the cached copy may be stale.
+        if b.auth() == yeda_core::llm::Auth::Codex {
+            self.secrets.remove(&account);
+        }
         let got = if b.needs_key() {
             let what = match b.auth() {
                 yeda_core::llm::Auth::Codex => "Codex credentials (the compacted `~/.codex/auth.json`)",
@@ -3538,7 +3542,7 @@ impl App {
         if jobs.is_empty() {
             anyhow::bail!("nothing to fill in '{table_name}' (add ! to regenerate existing cells)");
         }
-        let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
+        let Some(mut key) = self.llm_key(&profile, command) else { return Ok(()) };
         if !self.confirm_many(&format!("summarize into {table_name}"), jobs.len(), command) {
             return Ok(());
         }
@@ -3555,7 +3559,7 @@ impl App {
                 }
                 let _ = tx.send(WorkerMsg::Started(format!("summarizing {} ({}/{total}) with {profile_name} at {server}…", job.key, i + 1)));
                 let paper = job.key.clone();
-                let result = ops::summarize(&profile, job, key.as_deref()).map_err(|e| format!("{e:#}"));
+                let result = ops::summarize_renewing(&profile, job, &mut key).map_err(|e| format!("{e:#}"));
                 let _ = tx.send(WorkerMsg::Finished { key: paper, result });
             }
         });

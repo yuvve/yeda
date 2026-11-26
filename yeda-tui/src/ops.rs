@@ -186,6 +186,31 @@ pub fn extract_annotations(lib: &Library, dir: &Path, r: &Ref, write: &mut dyn F
     Ok(total)
 }
 
+/// Renews a stored Codex credential in `key` and saves it, when it is due or `force`d. Returns
+/// whether it was renewed; false for other providers, an environment-supplied key or a credential
+/// that is not due.
+pub fn renew_codex(b: &yeda_core::llm::Bound, key: &mut Option<String>, force: bool) -> Result<bool> {
+    let account = yeda_secrets::provider_account(&b.provider, b.url());
+    let Some(current) = key.as_deref() else { return Ok(false) };
+    if b.auth() != yeda_core::llm::Auth::Codex || yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !(force || crate::setup::codex_refresh_due(current)) {
+        return Ok(false);
+    }
+    let renewed = yeda_net::llm::codex_refresh(current)?;
+    yeda_secrets::set(&account, &renewed)?;
+    *key = Some(renewed);
+    Ok(true)
+}
+
+/// `summarize` that renews a due Codex credential first, and once more after a 401; a rotated
+/// refresh token is saved before the request that uses it.
+pub fn summarize_renewing(bound: &yeda_core::llm::Bound, job: tables::Job, key: &mut Option<String>) -> Result<(Row, Option<String>)> {
+    renew_codex(bound, key, false)?;
+    match summarize(bound, job.clone(), key.as_deref()) {
+        Err(e) if yeda_net::llm::is_unauthorized(&e) && renew_codex(bound, key, true)? => summarize(bound, job, key.as_deref()),
+        sent => sent,
+    }
+}
+
 /// Sends one paper to the LLM; returns its row and the LLM's note, if any.
 pub fn summarize(bound: &yeda_core::llm::Bound, job: tables::Job, key: Option<&str>) -> Result<(Row, Option<String>)> {
     let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
@@ -246,6 +271,20 @@ pub fn ref_index(lib: &Library, key: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_due_codex_credential_is_renewed() {
+        use yeda_core::llm::{Auth, Bound, Provider};
+        let bound = |auth, base_url: &str| Bound { profile: "p".into(), provider: "p".into(), model: "m".into(), settings: Provider { base_url: base_url.into(), auth, alias: None } };
+        let far = "eyJhbGciOiJub25lIn0.eyJleHAiOjE5MDAwMDAwMDB9.x".to_string();
+        let mut key = Some(far.clone());
+        assert!(!renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut key, false).unwrap(), "not due");
+        assert!(!renew_codex(&bound(Auth::ApiKey, "https://x.test/v1"), &mut key, true).unwrap(), "not Codex");
+        assert!(!renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut None, true).unwrap(), "no credential");
+        assert_eq!(key, Some(far));
+        let err = renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut key, true).unwrap_err().to_string();
+        assert!(err.contains("expired") || err.contains("sign in"), "a bare token cannot be renewed: {err}");
+    }
 
     #[test]
     fn migration_copies_keeps_ids_and_leaves_the_originals() {
