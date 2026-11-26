@@ -68,9 +68,8 @@ LLM features use a profile from `yeda.toml`: a provider (where to connect and ho
 default_llm = "claude"
 
 [providers.claude]
-base_url = "https://api.anthropic.com"
 protocol = "anthropic"
-auth = "oauth"
+auth = "oauth"                    # fixes the server; other providers need a base_url
 
 [llm.claude]
 provider = "claude"
