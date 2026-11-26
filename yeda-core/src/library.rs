@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn binds_profiles_to_their_provider_and_refuses_a_missing_one() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
+        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let (name, a) = lib.llm_profile(Some("a")).unwrap();
         let (_, b) = lib.llm_profile(Some("b")).unwrap();

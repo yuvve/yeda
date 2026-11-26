@@ -56,6 +56,8 @@ impl Auth {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
+    /// Required, except where the protocol and auth fix it: see [`Provider::fixed_url`].
+    #[serde(default)]
     pub base_url: String,
     pub protocol: Protocol,
     pub auth: Auth,
@@ -65,9 +67,21 @@ pub struct Provider {
 }
 
 impl Provider {
+    /// The one server an OAuth credential works on; its URL is not configurable.
+    pub fn fixed_url(protocol: Protocol, auth: Auth) -> Option<&'static str> {
+        match (protocol, auth) {
+            (Protocol::OpenaiResponses, Auth::Oauth) => Some("https://api.openai.com/v1"),
+            (Protocol::Anthropic, Auth::Oauth) => Some("https://api.anthropic.com"),
+            _ => None,
+        }
+    }
+
     /// Where requests, and so the credential, go.
     pub fn url(&self) -> &str {
-        self.base_url.trim_end_matches('/')
+        match Self::fixed_url(self.protocol, self.auth) {
+            Some(fixed) if self.base_url.is_empty() => fixed,
+            _ => self.base_url.trim_end_matches('/'),
+        }
     }
 
     pub fn needs_key(&self) -> bool {
@@ -77,7 +91,9 @@ impl Provider {
     /// Checks what a request would otherwise fail on: the address, and a credential the protocol
     /// cannot use.
     pub fn check(&self) -> Result<()> {
-        if !self.base_url.starts_with("https://") {
+        if let Some(fixed) = Self::fixed_url(self.protocol, self.auth) {
+            anyhow::ensure!(self.base_url.is_empty(), "{} with auth = \"{}\" always uses {fixed}: remove base_url", self.protocol.name(), self.auth.name());
+        } else if !self.base_url.starts_with("https://") {
             anyhow::bail!("{}: the base URL starts with https://", self.base_url);
         }
         match (self.protocol, self.auth) {
@@ -140,7 +156,7 @@ mod tests {
 
     #[test]
     fn providers_check_their_address_and_auth_pair() {
-        let codex = provider("base_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap();
+        let codex = provider("protocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap();
         assert_eq!((codex.url(), codex.protocol, codex.auth, codex.needs_key()), ("https://api.openai.com/v1", Protocol::OpenaiResponses, Auth::Oauth, true));
         codex.check().unwrap();
         let local = provider("base_url = \"https://localhost:8080/v1/\"\nprotocol = \"openai\"\nauth = \"none\"\n").unwrap();
@@ -151,6 +167,13 @@ mod tests {
         assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"opencode-go\"\nauth = \"oauth\"\n").unwrap().check().is_err());
         assert!(provider("base_url = \"https://x.test/v1\"\nprotocol = \"openai-responses\"\nauth = \"api-key\"\n").unwrap().check().is_err());
         assert!(provider("base_url = \"http://x.test/v1\"\nprotocol = \"openai\"\nauth = \"api-key\"\n").unwrap().check().unwrap_err().to_string().contains("https://"));
+        let err = provider("base_url = \"https://x.test/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n").unwrap().check().unwrap_err().to_string();
+        assert!(err.contains("always uses https://api.openai.com/v1") && err.contains("remove base_url"), "{err}");
+        assert!(provider("base_url = \"https://x.test\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n").unwrap().check().is_err());
+        let claude = provider("protocol = \"anthropic\"\nauth = \"oauth\"\n").unwrap();
+        claude.check().unwrap();
+        assert_eq!(claude.url(), "https://api.anthropic.com");
+        assert!(provider("protocol = \"openai\"\nauth = \"api-key\"\n").unwrap().check().is_err());
         assert!(provider("base_url = \"https://x.test\"\nprotocol = \"gemini\"\nauth = \"api-key\"\n").is_err());
     }
 

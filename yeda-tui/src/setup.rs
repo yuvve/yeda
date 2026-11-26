@@ -281,6 +281,18 @@ impl SetupForm {
         }
     }
 
+    /// Whether the field cannot be typed in: an OAuth provider's URL is fixed.
+    pub fn locked(&self, field: usize) -> bool {
+        self.kind == Kind::Provider && field == 2 && Provider::fixed_url(protocol_of(&self.values[3]), auth_of(&self.values[4])).is_some()
+    }
+
+    /// Shows the fixed URL while the protocol and auth call for one.
+    pub fn lock_url(&mut self) {
+        if let Some(url) = (self.kind == Kind::Provider).then(|| Provider::fixed_url(protocol_of(&self.values[3]), auth_of(&self.values[4]))).flatten() {
+            self.values[2] = url.into();
+        }
+    }
+
     /// Each field's label and hint.
     pub fn fields(&self) -> Vec<(String, &'static str)> {
         let fields: &[(&str, &str)] = match self.kind {
@@ -303,7 +315,7 @@ impl SetupForm {
                 &[
                     ("Name", "profiles name it: [llm.<name>] provider = \"…\""),
                     ("Preset", CHOICE_HINT),
-                    ("Base URL", "filled in by the preset; any https server for openai-compatible"),
+                    ("Base URL", if self.locked(2) { "fixed: an OAuth sign-in only works on this server" } else { "filled in by the preset; any https server for openai-compatible" }),
                     ("Protocol", CHOICE_HINT),
                     ("Auth", CHOICE_HINT),
                     ("Alias", ALIAS_HINT),
@@ -426,7 +438,9 @@ impl SetupForm {
         let mut t = toml::Table::new();
         let setup = match self.kind {
             Kind::Provider => {
-                t.insert("base_url".into(), v[2].trim_end_matches('/').into());
+                if Provider::fixed_url(protocol_of(v[3]), auth_of(v[4])).is_none() {
+                    t.insert("base_url".into(), v[2].trim_end_matches('/').into());
+                }
                 t.insert("protocol".into(), v[3].to_lowercase().into());
                 t.insert("auth".into(), v[4].to_lowercase().into());
                 if !v[5].is_empty() {
@@ -768,7 +782,7 @@ mod tests {
 
     #[test]
     fn choice_fields_offer_known_values() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n";
+        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let llm = SetupForm::new(Kind::Llm, "new", &lib);
         assert_eq!(llm.choice(1), Some(Choice::BoundProviders));
@@ -828,7 +842,7 @@ mod tests {
         assert_eq!(f.values, ["codex", "codex", "https://api.openai.com/v1", "openai-responses", "oauth", "", ""]);
         // Codex signs in with an empty field, so the section builds without a credential.
         let (t, s) = f.section().unwrap();
-        assert_eq!(t.to_string(), "base_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n");
+        assert_eq!(t.to_string(), "protocol = \"openai-responses\"\nauth = \"oauth\"\n");
         assert_eq!(account(&s), "provider:codex:https://api.openai.com/v1");
 
         f.values[1] = "claude".into();
@@ -881,7 +895,7 @@ mod tests {
 
     #[test]
     fn builds_profiles_on_saved_providers() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
+        let cfg = "[providers.claude]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
         let lib = Library::parse(Some(&format!("{cfg}[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n")), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "cx", &lib);
         assert_eq!(f.values, ["cx", "codex", "gpt-5.1"], "an existing profile fills its form");
@@ -911,7 +925,7 @@ mod tests {
 
     #[test]
     fn a_profile_tests_with_its_providers_credential() {
-        let cfg = "[providers.cx]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"cx\"\nmodel = \"gpt-5.1\"\n[llm.b]\nprovider = \"cx\"\nmodel = \"gpt-5.1-mini\"\n[llm.c]\nprovider = \"local\"\nmodel = \"qwen\"\n";
+        let cfg = "[providers.cx]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n[providers.local]\nbase_url = \"https://localhost:8080/v1\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"cx\"\nmodel = \"gpt-5.1\"\n[llm.b]\nprovider = \"cx\"\nmodel = \"gpt-5.1-mini\"\n[llm.c]\nprovider = \"local\"\nmodel = \"qwen\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let lookup = |account: &str| Ok::<_, anyhow::Error>((account == "provider:cx:https://api.openai.com/v1").then(|| "cred".to_string()));
         let (a, key) = profile_credential(&lib.providers, "a", &lib.llm["a"], lookup).unwrap();
@@ -948,6 +962,21 @@ mod tests {
         let rows = overview();
         assert!(rows.iter().all(|r| !r[1].is_empty()));
         assert_eq!((rows[0][0].as_str(), rows[0][2].as_str()), ("LLM providers", "setup provider"));
+    }
+
+    #[test]
+    fn an_oauth_provider_has_a_fixed_url_that_is_not_saved() {
+        let lib = Library::parse(None, None, [], None).unwrap();
+        let mut f = SetupForm::new(Kind::Provider, "", &lib);
+        f.values[..6].clone_from_slice(&["c".into(), String::new(), "https://elsewhere.example".into(), "openai-responses".into(), "oauth".into(), String::new()]);
+        assert!(f.locked(2) && !f.locked(1));
+        f.lock_url();
+        assert_eq!(f.values[2], "https://api.openai.com/v1");
+        let (t, setup) = f.section().unwrap();
+        assert!(!t.contains_key("base_url"));
+        assert_eq!(account(&setup), "provider:c:https://api.openai.com/v1");
+        f.values[4] = "api-key".into();
+        assert!(!f.locked(2));
     }
 
     #[test]

@@ -541,10 +541,18 @@ SETUP  ( :setup, :config )
     default_llm = "claude"
 
     [providers.claude]
-    base_url = "https://api.anthropic.com"
     protocol = "anthropic"    # or openai, mistral, openrouter, opencode-go,
                               # openai-responses
     auth = "oauth"            # or api-key, or none for a server without a key
+
+  The oauth providers (anthropic, openai-responses) always use their own server
+  (api.anthropic.com, api.openai.com/v1), so yeda.toml must not set a base_url
+  for them; every other provider needs one:
+
+    [providers.local]
+    base_url = "https://localhost:8080/v1"
+    protocol = "openai"
+    auth = "none"
 
     [llm.claude]
     provider = "claude"

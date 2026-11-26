@@ -1396,7 +1396,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 mod tests {
     #[test]
     fn draws_the_discover_form_with_what_it_uses() {
-        let lib = yeda_core::library::Library::parse(Some("[providers.p]\nbase_url = \"https://x.org\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("[providers.p]\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let seed = yeda_core::library::Ref { key: "seed".into(), title: "Seed paper".into(), ..Default::default() };
         let mut app = crate::app::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         let mut form = crate::discoverform::DiscoverForm::new(&app.lib, &[&seed], None);

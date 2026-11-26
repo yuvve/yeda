@@ -1784,6 +1784,7 @@ impl App {
             if form.kind == setup::Kind::Storage && field == 1 {
                 form.storage_kind_changed();
             }
+            form.lock_url();
         }
         self.cursor_back = 0;
     }
@@ -1969,6 +1970,7 @@ impl App {
                 let sel = form.sel;
                 self.edit_in_editor(TextTarget::Setup(sel));
             }
+            _ if form.locked(form.sel) => {}
             code => {
                 if clear_on_type {
                     form.values[form.sel].clear();
@@ -1984,6 +1986,7 @@ impl App {
             if form.kind == setup::Kind::Storage && form.sel == 1 {
                 form.storage_kind_changed();
             }
+            form.lock_url();
             form.sync_columns();
         }
         self.sync_combo();
@@ -2300,7 +2303,7 @@ impl App {
         let stored = self.secrets.get(&old).cloned().or_else(|| yeda_secrets::stored(&old).ok().flatten());
         let from_env = yeda_secrets::from_env(&new, p.alias.as_deref()).is_some();
         let codex = p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses;
-        if old != new && codex {
+        if old_url != p.url() && codex {
             return self.test_and_save_setup(section, setup::Setup::Provider(name, p));
         }
         if stored.is_none() && !from_env && yeda_secrets::from_env(&old, alias.as_deref()).is_none() {
@@ -5272,7 +5275,7 @@ mod tests {
 
     #[test]
     fn combo_keys_are_nested_inside_the_setup_form() {
-        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "", &lib);
         assert_eq!(form.values, [""; 7], "a new provider form starts empty");
         let mut app = super::App::new(
