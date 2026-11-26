@@ -700,8 +700,9 @@ fn draw_setup_pick(f: &mut Frame, app: &App, main: Rect) {
         })
         .collect();
     let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
-    let hint = match picker.kind {
-        crate::setup::Kind::Llm | crate::setup::Kind::Storage => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
+    let hint = match (app.mode, picker.kind) {
+        (Mode::Confirm, _) => " Press Ctrl+D again to delete · Esc cancel ",
+        (_, crate::setup::Kind::Llm | crate::setup::Kind::Storage) => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
         _ => " Enter edit/add · Ctrl+D delete · Esc back ",
     };
     let width = (lines + 2).max(hint.chars().count() as u16).min(main.width.saturating_sub(4));

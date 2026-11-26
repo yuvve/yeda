@@ -1012,7 +1012,7 @@ impl App {
                 match pending {
                     Some((action, name)) if action == "setup-delete" => {
                         self.mode = Mode::SetupPick;
-                        if k.code == KeyCode::Char('y') {
+                        if k.code == KeyCode::Char('d') && k.modifiers.contains(KeyModifiers::CONTROL) {
                             self.delete_setup_entry(&name);
                         } else {
                             self.status = "cancelled".into();
@@ -2182,7 +2182,7 @@ impl App {
             KeyCode::Char('*') if self.input.is_empty() => self.make_default(),
             KeyCode::Char('d') if ctrl => {
                 let Some(option) = picker.options.get(picker.sel).filter(|o| !o.new) else { return };
-                self.status = format!("Delete {} '{}'? (y/N)", setup::kind_name(picker.kind), option.name);
+                self.status = format!("Delete {} '{}'?", setup::kind_name(picker.kind), option.name);
                 self.confirming = Some(("setup-delete".into(), option.name.clone()));
                 self.mode = Mode::Confirm;
             }
@@ -5373,33 +5373,39 @@ columns = ["group"]
         let lib = crate::load_library(&dir).unwrap();
         let mut app = App::new(dir.clone(), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         let delete = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
-        let yes = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
 
         app.submit(Prompt::Command, "setup provider");
         app.on_key(delete);
         assert!(app.mode == Mode::Confirm && app.status.contains("'p'"));
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let screen: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(screen.contains("Press Ctrl+D again to delete"));
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.mode == Mode::SetupPick);
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(delete);
         assert!(app.status.contains("used by LLM profile 'a'"));
 
         app.submit(Prompt::Command, "setup storage");
         app.setup_picker.as_mut().unwrap().sel = 1;
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(delete);
         assert!(app.status.contains("used by reference 'paper'"));
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
         app.setup_picker.as_mut().unwrap().sel = 0;
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(delete);
         assert!(app.lib.fulltext.location.is_none() && !app.lib.locations.contains_key("unused"));
         assert!(app.lib.locations.contains_key("used"));
 
         app.submit(Prompt::Command, "setup llm");
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.mode == Mode::SetupPick && app.lib.llm.contains_key("a"));
+        app.on_key(delete);
+        app.on_key(delete);
         assert!(app.lib.default_llm.is_none() && app.lib.llm.is_empty());
         assert!(app.setup_picker.as_ref().unwrap().options.is_empty());
         app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
@@ -5409,11 +5415,11 @@ columns = ["group"]
 
         app.submit(Prompt::Command, "setup provider");
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(delete);
         assert!(app.lib.providers.is_empty());
         app.submit(Prompt::Command, "setup table");
         app.on_key(delete);
-        app.on_key(yes);
+        app.on_key(delete);
         assert!(app.lib.tables.is_empty());
         assert_eq!(fs::read_to_string(row).unwrap(), "[t]\ngroup = \"keep me\"\n");
         app.undo_or_redo(false);

@@ -203,17 +203,21 @@ THE COMMAND LINE  ( : )
 
   :setup provider, llm, storage and table open a list of the existing ones. Type
   to filter it; Enter opens the selected one's form, filled in. Typing a name
-  that is not there offers "+ new", which opens an empty form with that name. In
-  the llm and storage lists, * on an empty input makes the selected one the
-  default (default_llm, or [fulltext] location). Picking a preset in the
-  provider form fills its base URL, protocol and auth.
+  that is not there offers "+ new", which opens an empty form with that name.
+  Press Ctrl+D, then Ctrl+D again to delete the selected entry, or Esc to cancel.
+  Deleting an entry leaves PDFs, table data and credentials untouched. Providers
+  used by a profile and locations used by a PDF cannot be deleted.
+
+  In the llm and storage lists, * on an empty input makes the selected one the
+  default (default_llm, or [fulltext] location). Deleting it clears that default.
+  Picking a preset in the provider form fills its base URL and auth.
 
   In an existing provider's form, leave the key blank to keep the stored key.
   Renaming the provider renames it in every profile that uses it. Changing the
   base URL asks y/n before the key moves to the new server: a key is only ever
   sent to the URL it was stored for.
 
-  In :setup, fields for presets, providers, protocols, auth, models, sorts and
+  In :setup, fields for presets, providers, auth, models, sorts and
   reference types open a fuzzy list with every option shown and the current
   value highlighted. Typing replaces the value and filters the list; Up/Down
   or Tab/shift-Tab moves, Enter uses the highlighted value, Esc puts the old
@@ -541,22 +545,15 @@ SETUP  ( :setup, :config )
     default_llm = "claude"
 
     [providers.claude]
-    protocol = "anthropic"    # or openai, mistral, openrouter, opencode-go,
-                              # openai-responses
-    auth = "oauth"            # or api-key, or none for a server without a key
-
-  The oauth providers (anthropic, openai-responses) always use their own server
-  (api.anthropic.com, api.openai.com/v1), so yeda.toml must not set a base_url
-  for them; every other provider needs one:
-
-    [providers.local]
-    base_url = "https://localhost:8080/v1"
-    protocol = "openai"
-    auth = "none"
+    base_url = "https://api.anthropic.com/v1"
+    auth = "api-key"
 
     [llm.claude]
     provider = "claude"
     model = "claude-opus-5-5"
+
+  For an OpenAI-compatible server without a key, use auth = "none". To sign in
+  with ChatGPT, set auth = "codex" without a base_url.
 
 TRUST
 
