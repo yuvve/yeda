@@ -201,8 +201,17 @@ THE COMMAND LINE  ( : )
   The cursor keys, Backspace, Delete and Ctrl-G work in every text box: the
   searches, the filter form, :setup and the tag and collection pickers.
 
-  :setup provider and :setup llm start with every field empty. Picking a preset
-  in the provider form fills its base URL, protocol and auth.
+  :setup provider, llm, storage and table open a list of the existing ones. Type
+  to filter it; Enter opens the selected one's form, filled in. Typing a name
+  that is not there offers "+ new", which opens an empty form with that name. In
+  the llm and storage lists, * on an empty input makes the selected one the
+  default (default_llm, or [fulltext] location). Picking a preset in the
+  provider form fills its base URL, protocol and auth.
+
+  In an existing provider's form, leave the key blank to keep the stored key.
+  Renaming the provider renames it in every profile that uses it. Changing the
+  base URL asks y/n before the key moves to the new server: a key is only ever
+  sent to the URL it was stored for.
 
   In :setup, fields for presets, providers, protocols, auth, models, sorts and
   reference types open a fuzzy list with every option shown and the current
@@ -377,9 +386,9 @@ FINDING PAPERS  ( :discover[!] [--like] [--llm <profile>] [what] )
 
 TABLES  ( :table [name], T )
 
-  Define literature tables with :setup table [name], a form with the
-  columns and what each holds, or in yeda.toml under [tables.<name>], each
-  with its columns and an optional describe per column:
+  Define literature tables with :setup table, a form with the columns and what
+  each holds, or in yeda.toml under [tables.<name>], each with its columns and
+  an optional describe per column:
 
     [tables.lit]
     columns = ["contribution", "group", "subproblem"]
@@ -433,7 +442,7 @@ MAIN WINDOW
   lighter than the terminal's background, so a line is easy to follow. A
   terminal that does not report its background gets plain rows.
 
-STORAGE  ( :setup storage [name] )
+STORAGE  ( :setup storage )
 
   PDFs are kept in locations, each a [locations.<name>] table with a kind:
 
@@ -450,11 +459,11 @@ STORAGE  ( :setup storage [name] )
     kind = "dropbox"
     folder = "pdfs"          # inside yeda's Dropbox app folder
 
-  :setup storage opens a form: the location's name, its kind (local, webdav
-  or dropbox), the path, URL or folder, then the sign-in. It tests the
-  connection before saving, and makes the folder if it is missing. A local
-  location is saved in this device's config.toml, since its path differs
-  between devices; the others go in yeda.toml.
+  :setup storage lists the locations, then opens a form: the location's name,
+  its kind (local, webdav or dropbox), the path, URL or folder, then the
+  sign-in. It tests the connection before saving, and makes the folder if it
+  is missing. A local location is saved in this device's config.toml, since its
+  path differs between devices; the others go in yeda.toml.
 
     local    Only the path.
     webdav   User and password; the password goes in the secret store.
@@ -522,7 +531,7 @@ SETUP  ( :setup, :config )
 
   :setup lists what it sets, as it is now: LLM providers and profiles,
   storage locations, the OpenAlex key, web search, library proxies and tables.
-  Enter opens one's form. :config opens yeda.toml in $EDITOR, :config device
+  Enter opens that category's list or form. :config opens yeda.toml in $EDITOR, :config device
   this device's config.toml.
 
   An LLM profile names a provider and a model; the provider holds where to

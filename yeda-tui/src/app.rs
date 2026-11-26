@@ -45,6 +45,8 @@ pub enum Mode {
     Setup,
     /// The `:setup` list of everything it sets.
     SetupMenu,
+    /// The existing entries of one `:setup` kind, to edit or to add to.
+    SetupPick,
     /// `:setup web-search`: the provider groups and the discover limits.
     WebSearch,
     /// `:discover` without arguments: what to search from and which LLM to ask.
@@ -150,6 +152,19 @@ pub enum Prompt {
 
 /// Applies an editing key to `buf` with its cursor `back` characters from the end; false for
 /// keys it doesn't handle.
+/// Moves a provider's name in `[providers]` and in every `[llm.*]` profile that uses it.
+fn rename_provider(root: &mut toml::Table, old: &str, new: &str) {
+    if let Some(providers) = root.get_mut("providers").and_then(|v| v.as_table_mut()) {
+        providers.remove(old);
+    }
+    let profiles = root.get_mut("llm").and_then(|v| v.as_table_mut());
+    for profile in profiles.into_iter().flat_map(|t| t.iter_mut()).filter_map(|(_, v)| v.as_table_mut()) {
+        if profile.get("provider").and_then(|v| v.as_str()) == Some(old) {
+            profile.insert("provider".into(), new.into());
+        }
+    }
+}
+
 pub(crate) fn edit_line(buf: &mut String, back: &mut usize, code: KeyCode, ctrl: bool) -> bool {
     let len = buf.chars().count();
     *back = (*back).min(len);
@@ -450,6 +465,19 @@ impl Chooser {
     }
 }
 
+/// One row of the picker: the entry's name, how it is set, and whether Enter adds it.
+pub struct SetupOption {
+    pub name: String,
+    pub detail: String,
+    pub new: bool,
+}
+
+pub struct SetupPicker {
+    pub kind: setup::Kind,
+    pub options: Vec<SetupOption>,
+    pub sel: usize,
+}
+
 /// A fuzzy dropdown over one `:setup` field. A pick writes into the field; typing still works.
 pub struct Combo {
     pub choice: setup::Choice,
@@ -586,6 +614,8 @@ pub struct App {
     /// The `:setup` list's rows, from `setup::overview`; empty when it is closed.
     pub setup_menu: Vec<[String; 3]>,
     pub setup_menu_sel: usize,
+    /// The list of existing providers, LLM profiles, storage locations or tables, while it is open or its form is.
+    pub setup_picker: Option<SetupPicker>,
     /// The `:setup web-search` popup, staged until Enter.
     pub web_search: Option<crate::websearch::WebSearchForm>,
     pub discover_form: Option<crate::discoverform::DiscoverForm>,
@@ -732,6 +762,7 @@ impl App {
             found_marked: BTreeSet::new(),
             setup_menu: Vec::new(),
             setup_menu_sel: 0,
+            setup_picker: None,
             web_search: None,
             setup_from_web_search: false,            setup_job: None,
             combo: None,
@@ -1000,6 +1031,7 @@ impl App {
             Mode::Filter => self.filter_key(k),
             Mode::Setup => self.setup_key(k),
             Mode::SetupMenu => self.setup_menu_key(k),
+            Mode::SetupPick => self.setup_pick_key(k),
             Mode::WebSearch => self.websearch_key(k),
             Mode::Discover => self.discover_form_key(k),
             Mode::Found => self.found_key(k),
@@ -1817,6 +1849,15 @@ impl App {
             }
             return;
         }
+        if let Some(form) = self.setup.as_mut().filter(|form| form.confirm_move) {
+            form.confirm_move = false;
+            if k.code == KeyCode::Char('y') {
+                form.moving_confirmed = true;
+                return self.setup_key(KeyEvent::from(KeyCode::Enter));
+            }
+            self.status = "the key stays where it is; change the URL back or type a key".into();
+            return;
+        }
         self.sync_combo();
         if self.combo_key(k, ctrl) {
             return;
@@ -1914,57 +1955,11 @@ impl App {
                     }
                     Err(e) => self.status = format!("{e:#}"),
                 },
-                Ok((section, setup)) => {
-                    let secret = form.secret();
-                    let (tx, rx) = mpsc::channel();
-                    let account = setup::account(&setup);
-                    let stored_login = || yeda_secrets::get(&account).ok().flatten();
-                    let probe = setup.clone();
-                    let test_secret = match &setup {
-                        setup::Setup::Searxng(_) => secret.clone().or_else(stored_login),
-                        _ => secret.clone(),
-                    };
-                    let providers = self.lib.providers.clone();
-                    // An empty field asks a Codex provider to sign in instead: stored credentials
-                    // reauthorize with their own client and host id, a missing one registers anew.
-                    let codex_empty = secret.is_none()
-                        && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
-                    if codex_empty {
-                        let (issued, host, hint) = yeda_secrets::stored(&account)
-                            .ok()
-                            .flatten()
-                            .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
-                            .map_or((None, None, None), |c| (c.client_id, c.host_id, c.id_token));
-                        let Ok(sign_in) = yeda_net::codex::start(issued.as_deref(), host.as_deref(), hint.as_deref()) else {
-                            self.status = "could not start the sign-in listener".into();
-                            return;
-                        };
-                        let url = sign_in.url.clone();
-                        form.sign_in_url = Some(url.clone());
-                        std::thread::spawn(move || {
-                            let signed = sign_in.finish(std::time::Duration::from_secs(10 * 60));
-                            let _ = tx.send(match signed {
-                                Ok(credentials) => {
-                                    // Stored before the test, so fixing the model does not ask for another sign-in.
-                                    let _ = yeda_secrets::set(&account, &credentials);
-                                    setup::test(&providers, &probe, Some(&credentials)).map(|_| Some(credentials))
-                                }
-                                Err(e) => Err(e),
-                            });
-                        });
-                        form.testing = true;
-                        self.status = "waiting for the browser to sign in with ChatGPT…".into();
-                        self.setup_job = Some(SetupJob { rx, section, setup });
-                        self.xdg_open(&url);
-                        return;
-                    }
-                    std::thread::spawn(move || {
-                        let _ = tx.send(setup::test(&providers, &probe, test_secret.as_deref()).map(|_| secret));
-                    });
-                    form.testing = true;
-                    self.status = "testing the connection…".into();
-                    self.setup_job = Some(SetupJob { rx, section, setup });
+                Ok((_, setup::Setup::Provider(name, _))) if self.lib.providers.contains_key(&name) && form.origin.as_ref().map(|(old, _)| old.as_str()) != Some(name.as_str()) => {
+                    self.status = format!("a provider named '{name}' exists already; pick it in :setup provider to edit it");
                 }
+                Ok((section, setup::Setup::Provider(name, p))) if form.origin.is_some() && form.secret().is_none() && p.auth != yeda_core::llm::Auth::None => self.keep_provider_key(section, name, p),
+                Ok((section, setup)) => self.test_and_save_setup(section, setup),
                 Err(e) => self.status = format!("{e:#}"),
             },
             KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
@@ -2009,7 +2004,10 @@ impl App {
             }
         }
         self.mode = Mode::Normal;
-        if !self.setup_menu.is_empty() {
+        if self.setup_picker.is_some() {
+            self.refresh_setup_picker();
+            self.mode = Mode::SetupPick;
+        } else if !self.setup_menu.is_empty() {
             self.open_setup_menu();
         }
     }
@@ -2095,7 +2093,7 @@ impl App {
     }
 
     fn open_setup_menu(&mut self) {
-        self.setup_menu = setup::overview(&self.lib);
+        self.setup_menu = setup::overview();
         self.setup_menu_sel = self.setup_menu_sel.min(self.setup_menu.len() - 1);
         self.mode = Mode::SetupMenu;
     }
@@ -2110,9 +2108,11 @@ impl App {
             KeyCode::Enter => {
                 let command = self.setup_menu[self.setup_menu_sel][2].clone();
                 self.submit(Prompt::Command, &command);
-                if self.mode != Mode::Setup {
+                if !matches!(self.mode, Mode::Setup | Mode::SetupPick) {
                     self.setup_menu.clear();
-                    self.mode = Mode::Normal;
+                    if self.mode == Mode::SetupMenu {
+                        self.mode = Mode::Normal;
+                    }
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -2121,6 +2121,90 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn open_setup_picker(&mut self, kind: setup::Kind) {
+        self.input.clear();
+        self.cursor_back = 0;
+        self.setup_picker = Some(SetupPicker { kind, options: Vec::new(), sel: 0 });
+        self.refresh_setup_picker();
+        self.mode = Mode::SetupPick;
+    }
+
+    /// Fuzzy matches of the typed text among the existing entries, then an entry that adds it.
+    fn refresh_setup_picker(&mut self) {
+        let Some(picker) = &mut self.setup_picker else { return };
+        let query = self.input.trim().to_string();
+        let mut scored: Vec<(u32, (String, String))> = setup::entries(picker.kind, &self.lib)
+            .into_iter()
+            .filter_map(|e| if query.is_empty() { Some((0, e)) } else { self.searcher.score(&query, &e.0).map(|s| (s, e)) })
+            .collect();
+        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        let exists = setup::entries(picker.kind, &self.lib).iter().any(|(name, _)| *name == query);
+        picker.options = scored.into_iter().map(|(_, (name, detail))| SetupOption { name, detail, new: false }).collect();
+        if !query.is_empty() && !exists {
+            picker.options.push(SetupOption { detail: String::new(), name: query, new: true });
+        }
+        picker.sel = picker.sel.min(picker.options.len().saturating_sub(1));
+    }
+
+    fn close_setup_picker(&mut self) {
+        self.setup_picker = None;
+        self.input.clear();
+        self.mode = Mode::Normal;
+        if !self.setup_menu.is_empty() {
+            self.open_setup_menu();
+        }
+    }
+
+    fn setup_pick_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(picker) = &mut self.setup_picker else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let n = picker.options.len();
+        match k.code {
+            KeyCode::Esc => self.close_setup_picker(),
+            KeyCode::Down | KeyCode::Tab if n > 0 => picker.sel = (picker.sel + 1) % n,
+            KeyCode::Char('n') if ctrl && n > 0 => picker.sel = (picker.sel + 1) % n,
+            KeyCode::Up | KeyCode::BackTab if n > 0 => picker.sel = (picker.sel + n - 1) % n,
+            KeyCode::Char('p') if ctrl && n > 0 => picker.sel = (picker.sel + n - 1) % n,
+            KeyCode::Char('*') if self.input.is_empty() => self.make_default(),
+            KeyCode::Enter => {
+                let Some(option) = picker.options.get(picker.sel) else { return };
+                let kind = picker.kind;
+                self.setup = Some(SetupForm::new(kind, &option.name.clone(), &self.lib));
+                self.mode = Mode::Setup;
+                self.input.clear();
+            }
+            code => {
+                if edit_line(&mut self.input, &mut self.cursor_back, code, ctrl) {
+                    self.refresh_setup_picker();
+                }
+            }
+        }
+    }
+
+    /// Makes the highlighted LLM profile `default_llm`, or the highlighted storage location `[fulltext] location`.
+    fn make_default(&mut self) {
+        let Some(picker) = &self.setup_picker else { return };
+        let Some(option) = picker.options.get(picker.sel).filter(|o| !o.new) else { return };
+        let name = option.name.clone();
+        let result = match picker.kind {
+            setup::Kind::Llm => self.lib.update_config(|t| {
+                t.insert("default_llm".into(), name.clone().into());
+                Ok(())
+            }),
+            setup::Kind::Storage => self.lib.update_config(|t| {
+                config_section(t, "fulltext")?.insert("location".into(), name.clone().into());
+                Ok(())
+            }),
+            _ => return,
+        };
+        self.after_config_change(result);
+        self.refresh_setup_picker();
+        self.status = format!("{name} is the default");
     }
 
     /// Saves a `:setup` form whose connection test passed: the secret to the secret store, the rest to yeda.toml.
@@ -2206,6 +2290,98 @@ impl App {
         self.save_setup(job.section, &stored);
     }
 
+    /// Enter on an edited provider whose key field is empty: the key stored for the old name and URL
+    /// moves to the new ones, after a y/n when the URL changed, since the key is then sent elsewhere.
+    fn keep_provider_key(&mut self, section: toml::Table, name: String, p: yeda_core::llm::Provider) {
+        let Some(form) = &mut self.setup else { return };
+        let Some((old_name, old_url)) = form.origin.clone() else { return };
+        let (old, new) = (yeda_secrets::provider_account(&old_name, &old_url), yeda_secrets::provider_account(&name, p.url()));
+        let alias = self.lib.providers.get(&old_name).and_then(|o| o.alias.clone());
+        let stored = self.secrets.get(&old).cloned().or_else(|| yeda_secrets::stored(&old).ok().flatten());
+        let from_env = yeda_secrets::from_env(&new, p.alias.as_deref()).is_some();
+        let codex = p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses;
+        if old != new && codex {
+            return self.test_and_save_setup(section, setup::Setup::Provider(name, p));
+        }
+        if stored.is_none() && !from_env && yeda_secrets::from_env(&old, alias.as_deref()).is_none() {
+            self.status = format!("no key is stored for '{old_name}'; type one in the last field");
+            return;
+        }
+        if old == new || (stored.is_none() && from_env) {
+            return self.save_setup(section, "");
+        }
+        let Some(secret) = stored else {
+            self.status = "the old key comes from an environment variable; type the key for the new URL in the last field".into();
+            return;
+        };
+        if old_url != p.url() && !std::mem::take(&mut form.moving_confirmed) {
+            form.confirm_move = true;
+            self.status = format!("move the key of '{old_name}' from {old_url} to {}? (y/n)", p.url());
+            return;
+        }
+        form.moving_confirmed = false;
+        let note = match yeda_secrets::set(&new, &secret) {
+            Ok(()) => String::new(),
+            Err(e) => format!(" (key kept for this session only: {e:#})"),
+        };
+        self.secrets.insert(new, secret);
+        self.save_setup(section, &note);
+    }
+
+    /// Tests the connection the form describes in a thread, signing in first when a Codex provider has no credential; saved when it passes.
+    fn test_and_save_setup(&mut self, section: toml::Table, setup: setup::Setup) {
+        let Some(form) = &mut self.setup else { return };
+        let secret = form.secret();
+        let (tx, rx) = mpsc::channel();
+        let account = setup::account(&setup);
+        let stored_login = || yeda_secrets::get(&account).ok().flatten();
+        let probe = setup.clone();
+        let test_secret = match &setup {
+            setup::Setup::Searxng(_) => secret.clone().or_else(stored_login),
+            _ => secret.clone(),
+        };
+        let providers = self.lib.providers.clone();
+        // An empty field asks a Codex provider to sign in instead: stored credentials
+        // reauthorize with their own client and host id, a missing one registers anew.
+        let codex_empty = secret.is_none()
+            && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Oauth && p.protocol == yeda_core::llm::Protocol::OpenaiResponses);
+        if codex_empty {
+            let (issued, host, hint) = yeda_secrets::stored(&account)
+                .ok()
+                .flatten()
+                .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
+                .map_or((None, None, None), |c| (c.client_id, c.host_id, c.id_token));
+            let Ok(sign_in) = yeda_net::codex::start(issued.as_deref(), host.as_deref(), hint.as_deref()) else {
+                self.status = "could not start the sign-in listener".into();
+                return;
+            };
+            let url = sign_in.url.clone();
+            form.sign_in_url = Some(url.clone());
+            std::thread::spawn(move || {
+                let signed = sign_in.finish(std::time::Duration::from_secs(10 * 60));
+                let _ = tx.send(match signed {
+                    Ok(credentials) => {
+                        // Stored before the test, so fixing the model does not ask for another sign-in.
+                        let _ = yeda_secrets::set(&account, &credentials);
+                        setup::test(&providers, &probe, Some(&credentials)).map(|_| Some(credentials))
+                    }
+                    Err(e) => Err(e),
+                });
+            });
+            form.testing = true;
+            self.status = "waiting for the browser to sign in with ChatGPT…".into();
+            self.setup_job = Some(SetupJob { rx, section, setup });
+            self.xdg_open(&url);
+            return;
+        }
+        std::thread::spawn(move || {
+            let _ = tx.send(setup::test(&providers, &probe, test_secret.as_deref()).map(|_| secret));
+        });
+        form.testing = true;
+        self.status = "testing the connection…".into();
+        self.setup_job = Some(SetupJob { rx, section, setup });
+    }
+
     /// Enter on a Dropbox form: with no sign-in to use, shows the link and waits for the code
     /// pasted back; otherwise tests the sign-in typed or saved.
     fn submit_cloud(&mut self, section: toml::Table, name: String, remote: library::Remote) {
@@ -2261,14 +2437,25 @@ impl App {
         let name = form.name().to_string();
         // The keys a form leaves out when their field is empty.
         let (path, omitted_when_empty): (Vec<&str>, &[&str]) = match form.kind {
-            setup::Kind::Provider => (vec!["providers", &name], &[]),
+            setup::Kind::Provider => (vec!["providers", &name], &["alias"]),
             setup::Kind::Llm => (vec!["llm", &name], &[]),
             setup::Kind::Table => (vec!["tables", &name], &["describe"]),
             setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
             setup::Kind::Storage => (vec!["locations", &name], &["kind", "url", "user", "alias", "folder"]),
             _ => (vec!["locations", &name], &[]),
         };
+        let renamed_from = form.origin.as_ref().map(|(old, _)| old.clone()).filter(|old| form.kind == setup::Kind::Provider && *old != name);
+        let retired = form
+            .origin
+            .as_ref()
+            .filter(|_| form.kind == setup::Kind::Provider)
+            .and_then(|(old, url)| Some((yeda_secrets::provider_account(old, url), yeda_secrets::provider_account(&name, section.get("base_url")?.as_str()?))))
+            .filter(|(old, new)| old != new)
+            .map(|(old, _)| old);
         let result = self.lib.update_config(|t| {
+            if let Some(old) = &renamed_from {
+                rename_provider(t, old, &name);
+            }
             let mut table = t;
             for key in &path {
                 let entry = table.entry(*key).or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -2283,7 +2470,12 @@ impl App {
             table.extend(section);
             Ok(())
         });
+        let saved = result.is_ok();
         self.after_config_change(result);
+        if let Some(old) = retired.filter(|_| saved) {
+            let _ = yeda_secrets::delete(&old);
+            self.secrets.remove(&old);
+        }
         self.close_setup();
         self.status = format!("saved [{}] to yeda.toml{stored}", path.join("."));
     }
@@ -2736,49 +2928,28 @@ impl App {
                 }
                 ("setup", rest) if rest.trim().is_empty() => self.open_setup_menu(),
                 ("setup", rest) => {
-                    let (kind, name) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
-                    if kind == "web-search" {
-                        match name.trim() {
-                            "" => self.open_web_search(),
-                            provider => {
-                                let kind = match provider {
-                                    "keenable" => setup::Kind::Keenable,
-                                    "exa" => setup::Kind::Exa,
-                                    "parallel" => setup::Kind::Parallel,
-                                    "firecrawl" => setup::Kind::Firecrawl,
-                                    "searxng" => setup::Kind::Searxng,
-                                    _ => {
-                                        self.status = "usage: :setup web-search [keenable|exa|parallel|firecrawl|searxng]".into();
-                                        return;
-                                    }
-                                };
-                                self.setup_from_web_search = false;
-                                self.setup = Some(SetupForm::new(kind, "", &self.lib));
-                                self.mode = Mode::Setup;
-                            }
-                        }
-                        return;
-                    }
-                    let kind = match kind {
+                    let kind = match rest.trim() {
+                        "web-search" => return self.open_web_search(),
                         "provider" => setup::Kind::Provider,
                         "llm" => setup::Kind::Llm,
                         "storage" => setup::Kind::Storage,
+                        "table" => setup::Kind::Table,
                         "openalex" => setup::Kind::Openalex,
                         "proxy" => setup::Kind::Proxy,
-                        "table" => setup::Kind::Table,
-                        "keenable" => setup::Kind::Keenable,
-                        "exa" => setup::Kind::Exa,
-                        "parallel" => setup::Kind::Parallel,
-                        "firecrawl" => setup::Kind::Firecrawl,
-                        "searxng" => setup::Kind::Searxng,
                         _ => {
-                            self.status = "usage: :setup [provider|llm|storage|table [name]], :setup openalex, :setup web-search|keenable|exa|parallel|firecrawl|searxng or :setup proxy".into();
+                            self.status = "usage: :setup [provider|llm|storage|table|openalex|web-search|proxy]".into();
                             return;
                         }
                     };
                     self.setup_from_web_search = false;
-                    self.setup = Some(SetupForm::new(kind, name.trim(), &self.lib));
-                    self.mode = Mode::Setup;
+                    if setup::listed(kind) {
+                        self.open_setup_picker(kind);
+                    } else {
+                        let mut form = SetupForm::new(kind, "", &self.lib);
+                        form.key_stored = kind == setup::Kind::Openalex && yeda_secrets::get(yeda_secrets::OPENALEX).ok().flatten().is_some();
+                        self.setup = Some(form);
+                        self.mode = Mode::Setup;
+                    }
                 }
                 ("config", which) => match which.trim() {
                     "" | "library" => self.edit = Some((self.path(library::CONFIG), None)),
@@ -3534,7 +3705,7 @@ impl App {
         match yeda_secrets::stored(&account) {
             Ok(Some(s)) if !self.rejected.contains(&account) => Some(s),
             Ok(_) => {
-                self.status = format!("{name} is not signed in to {}; run :setup storage {name}", remote.label());
+                self.status = format!("{name} is not signed in to {}; run :setup storage", remote.label());
                 None
             }
             Err(e) => {
@@ -5077,10 +5248,33 @@ mod tests {
     }
 
     #[test]
+    fn renaming_a_provider_moves_its_profiles() {
+        let mut root: toml::Table = toml::from_str("[providers.a]\nbase_url = \"https://x.example\"\n[llm.m]\nprovider = \"a\"\nmodel = \"1\"\n[llm.n]\nprovider = \"b\"\nmodel = \"2\"\n").unwrap();
+        super::rename_provider(&mut root, "a", "z");
+        assert!(root["providers"].as_table().unwrap().is_empty());
+        assert_eq!((root["llm"]["m"]["provider"].as_str(), root["llm"]["n"]["provider"].as_str()), (Some("z"), Some("b")));
+    }
+
+    #[test]
+    fn the_setup_picker_lists_entries_and_offers_a_new_one() {
+        let lib = yeda_core::library::Library::parse(Some("default_llm = \"a\"\n[providers.p]\nbase_url = \"https://x.example\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        app.submit(super::Prompt::Command, "setup llm");
+        assert!(app.mode == super::Mode::SetupPick);
+        assert_eq!(app.setup_picker.as_ref().unwrap().options.len(), 1);
+        app.input = "b".into();
+        app.refresh_setup_picker();
+        let options = &app.setup_picker.as_ref().unwrap().options;
+        assert!(options.last().is_some_and(|o| o.new && o.name == "b"));
+        app.submit(super::Prompt::Command, "setup llm extra");
+        assert!(app.status.starts_with("usage: :setup"));
+    }
+
+    #[test]
     fn combo_keys_are_nested_inside_the_setup_form() {
         let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n"), None, [], None).unwrap();
-        let form = super::SetupForm::new(super::setup::Kind::Provider, "codex", &lib);
-        assert_eq!(form.values, [""; 7], "the provider form starts empty");
+        let form = super::SetupForm::new(super::setup::Kind::Provider, "", &lib);
+        assert_eq!(form.values, [""; 7], "a new provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,

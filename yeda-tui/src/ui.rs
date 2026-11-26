@@ -370,6 +370,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Some(c) if c.kind == PickKind::AddTo => format!("add to collection › {}", app.input),
             _ => format!("move to collection › {}", app.input),
         },
+        Mode::SetupPick => format!("{} › {}", app.setup_picker.as_ref().map_or("", |p| crate::setup::kind_name(p.kind)), app.input),
         Mode::Prompt(Prompt::Command) => format!(":{}", app.input),
         Mode::Prompt(Prompt::TableSearch) => format!("table /{}", app.input),
         Mode::Prompt(Prompt::TableFilter) => {
@@ -410,7 +411,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Search => Some(&app.query),
         Mode::SideSearch => Some(&app.side_query),
         Mode::Prompt(Prompt::Secret | Prompt::Add) => None,
-        Mode::Prompt(_) | Mode::Pick => Some(&app.input),
+        Mode::Prompt(_) | Mode::Pick | Mode::SetupPick => Some(&app.input),
         _ => None,
     };
     if let Some(typed) = typed {
@@ -443,6 +444,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Filter => draw_filter(f, app, main),
         Mode::Setup => draw_setup(f, app, main),
         Mode::SetupMenu => draw_setup_menu(f, app, main),
+        Mode::SetupPick => draw_setup_pick(f, app, main),
         Mode::WebSearch => draw_web_search(f, app, main),
         Mode::Discover => draw_discover(f, app, main),
         Mode::Found => draw_found(f, app, main),
@@ -681,6 +683,31 @@ fn draw_setup_menu(f: &mut Frame, app: &App, main: Rect) {
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
         area,
         &mut ListState::default().with_selected(Some(app.setup_menu_sel)),
+    );
+}
+
+fn draw_setup_pick(f: &mut Frame, app: &App, main: Rect) {
+    let Some(picker) = &app.setup_picker else { return };
+    let width = picker.options.iter().map(|o| o.name.chars().count()).max().unwrap_or(0);
+    let items: Vec<ListItem> = picker
+        .options
+        .iter()
+        .map(|o| match o.new {
+            true => ListItem::new(format!("+ new {} \"{}\"", crate::setup::kind_name(picker.kind), o.name)),
+            false => ListItem::new(Line::from(vec![Span::raw(format!("{:<width$}  ", o.name)), Span::raw(o.detail.clone()).dim()])),
+        })
+        .collect();
+    let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
+    let hint = match picker.kind {
+        crate::setup::Kind::Llm | crate::setup::Kind::Storage => " Enter edit · * on empty input makes it the default · Esc back ",
+        _ => " Enter edit · type a new name to add one · Esc back ",
+    };
+    let area = popup(main, (lines + 2).clamp(hint.chars().count() as u16, main.width.saturating_sub(4)), items.len().max(1) as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_stateful_widget(
+        List::new(items).block(block(hint.into(), true)).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        area,
+        &mut ListState::default().with_selected(Some(picker.sel)),
     );
 }
 

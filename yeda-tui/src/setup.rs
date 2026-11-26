@@ -61,6 +61,13 @@ pub struct SetupForm {
     /// A Dropbox sign-in waiting for its code: the link the user was given, and the PKCE verifier
     /// the code is exchanged with.
     pub code_link: Option<(String, String)>,
+    /// The name and URL of the provider being edited, as they were when the form opened.
+    pub origin: Option<(String, String)>,
+    /// Waiting for y/n: the provider's key would be sent to a new URL.
+    pub confirm_move: bool,
+    pub moving_confirmed: bool,
+    /// An OpenAlex key is in the secret store already.
+    pub key_stored: bool,
     /// A table's columns that have description fields now, and every description typed, by column.
     shown: Vec<String>,
     described: BTreeMap<String, String>,
@@ -156,8 +163,17 @@ impl SetupForm {
     /// forms start empty: the preset or provider the user picks fills the rest of the form.
     pub fn new(kind: Kind, name: &str, lib: &Library) -> SetupForm {
         let values = match kind {
-            Kind::Provider => vec![String::new(); 7],
-            Kind::Llm => vec![String::new(); 3],
+            Kind::Provider => match lib.providers.get(name) {
+                Some(p) => {
+                    let preset = PRESETS.iter().find(|q| q.base_url == p.url()).map_or("", |q| q.name);
+                    [name, preset, p.url(), p.protocol.name(), p.auth.name(), p.alias.as_deref().unwrap_or_default(), ""].map(String::from).to_vec()
+                }
+                None => [name, "", "", "", "", "", ""].map(String::from).to_vec(),
+            },
+            Kind::Llm => match lib.llm.get(name) {
+                Some(p) => vec![name.into(), p.provider.clone(), p.model.clone()],
+                None => vec![name.into(), String::new(), String::new()],
+            },
             Kind::Storage => {
                 let row = |cells: &[&str]| cells.iter().map(|c| c.to_string()).collect::<Vec<_>>();
                 match (lib.remotes.get(name), lib.locations.get(name)) {
@@ -195,6 +211,7 @@ impl SetupForm {
         };
         let sel = match kind {
             Kind::Reference => 1,
+            Kind::Provider | Kind::Llm if !name.is_empty() => 1,
             Kind::Provider | Kind::Llm | Kind::Openalex | Kind::Proxy | Kind::Searxng => 0,
             Kind::Keenable | Kind::Exa | Kind::Parallel | Kind::Firecrawl => 0,
             _ if name.is_empty() => 0,
@@ -206,7 +223,8 @@ impl SetupForm {
             _ => None,
         };
         let described = if kind == Kind::Table { lib.tables.get(name).map(|t| t.describe.clone()).unwrap_or_default() } else { BTreeMap::new() };
-        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, code_link: None, shown: Vec::new(), described };
+        let origin = lib.providers.get(name).filter(|_| kind == Kind::Provider).map(|p| (name.to_string(), p.url().to_string()));
+        let mut form = SetupForm { kind, values, sel, testing: false, old, sign_in_url: None, code_link: None, origin, confirm_move: false, moving_confirmed: false, key_stored: false, shown: Vec::new(), described };
         form.sync_columns();
         form
     }
@@ -279,6 +297,7 @@ impl SetupForm {
                     (Auth::None, _) => "none: this server takes no key",
                     (Auth::Oauth, Protocol::OpenaiResponses) => "press Enter and open the link yeda shows",
                     (Auth::Oauth, _) => "paste a token from `claude setup-token`",
+                    _ if self.origin.is_some() => "blank keeps the stored key, moved to the new name or URL if either changed; type one to replace it",
                     _ => "API key",
                 };
                 &[
@@ -314,7 +333,8 @@ impl SetupForm {
                 ],
                 _ => &[("Name", NAME_HINT), ("Kind", CHOICE_HINT)],
             },
-            Kind::Openalex => &[("API key", "free at openalex.org/settings/api; kept in the secret store")],
+            Kind::Openalex if self.key_stored => &[("API key", "a key is stored in the secret store; type a new one to replace it")],
+            Kind::Openalex => &[("API key", "not set; free at openalex.org/settings/api; kept in the secret store")],
             Kind::Keenable => &[("API key", "optional; without one, search uses the shared public tier (1,000 requests/hour per IP); the test runs one real search and uses quota")],
             Kind::Exa => &[("API key", "optional; without one, search uses the shared free tier, which needs a direct IPv4 connection; the test runs one real search and uses quota")],
             Kind::Parallel => &[("API key", "optional; without one, search uses the shared free tier; keyed use is billed by Parallel; the test runs one real search and uses quota")],
@@ -421,10 +441,12 @@ impl SetupForm {
                 }
                 // Codex signs in when the field is empty; every other credential has to be pasted,
                 // since its key is bound to this URL and a new one has none yet.
-                if p.auth == Auth::ApiKey && self.secret().is_none() {
+                // An edited provider has its stored key moved along, which the app looks up.
+                let editing = self.origin.is_some();
+                if p.auth == Auth::ApiKey && self.secret().is_none() && !editing {
                     bail!("{} needs an API key", v[0]);
                 }
-                if p.auth == Auth::Oauth && p.protocol == Protocol::Anthropic && self.secret().is_none() {
+                if p.auth == Auth::Oauth && p.protocol == Protocol::Anthropic && self.secret().is_none() && !editing {
                     bail!("paste the token from `claude setup-token`");
                 }
                 Setup::Provider(v[0].to_string(), p)
@@ -606,44 +628,59 @@ pub fn choices(choice: Choice, lib: &Library) -> Vec<(String, String)> {
     pairs.iter().map(|(label, value)| (label.to_string(), value.to_string())).collect()
 }
 
-/// The `:setup` list: what each row sets, how it is set now, and the command that changes it.
-pub fn overview(lib: &Library) -> Vec<[String; 3]> {
-    let row = |what: String, now: String, command: String| [what, now, command];
-    let mut rows = Vec::new();
-    for (name, p) in &lib.providers {
-        rows.push(row(format!("Provider {name}"), format!("{} · {} · {}", p.protocol.name(), p.auth.name(), p.url()), format!("setup provider {name}")));
+/// Whether `:setup` lists the existing entries of this kind to pick from, before the form.
+pub fn listed(kind: Kind) -> bool {
+    matches!(kind, Kind::Provider | Kind::Llm | Kind::Storage | Kind::Table)
+}
+
+/// What an entry of a listed kind is called in the picker.
+pub fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Provider => "provider",
+        Kind::Llm => "LLM profile",
+        Kind::Storage => "storage location",
+        Kind::Table => "table",
+        _ => "",
     }
-    rows.push(row("New provider".into(), String::new(), "setup provider".into()));
-    for (name, p) in &lib.llm {
-        let default = if lib.default_llm.as_deref() == Some(name) { " · default" } else { "" };
-        rows.push(row(format!("LLM {name}"), format!("{} · {}{default}", p.provider, p.model), format!("setup llm {name}")));
+}
+
+/// The existing entries of a listed kind, as name and how it is set now.
+pub fn entries(kind: Kind, lib: &Library) -> Vec<(String, String)> {
+    let default_mark = |is_default: bool| if is_default { " · default" } else { "" };
+    match kind {
+        Kind::Provider => lib.providers.iter().map(|(n, p)| (n.clone(), format!("{} · {} · {}", p.protocol.name(), p.auth.name(), p.url()))).collect(),
+        Kind::Llm => lib.llm.iter().map(|(n, p)| (n.clone(), format!("{} · {}{}", p.provider, p.model, default_mark(lib.default_llm.as_deref() == Some(n))))).collect(),
+        Kind::Storage => {
+            let local = lib.locations.iter().map(|(n, path)| (n.clone(), format!("local {}", path.display())));
+            let remote = lib.remotes.iter().map(|(n, r)| (n.clone(), r.label()));
+            let all = local.chain(remote).collect::<BTreeMap<_, _>>();
+            all.into_iter().map(|(n, what)| { let mark = default_mark(lib.fulltext.location.as_deref() == Some(n.as_str())); (n, format!("{what}{mark}")) }).collect()
+        }
+        Kind::Table => lib.tables.iter().map(|(n, t)| (n.clone(), t.columns.join(", "))).collect(),
+        _ => Vec::new(),
     }
-    rows.push(row("New LLM profile".into(), String::new(), "setup llm".into()));
-    for (name, path) in &lib.locations {
-        rows.push(row(format!("Storage {name}"), format!("local {}", path.display()), format!("setup storage {name}")));
-    }
-    for (name, remote) in &lib.remotes {
-        rows.push(row(format!("Storage {name}"), remote.label(), format!("setup storage {name}")));
-    }
-    rows.push(row("New storage location".into(), "local folder, WebDAV or Dropbox".into(), "setup storage".into()));
-    rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
-    let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
-    let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
-    rows.push(row("Web search".into(), web, "setup web-search".into()));
-    let proxies = if lib.fulltext.proxies.is_empty() { "none".into() } else { lib.fulltext.proxies.join(" ") };
-    rows.push(row("Library proxies".into(), proxies, "setup proxy".into()));
-    for (name, t) in &lib.tables {
-        rows.push(row(format!("Table {name}"), t.columns.join(", "), format!("setup table {name}")));
-    }
-    rows.push(row("New table".into(), String::new(), "setup table".into()));
-    rows.push(row("yeda.toml".into(), "everything else in the library's config".into(), "config library".into()));
-    rows.push(row("config.toml".into(), "this device's config".into(), "config device".into()));
-    rows
+}
+
+/// The `:setup` list: what each row sets, what it is for, and the command that changes it.
+pub fn overview() -> Vec<[String; 3]> {
+    [
+        ("LLM providers", "the servers that answer LLM requests, and how to sign in to them", "setup provider"),
+        ("LLM profiles", "a provider and a model; the default one runs :summarize and :discover", "setup llm"),
+        ("Storage", "where the PDFs are kept", "setup storage"),
+        ("OpenAlex API key", "lifts OpenAlex's daily limit on metadata lookups", "setup openalex"),
+        ("Web search", "the search providers :discover uses", "setup web-search"),
+        ("Library proxies", "the proxies :fetch opens paywalled papers through", "setup proxy"),
+        ("Tables", "one row per paper, one column per question the LLM answers", "setup table"),
+        ("yeda.toml", "everything else in the library's config", "config library"),
+        ("config.toml", "this device's config", "config device"),
+    ]
+    .map(|(what, about, command)| [what.into(), about.into(), command.into()])
+    .into()
 }
 
 /// The profile bound to the provider it names.
 pub fn bind(providers: &BTreeMap<String, Provider>, name: &str, p: &Profile) -> Result<Bound> {
-    let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider {}", p.provider, p.provider))?;
+    let provider = providers.get(&p.provider).with_context(|| format!("no provider named '{}'; set it up with :setup provider", p.provider))?;
     Ok(Bound::new(name, p, &p.provider, provider))
 }
 
@@ -658,7 +695,7 @@ pub fn profile_credential(
     let bound = bind(providers, name, p)?;
     let key = lookup(&yeda_secrets::provider_account(&bound.provider, bound.url()))?;
     if bound.needs_key() && key.is_none() {
-        bail!("provider '{}' has no credential yet; set it with :setup provider {}", bound.provider, bound.provider);
+        bail!("provider '{}' has no credential yet; set it with :setup provider", bound.provider);
     }
     Ok((bound, key))
 }
@@ -783,8 +820,8 @@ mod tests {
     #[test]
     fn builds_providers_from_presets() {
         let lib = Library::parse(None, None, [], None).unwrap();
-        let mut f = SetupForm::new(Kind::Provider, "codex", &lib);
-        assert_eq!(f.values, [""; 7], "the provider form starts empty");
+        let mut f = SetupForm::new(Kind::Provider, "", &lib);
+        assert_eq!(f.values, [""; 7], "a new provider form starts empty");
         f.values[0] = "codex".into();
         f.values[1] = "codex".into();
         f.provider_changed();
@@ -812,7 +849,7 @@ mod tests {
         assert_eq!(t["protocol"].as_str(), Some("mistral"));
         let saved = Library::parse(Some(&format!("[providers.mistral]\n{t}")), None, [], None).unwrap();
         let edited = SetupForm::new(Kind::Provider, "mistral", &saved);
-        assert_eq!(edited.values, [""; 7], "editing also starts empty");
+        assert_eq!(edited.values, ["mistral", "", "https://mistral.example.edu/v1", "mistral", "api-key", "", ""], "editing fills the form");
 
         let mut g = SetupForm::new(Kind::Provider, "local", &lib);
         g.values[0] = "local".into();
@@ -847,10 +884,9 @@ mod tests {
         let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[providers.codex]\nbase_url = \"https://api.openai.com/v1\"\nprotocol = \"openai-responses\"\nauth = \"oauth\"\n";
         let lib = Library::parse(Some(&format!("{cfg}[llm.cx]\nprovider = \"codex\"\nmodel = \"gpt-5.1\"\n")), None, [], None).unwrap();
         let f = SetupForm::new(Kind::Llm, "cx", &lib);
-        assert_eq!(f.values, [""; 3], "the LLM form starts empty");
+        assert_eq!(f.values, ["cx", "codex", "gpt-5.1"], "an existing profile fills its form");
         let mut g = SetupForm::new(Kind::Llm, "new", &lib);
-        assert_eq!(g.values, [""; 3]);
-        g.values[0] = "new".into();
+        assert_eq!(g.values, ["new", "", ""]);
         g.values[1] = "codex".into();
         g.values[2] = "gpt-5.1".into();
         let (t, s) = g.section().unwrap();
@@ -886,7 +922,7 @@ mod tests {
         assert!((c.url(), key.as_deref()) == ("https://localhost:8080/v1", None));
 
         let err = profile_credential(&lib.providers, "a", &lib.llm["a"], |_| Ok(None)).unwrap_err().to_string();
-        assert!(err.contains(":setup provider cx"), "{err}");
+        assert!(err.contains("provider 'cx'") && err.contains(":setup provider"), "{err}");
         let err = profile_credential(&lib.providers, "a", &lib.llm["a"], |_| Err(anyhow::anyhow!("secret store unavailable"))).unwrap_err().to_string();
         assert!(err.contains("secret store unavailable"), "{err}");
 
@@ -908,15 +944,38 @@ mod tests {
     }
 
     #[test]
-    fn overview_lists_providers_before_profiles() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"oauth\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"m\"\n";
+    fn overview_explains_each_setting_and_lists_none() {
+        let rows = overview();
+        assert!(rows.iter().all(|r| !r[1].is_empty()));
+        assert_eq!((rows[0][0].as_str(), rows[0][2].as_str()), ("LLM providers", "setup provider"));
+    }
+
+    #[test]
+    fn entries_mark_the_default() {
+        let cfg = "default_llm = \"b\"\n[providers.p]\nbase_url = \"https://x.example\"\nprotocol = \"openai\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"n\"\n[fulltext]\nlocation = \"dav\"\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/\"\nuser = \"u\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
-        let rows: Vec<String> = overview(&lib).into_iter().map(|r| r[0].clone()).collect();
-        let provider = rows.iter().position(|r| r == "Provider claude").unwrap();
-        let profile = rows.iter().position(|r| r == "LLM a").unwrap();
-        assert!(provider < profile, "{rows:?}");
-        assert_eq!(rows[provider + 1], "New provider");
-        assert_eq!(overview(&lib)[profile][1], "claude · m");
+        let llm = entries(Kind::Llm, &lib);
+        assert_eq!((llm[0].1.as_str(), llm[1].1.as_str()), ("p · m", "p · n · default"));
+        assert!(entries(Kind::Storage, &lib)[0].1.ends_with(" · default"));
+        assert!(entries(Kind::Openalex, &lib).is_empty());
+    }
+
+    #[test]
+    fn an_existing_provider_fills_its_form_and_keeps_its_key() {
+        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com\"\nprotocol = \"anthropic\"\nauth = \"api-key\"\nalias = \"work\"\n";
+        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
+        let mut f = SetupForm::new(Kind::Provider, "claude", &lib);
+        assert_eq!(f.values, ["claude", "claude", "https://api.anthropic.com", "anthropic", "api-key", "work", ""]);
+        assert_eq!(f.origin, Some(("claude".into(), "https://api.anthropic.com".into())));
+        let (t, setup) = f.section().unwrap();
+        assert_eq!(t["base_url"].as_str(), Some("https://api.anthropic.com"));
+        assert_eq!(account(&setup), "provider:claude:https://api.anthropic.com");
+        f.values[2] = "https://proxy.example".into();
+        let (_, setup) = f.section().unwrap();
+        assert_eq!(account(&setup), "provider:claude:https://proxy.example");
+        let mut fresh = SetupForm::new(Kind::Provider, "other", &lib);
+        fresh.values[2..5].clone_from_slice(&["https://x.example".into(), "openai".into(), "api-key".into()]);
+        assert!(fresh.origin.is_none() && fresh.section().unwrap_err().to_string().contains("needs an API key"));
     }
 
     #[test]
