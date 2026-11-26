@@ -2028,7 +2028,7 @@ impl App {
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.web_search = None;
-                self.mode = Mode::Normal;
+                self.mode = if self.setup_menu.is_empty() { Mode::Normal } else { Mode::SetupMenu };
             }
             KeyCode::Char('j') | KeyCode::Down => form.move_cursor(true),
             KeyCode::Char('k') | KeyCode::Up => form.move_cursor(false),
@@ -2082,6 +2082,7 @@ impl App {
                 }
                 self.reload();
                 self.web_search = None;
+                self.setup_menu.clear();
                 self.mode = Mode::Normal;
                 self.status = "saved [web_search] to yeda.toml".into();
             }
@@ -2108,7 +2109,7 @@ impl App {
             KeyCode::Enter => {
                 let command = self.setup_menu[self.setup_menu_sel][2].clone();
                 self.submit(Prompt::Command, &command);
-                if !matches!(self.mode, Mode::Setup | Mode::SetupPick) {
+                if !matches!(self.mode, Mode::Setup | Mode::SetupPick | Mode::WebSearch) {
                     self.setup_menu.clear();
                     if self.mode == Mode::SetupMenu {
                         self.mode = Mode::Normal;
@@ -5055,6 +5056,32 @@ mod tests {
     fn plain_app() -> super::App {
         let lib = yeda_core::library::Library::parse(None, None, [("a".to_string(), "title = \"A\"\n".to_string())], None).unwrap();
         super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap())
+    }
+
+    #[test]
+    fn web_search_escape_returns_to_the_setup_menu_selection() {
+        let mut app = plain_app();
+        app.submit(super::Prompt::Command, "setup");
+        let row = app.setup_menu.iter().position(|row| row[2] == "setup web-search").unwrap();
+        app.setup_menu_sel = row;
+        app.on_key_in_mode(KeyCode::Enter.into());
+        assert!(matches!(app.mode, super::Mode::WebSearch));
+        app.on_key_in_mode(KeyCode::Esc.into());
+        assert!(matches!(app.mode, super::Mode::SetupMenu));
+        assert_eq!(app.setup_menu_sel, row);
+        assert!(app.web_search.is_none());
+        app.on_key_in_mode(KeyCode::Esc.into());
+        assert!(matches!(app.mode, super::Mode::Normal));
+    }
+
+    #[test]
+    fn direct_web_search_escape_returns_to_the_library() {
+        let mut app = plain_app();
+        app.submit(super::Prompt::Command, "setup web-search");
+        assert!(matches!(app.mode, super::Mode::WebSearch));
+        app.on_key_in_mode(KeyCode::Esc.into());
+        assert!(matches!(app.mode, super::Mode::Normal));
+        assert!(app.web_search.is_none());
     }
 
     #[test]
