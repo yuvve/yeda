@@ -89,6 +89,7 @@ One row per paper, one column per question, filled in by the LLM (`:summarize`).
 ### Finding papers
 
 `:discover` takes a description, or the marked papers as examples, and has the LLM search the web and arXiv and rank the results. Search providers are set with `:setup web-search`.
+When opened from the `:setup` menu, Web Search returns to that menu on `Esc` or `q`.
 
 ### Running commands from a request
 
