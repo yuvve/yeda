@@ -75,6 +75,8 @@ pub enum HelpPage {
     Keys,
     /// `GUIDE`, from `:help`.
     Guide,
+    /// Every provider preset as config, from `:help providers`.
+    Providers,
     /// `App::report`: the identifiers the last magic-wand batch could not add, with why.
     Failed,
 }
@@ -497,7 +499,7 @@ pub struct Combo {
 
 enum WorkerMsg {
     Started(String),
-    Finished { key: String, result: Result<(Row, Option<String>), String> },
+    Finished { key: String, result: Result<ops::Summary, String> },
 }
 
 struct Summarizer {
@@ -510,6 +512,7 @@ struct Summarizer {
     done: usize,
     failed: Vec<String>,
     notes: Vec<String>,
+    usage: yeda_core::llm::Usage,
 }
 
 pub struct App {
@@ -597,7 +600,7 @@ pub struct App {
     /// The next `action` call was confirmed already.
     confirmed: bool,
     discover_job: Option<Receiver<crate::discover::Msg>>,
-    assist_job: Option<Receiver<Result<String, String>>>,
+    assist_job: Option<Receiver<Result<(String, yeda_core::llm::Usage), String>>>,
     /// The plan `:do` made, shown until approved or cancelled.
     pub plan: Option<yeda_core::assist::Plan>,
     /// Commands of an approved plan still to run, each once the one before is done.
@@ -1700,7 +1703,7 @@ impl App {
         if self.model_job.is_some() || self.models_for.as_deref() == Some(key.as_str()) {
             return;
         }
-        let profile = yeda_core::llm::Profile { provider: provider.clone(), model: String::new() };
+        let profile = yeda_core::llm::Profile::new(&provider, "");
         let found = setup::profile_credential(&providers, &name, &profile, |account| match self.secrets.get(account) {
             Some(secret) => Ok(Some(secret.clone())),
             None => yeda_secrets::get_as(account, self.alias_of(account).as_deref()),
@@ -1715,7 +1718,7 @@ impl App {
                 return;
             }
         };
-        let secret = self.renewed_codex(&bound, account, secret);
+        let secret = self.renewed_credential(&bound, account, secret);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(yeda_net::llm::models(&bound, secret.as_deref()).map_err(|e| e.to_string()));
@@ -1792,7 +1795,6 @@ impl App {
             if form.kind == setup::Kind::Storage && field == 1 {
                 form.storage_kind_changed();
             }
-            form.lock_url();
         }
         self.cursor_back = 0;
     }
@@ -1939,7 +1941,7 @@ impl App {
                         }
                     };
                     let account = yeda_secrets::provider_account(&bound.provider, bound.url());
-                    let key = self.renewed_codex(&bound, account, key);
+                    let key = self.renewed_credential(&bound, account, key);
                     let (tx, rx) = mpsc::channel();
                     let probe = s.clone();
                     std::thread::spawn(move || {
@@ -1991,7 +1993,6 @@ impl App {
             if form.kind == setup::Kind::Storage && form.sel == 1 {
                 form.storage_kind_changed();
             }
-            form.lock_url();
             form.sync_columns();
         }
         self.sync_combo();
@@ -2328,14 +2329,14 @@ impl App {
 
     /// Enter on an edited provider whose key field is empty: the key stored for the old name and URL
     /// moves to the new ones, after a y/n when the URL changed, since the key is then sent elsewhere.
-    fn keep_provider_key(&mut self, section: toml::Table, name: String, p: yeda_core::llm::Provider) {
+    fn keep_provider_key(&mut self, section: toml::Table, name: String, p: Box<yeda_core::llm::Provider>) {
         let Some(form) = &mut self.setup else { return };
         let Some((old_name, old_url)) = form.origin.clone() else { return };
         let (old, new) = (yeda_secrets::provider_account(&old_name, &old_url), yeda_secrets::provider_account(&name, p.url()));
         let alias = self.lib.providers.get(&old_name).and_then(|o| o.alias.clone());
         let stored = self.secrets.get(&old).cloned().or_else(|| yeda_secrets::stored(&old).ok().flatten());
         let from_env = yeda_secrets::from_env(&new, p.alias.as_deref()).is_some();
-        if old_url != p.url() && p.auth == yeda_core::llm::Auth::Codex {
+        if old_url != p.url() && p.auth == yeda_core::llm::Auth::Oauth {
             return self.test_and_save_setup(section, setup::Setup::Provider(name, p));
         }
         if stored.is_none() && !from_env && yeda_secrets::from_env(&old, alias.as_deref()).is_none() {
@@ -2363,7 +2364,7 @@ impl App {
         self.save_setup(section, &note);
     }
 
-    /// Tests the connection the form describes in a thread, signing in first when a Codex provider has no credential; saved when it passes.
+    /// Tests the connection the form describes in a thread, signing in first when an oauth provider has no credential; saved when it passes.
     fn test_and_save_setup(&mut self, section: toml::Table, setup: setup::Setup) {
         let Some(form) = &mut self.setup else { return };
         let secret = form.secret();
@@ -2376,19 +2377,20 @@ impl App {
             _ => secret.clone(),
         };
         let providers = self.lib.providers.clone();
-        // An empty field asks a Codex provider to sign in instead: stored credentials
-        // reauthorize with their own client and host id, a missing one registers anew.
-        let codex_empty = secret.is_none()
-            && matches!(&setup, setup::Setup::Provider(_, p) if p.auth == yeda_core::llm::Auth::Codex);
-        if codex_empty {
-            let (issued, host, hint) = yeda_secrets::stored(&account)
-                .ok()
-                .flatten()
-                .and_then(|c| yeda_core::llm::CodexCredential::parse(&c).ok())
-                .map_or((None, None, None), |c| (c.client_id, c.host_id, c.id_token));
-            let Ok(sign_in) = yeda_net::codex::start(issued.as_deref(), host.as_deref(), hint.as_deref()) else {
-                self.status = "could not start the sign-in listener".into();
-                return;
+        // An empty field asks an oauth provider to sign in instead: stored credentials
+        // reauthorize with their own client, a missing one registers anew.
+        let preset = match &setup {
+            setup::Setup::Provider(_, p) if secret.is_none() && p.auth == yeda_core::llm::Auth::Oauth => p.sign_in.as_deref().and_then(yeda_core::llm::sign_in),
+            _ => None,
+        };
+        if let Some(preset) = preset {
+            let stored = yeda_secrets::stored(&account).ok().flatten().and_then(|c| yeda_core::llm::OauthCredential::parse(&c).ok());
+            let sign_in = match yeda_net::sign_in::start(preset, stored.as_ref()) {
+                Ok(sign_in) => sign_in,
+                Err(e) => {
+                    self.status = format!("could not start the sign-in: {e:#}");
+                    return;
+                }
             };
             let url = sign_in.url.clone();
             form.sign_in_url = Some(url.clone());
@@ -2404,7 +2406,7 @@ impl App {
                 });
             });
             form.testing = true;
-            self.status = "waiting for the browser to sign in with ChatGPT…".into();
+            self.status = "waiting for the browser to sign in…".into();
             self.setup_job = Some(SetupJob { rx, section, setup });
             self.xdg_open(&url);
             return;
@@ -2471,14 +2473,14 @@ impl App {
         let Some(form) = &self.setup else { return };
         let name = form.name().to_string();
         // The keys a form leaves out when their field is empty.
-        let (path, omitted_when_empty): (Vec<&str>, &[&str]) = match form.kind {
-            setup::Kind::Provider => (vec!["providers", &name], &["alias"]),
-            setup::Kind::Llm => (vec!["llm", &name], &[]),
-            setup::Kind::Table => (vec!["tables", &name], &["describe"]),
-            setup::Kind::Proxy => (vec!["fulltext"], &["proxies"]),
-            setup::Kind::Storage => (vec!["locations", &name], &["kind", "url", "user", "alias", "folder"]),
-            _ => (vec!["locations", &name], &[]),
+        let path: Vec<&str> = match form.kind {
+            setup::Kind::Provider => vec!["providers", &name],
+            setup::Kind::Llm => vec!["llm", &name],
+            setup::Kind::Table => vec!["tables", &name],
+            setup::Kind::Proxy => vec!["fulltext"],
+            _ => vec!["locations", &name],
         };
+        let omitted_when_empty = form.rewritten();
         let renamed_from = form.origin.as_ref().map(|(old, _)| old.clone()).filter(|old| form.kind == setup::Kind::Provider && *old != name);
         let retired = form
             .origin
@@ -2499,7 +2501,7 @@ impl App {
                 }
                 table = entry.as_table_mut().unwrap();
             }
-            for key in omitted_when_empty {
+            for key in &omitted_when_empty {
                 table.remove(*key);
             }
             table.extend(section);
@@ -2941,6 +2943,7 @@ impl App {
                     }
                     Err(e) => self.status = format!("{e:#}"),
                 },
+                ("help", args) if args.trim() == "providers" => self.open_help(HelpPage::Providers),
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
                 ("secrets", _) => self.open_secrets(),
@@ -3130,13 +3133,13 @@ impl App {
     /// which `command` runs again. `None` while prompting.
     fn llm_key(&mut self, b: &yeda_core::llm::Bound, command: &str) -> Option<Option<String>> {
         let account = yeda_secrets::provider_account(&b.provider, b.url());
-        // A running summary saves renewed Codex credentials itself, so the cached copy may be stale.
-        if b.auth() == yeda_core::llm::Auth::Codex {
+        // A running summary saves renewed sign-ins itself, so the cached copy may be stale.
+        if b.auth() == yeda_core::llm::Auth::Oauth {
             self.secrets.remove(&account);
         }
         let got = if b.needs_key() {
             let what = match b.auth() {
-                yeda_core::llm::Auth::Codex => "Codex credentials (the compacted `~/.codex/auth.json`)",
+                yeda_core::llm::Auth::Oauth => "sign-in credentials (sign in with :setup provider)",
                 _ => "API key",
             };
             let prompt = format!("{what} for provider '{}', used by {}, sent to {}", b.provider, b.profile, b.url());
@@ -3144,20 +3147,17 @@ impl App {
         } else {
             Some(yeda_secrets::get_as(&account, b.settings.alias.as_deref()).ok().flatten())
         };
-        got.map(|key| self.renewed_codex(b, account, key))
+        got.map(|key| self.renewed_credential(b, account, key))
     }
 
-    /// Replaces Codex credentials that are about to expire; a failed renewal keeps the old ones,
-    /// whose expiry the request reports.
-    fn renewed_codex(&mut self, b: &yeda_core::llm::Bound, account: String, key: Option<String>) -> Option<String> {
-        if b.auth() != yeda_core::llm::Auth::Codex {
-            return key;
-        }
-        if yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !key.as_deref().is_some_and(crate::setup::codex_refresh_due) {
+    /// Replaces a credential that is about to expire; a failed renewal keeps the old one, whose
+    /// expiry the request reports.
+    fn renewed_credential(&mut self, b: &yeda_core::llm::Bound, account: String, key: Option<String>) -> Option<String> {
+        if yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !key.as_deref().is_some_and(|k| yeda_net::llm::refresh_due(b, k)) {
             return key;
         }
         let key = key.unwrap();
-        match yeda_net::llm::codex_refresh(&key) {
+        match yeda_net::llm::refresh(b, &key) {
             Ok(renewed) => {
                 if let Err(e) = yeda_secrets::set(&account, &renewed) {
                     self.status = format!("kept for this session only, not saved: {e:#}");
@@ -3405,11 +3405,13 @@ impl App {
             Err(TryRecvError::Disconnected) => Err("the request stopped".into()),
         };
         self.assist_job = None;
+        let used = answer.as_ref().ok().and_then(|(_, u)| u.summary()).map(|u| format!(" · {u}")).unwrap_or_default();
+        let answer = answer.map(|(a, _)| a);
         let raw = answer.clone().unwrap_or_default();
         match answer.map_err(anyhow::Error::msg).and_then(|a| yeda_core::assist::parse_plan(&a, &self.lib, &self.assist_request)) {
             Ok(plan) if plan.steps.is_empty() => {
                 self.log.write(&format!("do: no plan: {}", plan.reply));
-                self.status = plan.reply;
+                self.status = format!("{}{used}", plan.reply);
             }
             Ok(plan) => {
                 for (i, step) in plan.steps.iter().enumerate() {
@@ -3417,6 +3419,7 @@ impl App {
                 }
                 self.plan = Some(plan);
                 self.mode = Mode::Plan;
+                self.status = format!("plan ready{used}");
             }
             Err(e) => {
                 let answer: String = raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(500).collect();
@@ -3609,6 +3612,7 @@ impl App {
             done: 0,
             failed: vec![],
             notes: vec![],
+            usage: Default::default(),
         });
         Ok(())
     }
@@ -3641,7 +3645,8 @@ impl App {
                     self.log.write(&text);
                     self.status = text;
                 }
-                Ok(WorkerMsg::Finished { key, result: Ok((row, note)) }) => {
+                Ok(WorkerMsg::Finished { key, result: Ok((row, note, used)) }) => {
+                    s.usage.add(&used);
                     if let Some(i) = self.lib.refs.iter().position(|r| r.key == key) {
                         tables::merge(&mut self.lib.refs[i], &s.table, row, s.overwrite);
                         let saved = self.lib.save_ai(&self.lib.refs[i]).and_then(|e| self.undo.borrow_mut().apply(&self.dir, &s.step, [e]));
@@ -3661,6 +3666,9 @@ impl App {
                     }
                     if !s.notes.is_empty() {
                         msg += &format!("; {}", s.notes.join(" | "));
+                    }
+                    if let Some(used) = s.usage.summary() {
+                        msg += &format!(" · {used}");
                     }
                     self.status = msg;
                     self.summarizer = None;
@@ -3786,7 +3794,7 @@ impl App {
         for (name, p) in &self.lib.providers {
             let what = match p.auth {
                 yeda_core::llm::Auth::None => "no credential",
-                yeda_core::llm::Auth::Codex => "Codex credentials (the compacted `~/.codex/auth.json`)",
+                yeda_core::llm::Auth::Oauth => "sign-in credentials",
                 yeda_core::llm::Auth::ApiKey => "API key",
             };
             let profiles: Vec<&str> = self.lib.llm.iter().filter(|(_, q)| q.provider == *name).map(|(n, _)| n.as_str()).collect();
@@ -5162,7 +5170,7 @@ mod tests {
         app.log.path = Some(path.clone());
         let send = |app: &mut super::App, answer: &str| {
             let (tx, rx) = std::sync::mpsc::channel();
-            tx.send(Ok(answer.to_string())).unwrap();
+            tx.send(Ok((answer.to_string(), Default::default()))).unwrap();
             app.assist_job = Some(rx);
             app.poll_assist();
         };
@@ -5244,10 +5252,10 @@ mod tests {
 
     #[test]
     fn envvars_name_the_variables_and_the_secrets_needing_an_alias() {
-        let toml = "[providers.a]\nbase_url = \"https://api.example.com/v1\"\nauth = \"api-key\"\n\
-                    [providers.b]\nbase_url = \"https://api.example.com/v2\"\nauth = \"api-key\"\n\
-                    [providers.c]\nbase_url = \"https://other.example.com\"\nauth = \"api-key\"\nalias = \"c\"\n\
-                    [providers.d]\nbase_url = \"https://x.alias\"\nauth = \"api-key\"\n";
+        let toml = "[providers.a]\nprotocol = \"chat-completions\"\nbase_url = \"https://api.example.com/v1\"\nauth = \"api-key\"\n\
+                    [providers.b]\nprotocol = \"chat-completions\"\nbase_url = \"https://api.example.com/v2\"\nauth = \"api-key\"\n\
+                    [providers.c]\nprotocol = \"chat-completions\"\nbase_url = \"https://other.example.com\"\nauth = \"api-key\"\nalias = \"c\"\n\
+                    [providers.d]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.alias\"\nauth = \"api-key\"\n";
         let lib = yeda_core::library::Library::parse(Some(toml), None, [], None).unwrap();
         let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         app.open_envvars();
@@ -5312,7 +5320,7 @@ mod tests {
 
     #[test]
     fn renaming_a_provider_moves_its_profiles() {
-        let mut root: toml::Table = toml::from_str("[providers.a]\nbase_url = \"https://x.example\"\n[llm.m]\nprovider = \"a\"\nmodel = \"1\"\n[llm.n]\nprovider = \"b\"\nmodel = \"2\"\n").unwrap();
+        let mut root: toml::Table = toml::from_str("[providers.a]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.example\"\n[llm.m]\nprovider = \"a\"\nmodel = \"1\"\n[llm.n]\nprovider = \"b\"\nmodel = \"2\"\n").unwrap();
         super::rename_provider(&mut root, "a", "z");
         assert!(root["providers"].as_table().unwrap().is_empty());
         assert_eq!((root["llm"]["m"]["provider"].as_str(), root["llm"]["n"]["provider"].as_str()), (Some("z"), Some("b")));
@@ -5320,7 +5328,7 @@ mod tests {
 
     #[test]
     fn the_setup_picker_lists_entries_and_offers_a_new_one() {
-        let lib = yeda_core::library::Library::parse(Some("default_llm = \"a\"\n[providers.p]\nbase_url = \"https://x.example\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("default_llm = \"a\"\n[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.example\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         app.submit(super::Prompt::Command, "setup llm");
         assert!(app.mode == super::Mode::SetupPick);
@@ -5344,6 +5352,7 @@ mod tests {
         let config = dir.join(CONFIG);
         let original = r#"default_llm = "a"
 [providers.p]
+protocol = "chat-completions"
 base_url = "https://example.test"
 auth = "none"
 [llm.a]
@@ -5429,9 +5438,9 @@ columns = ["group"]
 
     #[test]
     fn combo_keys_are_nested_inside_the_setup_form() {
-        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\nauth = \"codex\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("[providers.codex]\npreset = \"codex\"\n"), None, [], None).unwrap();
         let form = super::SetupForm::new(super::setup::Kind::Provider, "", &lib);
-        assert_eq!(form.values, [""; 6], "a new provider form starts empty");
+        assert_eq!(form.values, [""; 7], "a new provider form starts empty");
         let mut app = super::App::new(
             std::path::PathBuf::from("/tmp"),
             lib,
@@ -5447,8 +5456,8 @@ columns = ["group"]
         {
             let c = app.combo.as_ref().unwrap();
             assert!(c.open);
-            assert_eq!(c.options.len(), 2, "all options show on focus");
-            assert_eq!(c.options[c.sel].1, "codex", "the first preset is highlighted");
+            assert_eq!(c.options.len(), 5, "all options show on focus");
+            assert_eq!(c.options[c.sel].1, "anthropic", "the first preset is highlighted");
         }
         app.setup_key(key(KeyCode::Esc));
         assert!(!app.combo.as_ref().unwrap().open, "Esc closes the dropdown");
@@ -5456,23 +5465,25 @@ columns = ["group"]
         assert!(app.setup.is_some(), "Esc does not close the form yet");
 
         app.setup_key(key(KeyCode::Tab));
+        assert_eq!(app.combo.as_ref().unwrap().choice, super::setup::Choice::Protocols, "a custom provider picks its protocol");
+        app.setup_key(key(KeyCode::Esc));
         app.setup_key(key(KeyCode::BackTab));
         assert!(app.combo.as_ref().unwrap().open);
         assert!(app.combo.as_ref().unwrap().query.is_empty(), "the filter starts empty");
-        for ch in "openai-".chars() {
+        for ch in "openr".chars() {
             app.setup_key(key(KeyCode::Char(ch)));
         }
-        assert_eq!(app.setup.as_ref().unwrap().values[1], "openai-");
-        assert_eq!(app.combo.as_ref().unwrap().options[0].1, "openai-compatible");
+        assert_eq!(app.setup.as_ref().unwrap().values[1], "openr");
+        assert_eq!(app.combo.as_ref().unwrap().options[0].1, "openrouter");
         app.setup_key(key(KeyCode::Enter));
         let form = app.setup.as_ref().unwrap();
-        assert_eq!(form.values[1], "openai-compatible");
-        assert_eq!(form.values[3], "api-key", "picking a preset fills its auth");
+        assert_eq!(form.values[1], "openrouter");
+        assert_eq!(form.values[4], "api-key", "picking a preset fills its auth");
         assert!(!app.combo.as_ref().unwrap().open, "Enter picks the value and closes the dropdown");
 
         app.setup_key(key(KeyCode::Tab));
         assert_eq!(app.setup.as_ref().unwrap().sel, 2);
-        assert!(app.combo.is_none(), "fields without choices have no dropdown");
+        assert!(app.combo.is_none(), "a preset's locked fields have no dropdown");
         app.setup_key(key(KeyCode::Esc));
         assert!(app.setup.is_none(), "Esc closes the form once the dropdown is gone");
     }

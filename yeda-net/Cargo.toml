@@ -16,3 +16,6 @@ toml = { version = "1.1.8", features = ["preserve_order"] }
 ureq = "3.4.2"
 uuid = { version = "1.29.0", features = ["v4"] }
 yeda-core = { workspace = true }
+
+[dev-dependencies]
+lopdf = "0.47.0"

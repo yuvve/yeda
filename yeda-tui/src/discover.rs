@@ -83,8 +83,9 @@ pub fn spawn(input: Input) -> Receiver<Msg> {
 pub fn run(input: &Input, progress: &dyn Fn(String)) -> Suggestions {
     let refs: Vec<&Ref> = input.from.iter().collect();
     let query_text = discover::query_request(&input.prompt, &refs, input.settings.discover_queries);
-    let answer = yeda_net::llm::text(&input.profile, discover::QUERY_SYSTEM, &query_text, input.key.as_deref())?;
-    let queries = discover::parse_queries(&answer, input.settings.discover_queries)?;
+    let reply = yeda_net::llm::text(&input.profile, discover::QUERY_SYSTEM, &query_text, input.key.as_deref())?;
+    let mut usage = reply.usage;
+    let queries = discover::parse_queries(&reply.text, input.settings.discover_queries)?;
     progress(format!("searching: {}", queries.join("; ")));
 
     let states = states();
@@ -132,10 +133,12 @@ pub fn run(input: &Input, progress: &dyn Fn(String)) -> Suggestions {
         if dropped > 0 {
             notes.push(format!("{dropped} non-academic hits dropped"));
         }
+        notes.extend(usage.summary());
         return Ok((Vec::new(), joined(notes)));
     }
-    rank(input, &mut found, &mut notes);
+    usage.add(&rank(input, &mut found, &mut notes));
     found.truncate(input.settings.discover_results);
+    notes.extend(usage.summary());
     Ok((found, joined(notes)))
 }
 
@@ -486,7 +489,8 @@ fn put_work(cache: Option<&Path>, key: &str, work: &Option<Work>) {
     }
 }
 
-fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
+/// Orders `found` by the model's ranking; returns what the ranking request used.
+fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) -> yeda_core::llm::Usage {
     let ids: Vec<String> = (1..=found.len()).map(discover::candidate_id).collect();
     let candidates: Vec<RankCandidate> = found
         .iter()
@@ -502,10 +506,9 @@ fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
             abstract_text: c.text.as_ref().map(|t| t.chars().take(1200).collect()),
         })
         .collect();
-    let picks = yeda_net::llm::text(&input.profile, discover::RANK_SYSTEM, &discover::ranking_request(&input.prompt, &candidates, input.settings.discover_results), input.key.as_deref())
-        .ok()
-        .map(|answer| discover::parse_ranking(&answer, &ids))
-        .filter(|picks| !picks.is_empty());
+    let reply = yeda_net::llm::text(&input.profile, discover::RANK_SYSTEM, &discover::ranking_request(&input.prompt, &candidates, input.settings.discover_results), input.key.as_deref()).ok();
+    let usage = reply.as_ref().map(|r| r.usage).unwrap_or_default();
+    let picks = reply.map(|answer| discover::parse_ranking(&answer.text, &ids)).filter(|picks| !picks.is_empty());
     let (picks, fallback) = match picks {
         Some(picks) => (picks, false),
         None => (ids.iter().map(|id| (id.clone(), String::new())).collect(), true),
@@ -520,6 +523,7 @@ fn rank(input: &Input, found: &mut Vec<Candidate>, notes: &mut Vec<String>) {
             found.push(c);
         }
     }
+    usage
 }
 
 #[cfg(test)]

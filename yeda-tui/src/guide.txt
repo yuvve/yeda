@@ -269,7 +269,7 @@ SECRETS  ( :secrets, :envvars )
 
   :envvars lists the names for every secret, and marks the ones that need an
   alias. If a server rejects a key that came from a variable, yeda says so
-  and does not ask again; fix the variable and restart yeda. Codex
+  and does not ask again; fix the variable and restart yeda. Sign-in
   credentials from a variable are not renewed.
 
 UNDO  ( u, Ctrl-R )
@@ -545,15 +545,18 @@ SETUP  ( :setup, :config )
     default_llm = "claude"
 
     [providers.claude]
-    base_url = "https://api.anthropic.com/v1"
-    auth = "api-key"
+    preset = "anthropic"
 
     [llm.claude]
     provider = "claude"
     model = "claude-opus-5-5"
 
-  For an OpenAI-compatible server without a key, use auth = "none". To sign in
-  with ChatGPT, set auth = "codex" without a base_url.
+  :help providers shows every preset as config. A provider of your own sets
+  protocol (chat-completions, responses or messages), base_url and auth
+  (api-key, or none for a server without a key), and can add headers. A
+  profile can set documents = "text" for a model that takes no PDF, and
+  structured_output, reasoning_effort, max_output_tokens and body. :setup llm
+  tests them with a one-page PDF and a schema.
 
 TRUST
 

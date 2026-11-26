@@ -543,7 +543,7 @@ fn llm_key(b: &yeda_core::llm::Bound) -> Result<Option<String>> {
     let alias = b.settings.alias.as_deref();
     let mut key = yeda_secrets::get_as(&account, alias)?;
     anyhow::ensure!(key.is_some() || !b.needs_key(), "no credential stored for provider '{}'; set it in yeda with :setup provider", b.provider);
-    ops::renew_codex(b, &mut key, false)?;
+    ops::renew_credential(b, &mut key, false)?;
     Ok(key)
 }
 
@@ -621,10 +621,12 @@ fn summarize(lib: &mut Library, dir: &Path, a: &Args) -> Result<()> {
     anyhow::ensure!(!jobs.is_empty(), "nothing to fill in '{table_name}' (--overwrite regenerates existing cells)");
     let mut key = llm_key(&profile)?;
     let (total, mut failed) = (jobs.len(), 0);
+    let mut usage = yeda_core::llm::Usage::default();
     for (n, job) in jobs.into_iter().enumerate() {
         let k = job.key.clone();
         eprintln!("summarizing {k} ({}/{total}) with {profile_name} at {}…", n + 1, profile.url());
-        let result = ops::summarize_renewing(&profile, job, &mut key).and_then(|(row, note)| {
+        let result = ops::summarize_renewing(&profile, job, &mut key).and_then(|(row, note, used)| {
+            usage.add(&used);
             let i = ops::ref_index(lib, &k)?;
             tables::merge(&mut lib.refs[i], &table_name, row, overwrite);
             yeda_fs::apply(dir, [lib.save_ai(&lib.refs[i])?])?;
@@ -642,6 +644,9 @@ fn summarize(lib: &mut Library, dir: &Path, a: &Args) -> Result<()> {
                 eprintln!("{k}: {e:#}");
             }
         }
+    }
+    if let Some(used) = usage.summary() {
+        eprintln!("{used}");
     }
     anyhow::ensure!(failed == 0, "{failed} of {total} not summarized");
     Ok(())
