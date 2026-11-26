@@ -666,7 +666,7 @@ pub fn overview(lib: &Library) -> Vec<[String; 3]> {
         let entries = entries(kind, lib);
         if entries.is_empty() { "(none)".to_string() } else { entries.into_iter().map(|(name, _)| name).collect::<Vec<_>>().join(" ") }
     };
-    rows.push(row("Providers".into(), listed(Kind::Provider), "setup provider".into()));
+    rows.push(row("Providers".into(), String::new(), "setup provider".into()));
     rows.push(row("LLM profiles".into(), listed(Kind::Llm), "setup llm".into()));
     rows.push(row("Storage".into(), listed(Kind::Storage), "setup storage".into()));
     rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
@@ -955,7 +955,7 @@ mod tests {
         let provider = names.iter().position(|r| *r == "Providers").unwrap();
         let profile = names.iter().position(|r| *r == "LLM profiles").unwrap();
         assert!(provider < profile, "{names:?}");
-        assert_eq!((rows[provider][1].as_str(), rows[provider][2].as_str()), ("claude", "setup provider"));
+        assert_eq!((rows[provider][1].as_str(), rows[provider][2].as_str()), ("", "setup provider"));
         assert_eq!(rows[profile][1], "a");
     }
 
