@@ -109,11 +109,55 @@ pub fn search(b: &Bound, system: &str, question: &str, stored: Option<&str>) -> 
     Ok(Reply { note: Some(NO_SEARCH_NOTE.into()), ..text(b, system, question, stored)? })
 }
 
-/// A minimal request, to test the profile and its provider's credentials.
-pub fn ping(b: &Bound, stored: Option<&str>) -> Result<()> {
-    let schema = json!({"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": false});
-    let prompt = Prompt { system: "Set ok to true.".into(), text: "Connection test.".into(), paper: None, schema };
-    complete(b, &prompt, stored).map(|_| ())
+/// The word the test PDF holds, which only a model that read the paper can answer with.
+const TEST_WORD: &str = "harbor";
+
+/// A one-page PDF whose only text is `TEST_WORD`.
+fn test_pdf() -> Vec<u8> {
+    let stream = format!("BT /F1 24 Tf 72 720 Td ({TEST_WORD}) Tj ET");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{body}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for offset in offsets {
+        pdf.extend(format!("{offset:010} 00000 n \n").bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+    pdf
+}
+
+/// Tests the profile as `:summarize` uses it: its credential, a paper sent the way `documents`
+/// says, and a reply in the way `structured_output` says, which must name the paper's one word.
+pub fn check(b: &Bound, stored: Option<&str>) -> Result<()> {
+    let schema = json!({"type": "object", "properties": {"word": {"type": "string"}}, "required": ["word"], "additionalProperties": false});
+    let pdf = test_pdf();
+    let text = || Ok(TEST_WORD.to_string());
+    let prompt = Prompt {
+        system: "Put the one word the paper contains in word.".into(),
+        text: "Connection test: which word does the paper contain?".into(),
+        paper: Some(Paper { pdf: &pdf, text: &text }),
+        schema,
+    };
+    let reply = complete(b, &prompt, stored)?;
+    let start = reply.text.find('{').context("the reply holds no JSON object; try structured_output = \"prompt\" or \"json-object\"")?;
+    let end = reply.text.rfind('}').unwrap_or(start);
+    let v: Value = serde_json::from_str(&reply.text[start..=end]).context("the reply's JSON does not parse; try another structured_output")?;
+    let word = v["word"].as_str().context("the reply has no word field, so it ignored the schema; try another structured_output")?;
+    if !word.to_lowercase().contains(TEST_WORD) {
+        bail!("the model answered {word:?}, not the word in the test PDF, so it did not read the paper; try documents = \"text\"");
+    }
+    Ok(())
 }
 
 fn data_url(pdf: &[u8]) -> String {
@@ -474,6 +518,12 @@ mod tests {
     }
 
     #[test]
+    fn the_test_pdf_holds_its_word() {
+        let doc = lopdf::Document::load_mem(&test_pdf()).unwrap();
+        assert_eq!(doc.extract_text(&[1]).unwrap().trim(), TEST_WORD);
+    }
+
+    #[test]
     fn only_a_401_is_unauthorized() {
         assert!(is_unauthorized(&http_error(401)));
         assert!(!is_unauthorized(&http_error(400)));
@@ -527,7 +577,7 @@ mod tests {
     fn refuses_plain_http_without_connecting() {
         for protocol in ["chat-completions", "responses", "messages"] {
             let (server, b) = plain_http(protocol);
-            let err = ping(&b, Some("key")).unwrap_err().to_string();
+            let err = check(&b, Some("key")).unwrap_err().to_string();
             assert!(err.contains("only go over https://"), "{protocol}: {err}");
             assert!(search(&b, "s", "t", Some("key")).is_err());
             assert_eq!(server.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
@@ -536,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_provider_with_a_key_needs_one_to_ask() {
-        let err = ping(&bound(&preset("openrouter"), ""), None).unwrap_err().to_string();
+        let err = check(&bound(&preset("openrouter"), ""), None).unwrap_err().to_string();
         assert!(err.contains("no API key"), "{err}");
         assert!(models(&bound(&preset("codex"), ""), Some("  ")).is_err());
     }

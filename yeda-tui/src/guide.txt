@@ -555,7 +555,8 @@ SETUP  ( :setup, :config )
   protocol (chat-completions, responses or messages), base_url and auth
   (api-key, or none for a server without a key), and can add headers. A
   profile can set documents = "text" for a model that takes no PDF, and
-  structured_output, reasoning_effort, max_output_tokens and body.
+  structured_output, reasoning_effort, max_output_tokens and body. :setup llm
+  tests them with a one-page PDF and a schema.
 
 TRUST
 

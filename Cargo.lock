@@ -7771,6 +7771,7 @@ version = "0.1.11"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "lopdf",
  "serde_json",
  "sha2 0.11.1",
  "toml 1.2.0+spec-1.1.0",

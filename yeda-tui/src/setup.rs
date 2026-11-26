@@ -705,7 +705,7 @@ pub fn test(providers: &BTreeMap<String, Provider>, setup: &Setup, secret: Optio
     match setup {
         Setup::Provider(..) => Ok(()),
         Setup::Llm(name, p) => {
-            yeda_net::llm::ping(&bind(providers, name, p)?, secret)
+            yeda_net::llm::check(&bind(providers, name, p)?, secret)
         }
         Setup::Webdav(d) => yeda_net::webdav::login(d, secret.unwrap_or_default()),
         Setup::Cloud(_, remote) => yeda_net::remote::login(remote, secret.unwrap_or_default()),

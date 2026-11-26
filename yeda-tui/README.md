@@ -61,7 +61,7 @@ LLM features use a profile from `yeda.toml`: a provider and a model. `:setup pro
 
 A provider is a preset (`anthropic`, `codex`, `opencode-go`, `openrouter`) or set by hand: a `protocol` (`chat-completions`, `responses` or `messages`), a `base_url` and an `auth` (`api-key` or `none`). `codex` signs in with a ChatGPT plan. `:help providers` and [PROVIDERS.md](../yeda-core/PROVIDERS.md) show every preset as config; to change one, copy its table under a name of your own and edit it. If a preset breaks, fix your copy and send the working table as a pull request. A provider set by hand can add `headers`, which take `{app}`, `{version}`, `{repository}`, `{install}`, `{session}` (one per command) and `{request}`.
 
-A profile can set `documents` (`file`, or `text` for a model that takes no PDF), `structured_output` (`json-schema`, `json-object` or `prompt`), `reasoning_effort`, `max_output_tokens` and `body`. Each command ends with the tokens it used, and the cost when the provider reports it.
+A profile can set `documents` (`file`, or `text` for a model that takes no PDF), `structured_output` (`json-schema`, `json-object` or `prompt`), `reasoning_effort`, `max_output_tokens` and `body`. `:setup llm` tests these by sending a one-page PDF and a schema, and says which option to change when the model cannot read it. Each command ends with the tokens it used, and the cost when the provider reports it.
 
 ```toml
 default_llm = "claude"
