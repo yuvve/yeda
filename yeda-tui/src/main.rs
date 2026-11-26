@@ -233,6 +233,7 @@ fn main() -> Result<()> {
         println!("{USAGE}\n{}", cli::USAGE);
         return Ok(());
     }
+    yeda_net::llm::set_install_id(ops::install_id());
     if let Some(result) = cli::run(&args) {
         return result;
     }

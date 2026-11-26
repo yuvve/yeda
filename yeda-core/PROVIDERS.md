@@ -1,0 +1,97 @@
+# Providers
+
+Generated from `src/presets.toml`; `:help providers` shows the same. Pick a preset with
+`preset = "<name>"` under `[providers.<name>]` in `yeda.toml`. To change one, copy its
+table into `yeda.toml` under a name of your own and edit it.
+
+```toml
+# The providers yeda knows, and how each protocol reads requests and replies.
+#
+# A provider here is picked with `preset = "<name>"` and cannot be changed in place.
+# To change one, copy its [providers.<name>] table into yeda.toml under a name of
+# your own and edit it. Field maps point into the JSON with RFC 6901
+# pointers; a provider's `fields` replace its protocol's entries of the same name.
+#
+# Header templates take {app}, {version}, {repository}, {install} (one id per
+# install), {session} (one id per command) and {request} (a new id per request).
+
+[providers.anthropic]
+protocol = "messages"
+base_url = "https://api.anthropic.com/v1"
+auth = "api-key"
+headers = { "anthropic-version" = "2026-10-21" }
+defaults = { max_output_tokens = 32000 }
+
+[providers.codex]
+protocol = "responses"
+base_url = "https://api.openai.com/v1"
+auth = "oauth"
+sign_in = "chatgpt"
+fields = { models = "/models", model_id = "/slug", model_label = "/display_name", model_filter = { pointer = "/visibility", equals = "list" } }
+
+[providers.opencode-go]
+protocol = "chat-completions"
+base_url = "https://opencode.ai/zen/go/v1"
+auth = "api-key"
+headers = { "x-opencode-session" = "{session}" }
+
+[providers.openrouter]
+protocol = "chat-completions"
+base_url = "https://openrouter.ai/api/v1"
+auth = "api-key"
+headers = { "HTTP-Referer" = "{repository}", "X-OpenRouter-Title" = "{app}" }
+fields = { cost = "/usage/cost" }
+
+[sign-in.chatgpt]
+authorize_url = "https://auth.openai.com/api/accounts/authorize"
+token_url = "https://auth.openai.com/api/accounts/oauth/token"
+client_id = "dynamic_agent_client"
+scope = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+required_scope = "chatgpt.tokens.use.direct"
+resource = "https://api.openai.com/v1"
+issuer = "https://auth.openai.com"
+authorize_params = { ext_agent_host_id = "urn:uuid:{install}" }
+registration_params = { agent_name_hint = "{app}" }
+
+[protocols.chat-completions]
+secret_header = "authorization"
+secret_prefix = "Bearer "
+reasoning_effort = "/reasoning_effort"
+max_output_tokens = "/max_completion_tokens"
+stop_reason = "/choices/0/finish_reason"
+stop_reasons = { length = "cut_off", model_length = "cut_off", content_filter = "refused" }
+input_tokens = "/usage/prompt_tokens"
+output_tokens = "/usage/completion_tokens"
+cached_tokens = "/usage/prompt_tokens_details/cached_tokens"
+reasoning_tokens = "/usage/completion_tokens_details/reasoning_tokens"
+models = "/data"
+model_id = "/id"
+
+[protocols.responses]
+secret_header = "authorization"
+secret_prefix = "Bearer "
+reasoning_effort = "/reasoning/effort"
+max_output_tokens = "/max_output_tokens"
+stop_reason = "/incomplete_details/reason"
+stop_reasons = { max_output_tokens = "cut_off", content_filter = "refused" }
+input_tokens = "/usage/input_tokens"
+output_tokens = "/usage/output_tokens"
+cached_tokens = "/usage/input_tokens_details/cached_tokens"
+reasoning_tokens = "/usage/output_tokens_details/reasoning_tokens"
+models = "/data"
+model_id = "/id"
+
+[protocols.messages]
+secret_header = "x-api-key"
+secret_prefix = ""
+reasoning_effort = "/output_config/effort"
+max_output_tokens = "/max_tokens"
+stop_reason = "/stop_reason"
+stop_reasons = { max_tokens = "cut_off", model_context_window_exceeded = "cut_off", refusal = "refused" }
+input_tokens = "/usage/input_tokens"
+output_tokens = "/usage/output_tokens"
+cached_tokens = "/usage/cache_read_input_tokens"
+models = "/data"
+model_id = "/id"
+model_label = "/display_name"
+```

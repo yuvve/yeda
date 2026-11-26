@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn completes_commands_and_arguments() {
-        let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[llm.claude]\nprovider = \"claude\"\nmodel = \"m\"\n";
+        let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[providers.claude]\nprotocol = \"chat-completions\"\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[llm.claude]\nprovider = \"claude\"\nmodel = \"m\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let c = Completion::new(&lib, "summ").unwrap();
         assert_eq!(c.candidates, ["summarize"]);

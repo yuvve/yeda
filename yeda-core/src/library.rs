@@ -442,7 +442,7 @@ impl Library {
         if p.model.trim().is_empty() {
             bail!("llm.{name}: give the model's name");
         }
-        Ok((name.clone(), Bound::new(&name, p, &p.provider, settings)))
+        Ok((name.clone(), Bound::new(&name, p, &p.provider, settings)?))
     }
 
     pub fn get(&self, key: &str) -> Option<&Ref> {
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn binds_profiles_to_their_provider_and_refuses_a_missing_one() {
-        let cfg = "[providers.claude]\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
+        let cfg = "[providers.claude]\npreset = \"anthropic\"\n[llm.a]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n[llm.b]\nprovider = \"claude\"\nmodel = \"claude-sonnet-5-5\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let (name, a) = lib.llm_profile(Some("a")).unwrap();
         let (_, b) = lib.llm_profile(Some("b")).unwrap();
@@ -670,7 +670,7 @@ mod tests {
         let orphan = Library::parse(Some("[llm.a]\nprovider = \"nowhere\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let err = orphan.llm_profile(Some("a")).unwrap_err().to_string();
         assert!(err.contains("names provider 'nowhere'"), "{err}");
-        let broken = Library::parse(Some("[providers.x]\nbase_url = \"http://x.test/v1\"\nauth = \"api-key\"\n"), None, [], None);
+        let broken = Library::parse(Some("[providers.x]\nprotocol = \"chat-completions\"\nbase_url = \"http://x.test/v1\"\nauth = \"api-key\"\n"), None, [], None);
         assert!(format!("{:#}", broken.unwrap_err()).contains("providers.x: http://x.test/v1"));
     }
 

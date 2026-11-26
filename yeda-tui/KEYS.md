@@ -154,6 +154,7 @@ the command line, searches, forms and pickers
 | `:fetch [location]` | find and attach PDFs for the selected or marked references (:help explains it) |
 | `:keys` | this list |
 | `:help` | guide: search syntax (AND, OR, NOT, fields), filters, saved searches |
+| `:help providers` | every provider preset as config, to pick or copy into yeda.toml |
 | `:failed` | what the last add or fetch could not get, with the reasons |
 | `:log` | every typed command, status message and failure, with times, in $EDITOR |
 | `:q` | quit |

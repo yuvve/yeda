@@ -1012,6 +1012,13 @@ fn draw_help(f: &mut Frame, app: &mut App, main: Rect, page: HelpPage) {
                 .collect();
             (" Guide · j/k Ctrl-d/u scroll · / search · q close ", lines)
         }
+        HelpPage::Providers => {
+            let lines = yeda_core::llm::PRESETS
+                .lines()
+                .map(|l| if l.starts_with('[') { Line::from(l).bold().fg(Color::Cyan) } else { Line::from(l) })
+                .collect();
+            (" Providers · j/k Ctrl-d/u scroll · / search · q close ", lines)
+        }
         HelpPage::Failed => (if app.report_copied { " Failed · copied to the clipboard · q close " } else { " Failed · q close " }, app.report.iter().map(|l| Line::from(l.as_str())).collect()),
     };
     app.help_lines = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
@@ -1400,7 +1407,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 mod tests {
     #[test]
     fn draws_the_discover_form_with_what_it_uses() {
-        let lib = yeda_core::library::Library::parse(Some("[providers.p]\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
+        let lib = yeda_core::library::Library::parse(Some("[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();
         let seed = yeda_core::library::Ref { key: "seed".into(), title: "Seed paper".into(), ..Default::default() };
         let mut app = crate::app::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
         let mut form = crate::discoverform::DiscoverForm::new(&app.lib, &[&seed], None);

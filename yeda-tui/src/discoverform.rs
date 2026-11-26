@@ -234,7 +234,7 @@ impl DiscoverForm {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = "default_llm = \"b\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"m\"\n[providers.p]\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n";
+    const CONFIG: &str = "default_llm = \"b\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"m\"\n[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n";
 
     fn press(form: &mut DiscoverForm, refs: &[Ref], keys: &str) {
         for c in keys.chars() {

@@ -186,40 +186,57 @@ pub fn extract_annotations(lib: &Library, dir: &Path, r: &Ref, write: &mut dyn F
     Ok(total)
 }
 
-/// Renews a stored Codex credential in `key` and saves it, when it is due or `force`d. Returns
-/// whether it was renewed; false for other providers, an environment-supplied key or a credential
-/// that is not due.
-pub fn renew_codex(b: &yeda_core::llm::Bound, key: &mut Option<String>, force: bool) -> Result<bool> {
+/// Renews the stored credential in `key` and saves it, when it is due or `force`d. Returns
+/// whether it was renewed; false for a credential that cannot be renewed, one from the
+/// environment, or one that is not due.
+pub fn renew_credential(b: &yeda_core::llm::Bound, key: &mut Option<String>, force: bool) -> Result<bool> {
     let account = yeda_secrets::provider_account(&b.provider, b.url());
     let Some(current) = key.as_deref() else { return Ok(false) };
-    if b.auth() != yeda_core::llm::Auth::Codex || yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !(force || crate::setup::codex_refresh_due(current)) {
+    if b.auth() != yeda_core::llm::Auth::Oauth || yeda_secrets::from_env(&account, b.settings.alias.as_deref()).is_some() || !(force || llm::refresh_due(b, current)) {
         return Ok(false);
     }
-    let renewed = yeda_net::llm::codex_refresh(current)?;
+    let renewed = llm::refresh(b, current)?;
     yeda_secrets::set(&account, &renewed)?;
     *key = Some(renewed);
     Ok(true)
 }
 
-/// `summarize` that renews a due Codex credential first, and once more after a 401; a rotated
+/// A summary: the row, the LLM's note, and what the request used.
+pub type Summary = (Row, Option<String>, yeda_core::llm::Usage);
+
+/// `summarize` that renews a due credential first, and once more after a 401; a rotated
 /// refresh token is saved before the request that uses it.
-pub fn summarize_renewing(bound: &yeda_core::llm::Bound, job: tables::Job, key: &mut Option<String>) -> Result<(Row, Option<String>)> {
-    renew_codex(bound, key, false)?;
+pub fn summarize_renewing(bound: &yeda_core::llm::Bound, job: tables::Job, key: &mut Option<String>) -> Result<Summary> {
+    renew_credential(bound, key, false)?;
     match summarize(bound, job.clone(), key.as_deref()) {
-        Err(e) if yeda_net::llm::is_unauthorized(&e) && renew_codex(bound, key, true)? => summarize(bound, job, key.as_deref()),
+        Err(e) if llm::is_unauthorized(&e) && renew_credential(bound, key, true)? => summarize(bound, job, key.as_deref()),
         sent => sent,
     }
 }
 
-/// Sends one paper to the LLM; returns its row and the LLM's note, if any.
-pub fn summarize(bound: &yeda_core::llm::Bound, job: tables::Job, key: Option<&str>) -> Result<(Row, Option<String>)> {
+/// Sends one paper to the LLM.
+pub fn summarize(bound: &yeda_core::llm::Bound, job: tables::Job, key: Option<&str>) -> Result<Summary> {
     let bytes = job.pdf.as_ref().and_then(|p| fs::read(p).ok());
     let path = job.pdf.clone().unwrap_or_default();
     let text = || poppler::pdf_text(&path);
     let paper = bytes.as_deref().map(|pdf| Paper { pdf, text: &text });
     let prompt = Prompt { system: job.system, text: job.text, paper, schema: job.schema };
     let reply = llm::complete(bound, &prompt, key)?;
-    Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note))
+    Ok((tables::parse_row(&reply.text, &job.columns)?, reply.note, reply.usage))
+}
+
+/// This device's install id, which `{install}` stands for: kept in the data folder, made once.
+pub fn install_id() -> String {
+    let path = dirs::data_dir().map(|d| d.join("yeda/install-id"));
+    if let Some(id) = path.as_ref().and_then(|p| fs::read_to_string(p).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        return id;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Some(path) = path {
+        let _ = path.parent().map(fs::create_dir_all);
+        let _ = fs::write(path, &id);
+    }
+    id
 }
 
 /// `refs` and their tags, or their values in table column `column`.
@@ -273,17 +290,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_due_codex_credential_is_renewed() {
-        use yeda_core::llm::{Auth, Bound, Provider};
-        let bound = |auth, base_url: &str| Bound { profile: "p".into(), provider: "p".into(), model: "m".into(), settings: Provider { base_url: base_url.into(), auth, alias: None } };
+    fn only_a_due_sign_in_is_renewed() {
+        use yeda_core::llm::{Bound, Profile, Provider};
+        let bound = |p: &str| {
+            let settings: Provider = toml::from_str(p).unwrap();
+            Bound::new("p", &Profile::new("p", "m"), "p", &settings).unwrap()
+        };
+        // Off the preset's host, so no YEDA_KEY_… variable on the machine running the tests applies.
+        let codex = bound("protocol = \"responses\"\nbase_url = \"https://codex-test.example\"\nauth = \"oauth\"\nsign_in = \"chatgpt\"\n");
         let far = "eyJhbGciOiJub25lIn0.eyJleHAiOjE5MDAwMDAwMDB9.x".to_string();
         let mut key = Some(far.clone());
-        assert!(!renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut key, false).unwrap(), "not due");
-        assert!(!renew_codex(&bound(Auth::ApiKey, "https://x.test/v1"), &mut key, true).unwrap(), "not Codex");
-        assert!(!renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut None, true).unwrap(), "no credential");
+        assert!(!renew_credential(&codex, &mut key, false).unwrap(), "not due");
+        assert!(!renew_credential(&bound("preset = \"openrouter\"\n"), &mut key, true).unwrap(), "an API key");
+        assert!(!renew_credential(&codex, &mut None, true).unwrap(), "no credential");
         assert_eq!(key, Some(far));
-        let err = renew_codex(&bound(Auth::Codex, "https://codex-test.example"), &mut key, true).unwrap_err().to_string();
-        assert!(err.contains("expired") || err.contains("sign in"), "a bare token cannot be renewed: {err}");
+        let err = renew_credential(&codex, &mut key, true).unwrap_err().to_string();
+        assert!(err.contains("sign in again"), "a bare token cannot be renewed: {err}");
     }
 
     #[test]
