@@ -661,21 +661,18 @@ pub fn entries(kind: Kind, lib: &Library) -> Vec<(String, String)> {
 /// The `:setup` list: what each row sets, how it is set now, and the command that changes it.
 pub fn overview(lib: &Library) -> Vec<[String; 3]> {
     let row = |what: String, now: String, command: String| [what, now, command];
-    let mut rows = Vec::new();
-    let listed = |kind| {
-        let entries = entries(kind, lib);
-        if entries.is_empty() { "(none)".to_string() } else { entries.into_iter().map(|(name, _)| name).collect::<Vec<_>>().join(" ") }
-    };
-    rows.push(row("LLM providers".into(), String::new(), "setup provider".into()));
-    rows.push(row("LLM profiles".into(), listed(Kind::Llm), "setup llm".into()));
-    rows.push(row("Storage".into(), listed(Kind::Storage), "setup storage".into()));
-    rows.push(row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()));
+    let mut rows = vec![
+        row("LLM providers".into(), String::new(), "setup provider".into()),
+        row("LLM profiles".into(), String::new(), "setup llm".into()),
+        row("Storage".into(), String::new(), "setup storage".into()),
+        row("OpenAlex API key".into(), "optional; :secrets shows whether it is set".into(), "setup openalex".into()),
+    ];
     let names = |list: &[yeda_core::web_search::Provider]| if list.is_empty() { "(none)".to_string() } else { list.iter().map(|p| p.name()).collect::<Vec<_>>().join(" ") };
     let web = format!("always {} · fallback {}", names(&lib.web_search.always), names(&lib.web_search.fallback));
     rows.push(row("Web search".into(), web, "setup web-search".into()));
     let proxies = if lib.fulltext.proxies.is_empty() { "none".into() } else { lib.fulltext.proxies.join(" ") };
     rows.push(row("Library proxies".into(), proxies, "setup proxy".into()));
-    rows.push(row("Tables".into(), listed(Kind::Table), "setup table".into()));
+    rows.push(row("Tables".into(), String::new(), "setup table".into()));
     rows.push(row("yeda.toml".into(), "everything else in the library's config".into(), "config library".into()));
     rows.push(row("config.toml".into(), "this device's config".into(), "config device".into()));
     rows
@@ -956,7 +953,7 @@ mod tests {
         let profile = names.iter().position(|r| *r == "LLM profiles").unwrap();
         assert!(provider < profile, "{names:?}");
         assert_eq!((rows[provider][1].as_str(), rows[provider][2].as_str()), ("", "setup provider"));
-        assert_eq!(rows[profile][1], "a");
+        assert_eq!(rows[profile][1], "");
     }
 
     #[test]
