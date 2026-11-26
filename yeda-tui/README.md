@@ -1,11 +1,7 @@
 # yeda-tui
 
 <!-- embed -->
-**tl;dr:** a (vibe-coded) terminal reference manager whose library you can check into git, with a PDF reader built on Zotero's (so Zotero annotations carry over), citation graphs (including discovery of papers not in the library), a download assistant that makes fetching PDFs easy, LLM features such as paper discovery and summary tables, and an e-ink friendly companion Android app.
-
-**🤖💩 All of yeda's code and documentation is written by AI (Claude). This is 100% vibe-coded 💩🤖**
-
-I used [Zotero](https://www.zotero.org/), but wanted a reference manager in the terminal with vim keys. I tried every terminal reference manager I could find and didn't like any of them. I also really like [Local Citation Network](https://localcitationnetwork.github.io/), and wanted features like it built into my reference manager. So ~~I~~ Claude made yeda.
+yeda is a vibe-coded, Git- and Markdown-first terminal reference manager with Vim-style keys, dotfile-friendly configuration, and plenty of quality-of-life features for discovering and exploring papers, fetching and annotating PDFs, generating LLM summaries, and more.
 
 ## About
 
