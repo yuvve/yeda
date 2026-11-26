@@ -1010,6 +1010,14 @@ impl App {
                 self.mode = Mode::Normal;
                 let pending = self.confirming.take();
                 match pending {
+                    Some((action, name)) if action == "setup-delete" => {
+                        self.mode = Mode::SetupPick;
+                        if k.code == KeyCode::Char('y') {
+                            self.delete_setup_entry(&name);
+                        } else {
+                            self.status = "cancelled".into();
+                        }
+                    }
                     Some((action, _)) if k.code == KeyCode::Char('y') && action == "delete" => match self.current_filter().clone() {
                         Filter::Search(name, _) if self.pane == Pane::Sidebar => self.delete_search(&name),
                         _ => self.delete_selected(),
@@ -2172,6 +2180,12 @@ impl App {
             KeyCode::Up | KeyCode::BackTab if n > 0 => picker.sel = (picker.sel + n - 1) % n,
             KeyCode::Char('p') if ctrl && n > 0 => picker.sel = (picker.sel + n - 1) % n,
             KeyCode::Char('*') if self.input.is_empty() => self.make_default(),
+            KeyCode::Char('d') if ctrl => {
+                let Some(option) = picker.options.get(picker.sel).filter(|o| !o.new) else { return };
+                self.status = format!("Delete {} '{}'? (y/N)", setup::kind_name(picker.kind), option.name);
+                self.confirming = Some(("setup-delete".into(), option.name.clone()));
+                self.mode = Mode::Confirm;
+            }
             KeyCode::Enter => {
                 let Some(option) = picker.options.get(picker.sel) else { return };
                 let kind = picker.kind;
@@ -2183,6 +2197,27 @@ impl App {
                 if edit_line(&mut self.input, &mut self.cursor_back, code, ctrl) {
                     self.refresh_setup_picker();
                 }
+            }
+        }
+    }
+
+    fn delete_setup_entry(&mut self, name: &str) {
+        use library::ConfigEntry;
+        let Some(picker) = &self.setup_picker else { return };
+        let entry = match picker.kind {
+            setup::Kind::Provider => ConfigEntry::Provider,
+            setup::Kind::Llm => ConfigEntry::Llm,
+            setup::Kind::Storage => ConfigEntry::Location,
+            setup::Kind::Table => ConfigEntry::Table,
+            _ => return,
+        };
+        self.step = undo::Step { id: self.step.id + 1, label: "setup delete".into() };
+        if self.apply(self.lib.remove_config_entry(entry, name).map(|e| vec![e])) {
+            self.status = format!("deleted '{name}' from {}", library::CONFIG);
+            self.reload();
+            self.refresh_setup_picker();
+            if self.table.as_ref().is_some_and(|table| !self.lib.tables.contains_key(&table.name)) {
+                self.close_table();
             }
         }
     }
@@ -5296,6 +5331,94 @@ mod tests {
         assert!(options.last().is_some_and(|o| o.new && o.name == "b"));
         app.submit(super::Prompt::Command, "setup llm extra");
         assert!(app.status.starts_with("usage: :setup"));
+    }
+
+    #[test]
+    fn setup_picker_deletes_only_confirmed_unused_config_entries() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::fs;
+        use super::{App, Mode, Prompt};
+        use yeda_core::library::{CONFIG, ai_path, ref_path};
+
+        let dir = std::env::temp_dir().join(format!("yeda-setup-delete-{}", std::process::id()));
+        let config = dir.join(CONFIG);
+        let original = r#"default_llm = "a"
+[providers.p]
+base_url = "https://example.test"
+auth = "none"
+[llm.a]
+provider = "p"
+model = "m"
+[fulltext]
+location = "unused"
+[locations.used]
+kind = "local"
+path = "used"
+[locations.unused]
+kind = "local"
+path = "unused"
+[tables.t]
+columns = ["group"]
+"#;
+        let reference = dir.join(ref_path("paper"));
+        let row = dir.join(ai_path("paper"));
+        for (path, text) in [
+            (&config, original),
+            (&reference, "title = \"Paper\"\n[[pdf]]\nid = \"main\"\nlocation = \"used\"\npath = \"paper.pdf\"\n"),
+            (&row, "[t]\ngroup = \"keep me\"\n"),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        let lib = crate::load_library(&dir).unwrap();
+        let mut app = App::new(dir.clone(), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let delete = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let yes = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+
+        app.submit(Prompt::Command, "setup provider");
+        app.on_key(delete);
+        assert!(app.mode == Mode::Confirm && app.status.contains("'p'"));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.mode == Mode::SetupPick);
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.status.contains("used by LLM profile 'a'"));
+
+        app.submit(Prompt::Command, "setup storage");
+        app.setup_picker.as_mut().unwrap().sel = 1;
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.status.contains("used by reference 'paper'"));
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        app.setup_picker.as_mut().unwrap().sel = 0;
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.lib.fulltext.location.is_none() && !app.lib.locations.contains_key("unused"));
+        assert!(app.lib.locations.contains_key("used"));
+
+        app.submit(Prompt::Command, "setup llm");
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.lib.default_llm.is_none() && app.lib.llm.is_empty());
+        assert!(app.setup_picker.as_ref().unwrap().options.is_empty());
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.on_key(delete);
+        assert!(app.mode == Mode::SetupPick);
+        assert!(app.setup_picker.as_ref().unwrap().options[0].new);
+
+        app.submit(Prompt::Command, "setup provider");
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.lib.providers.is_empty());
+        app.submit(Prompt::Command, "setup table");
+        app.on_key(delete);
+        app.on_key(yes);
+        assert!(app.lib.tables.is_empty());
+        assert_eq!(fs::read_to_string(row).unwrap(), "[t]\ngroup = \"keep me\"\n");
+        app.undo_or_redo(false);
+        assert!(app.lib.tables.contains_key("t") && app.lib.providers.is_empty());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

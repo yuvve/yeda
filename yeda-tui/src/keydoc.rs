@@ -88,7 +88,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":found", "the papers the last :discover found"),
     (":history", "past commands; Enter puts one on the command line (Ctrl-R there)"),
     (":setup", "list everything :setup sets, as it is set now; Enter changes one"),
-    (":setup provider|llm|storage|table", "list the existing ones to edit, or type a new name to add one; * makes an LLM profile or a storage location the default"),
+    (":setup provider|llm|storage|table", "Enter edits; type a new name to add; Ctrl+D deletes from yeda.toml; * on empty input sets the default LLM profile or storage location"),
     (":setup openalex", "set the optional OpenAlex API key, testing it first"),
     (":setup web-search", "the search providers :discover uses; e edits one provider's optional key or SearXNG URL, testing it first"),
     (":setup proxy", "set the library proxies :fetch opens papers through"),

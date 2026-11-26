@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 pub const CONFIG: &str = "yeda.toml";
 pub const REFS: &str = "refs";
 
+pub enum ConfigEntry {
+    Provider,
+    Llm,
+    Location,
+    Table,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pdf {
     /// Names the PDF's annotations folder, `annotations/<key>/<id>/`; never reused within a reference.
@@ -374,6 +381,35 @@ impl Library {
     pub fn update_config(&mut self, edit: impl FnOnce(&mut toml::Table) -> Result<()>) -> Result<Effect> {
         edit(&mut self.shared)?;
         Ok(Effect::write(CONFIG, toml::to_string(&self.shared)?))
+    }
+
+    pub fn remove_config_entry(&self, entry: ConfigEntry, name: &str) -> Result<Effect> {
+        let section = match entry {
+            ConfigEntry::Provider => {
+                if let Some((profile, _)) = self.llm.iter().find(|(_, p)| p.provider == name) {
+                    bail!("provider '{name}' is used by LLM profile '{profile}'");
+                }
+                "providers"
+            }
+            ConfigEntry::Llm => "llm",
+            ConfigEntry::Location => {
+                if let Some(r) = self.refs.iter().find(|r| r.pdfs.iter().any(|p| p.location == name)) {
+                    bail!("storage location '{name}' is used by reference '{}'", r.key);
+                }
+                "locations"
+            }
+            ConfigEntry::Table => "tables",
+        };
+        let mut shared = self.shared.clone();
+        let removed = shared.get_mut(section).and_then(toml::Value::as_table_mut).and_then(|entries| entries.remove(name));
+        anyhow::ensure!(removed.is_some(), "no '{name}' entry under [{section}] in {CONFIG}");
+        if matches!(entry, ConfigEntry::Llm) && self.default_llm.as_deref() == Some(name) {
+            shared.remove("default_llm");
+        }
+        if matches!(entry, ConfigEntry::Location) && self.fulltext.location.as_deref() == Some(name) {
+            config_section(&mut shared, "fulltext")?.remove("location");
+        }
+        Ok(Effect::write(CONFIG, toml::to_string(&shared)?))
     }
 
     /// Saves the search as `name`, replacing `old` when it is renamed.
