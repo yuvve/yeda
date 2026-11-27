@@ -689,20 +689,36 @@ fn draw_setup_menu(f: &mut Frame, app: &App, main: Rect) {
 }
 
 fn draw_setup_pick(f: &mut Frame, app: &App, main: Rect) {
+    use crate::setup::Kind;
+
     let Some(picker) = &app.setup_picker else { return };
+    let (default, gutter) = match picker.kind {
+        Kind::Llm => (app.lib.default_llm.as_deref(), "  "),
+        Kind::Storage => (app.lib.fulltext.location.as_deref(), "  "),
+        _ => (None, ""),
+    };
     let width = picker.options.iter().map(|o| o.name.chars().count()).max().unwrap_or(0);
     let items: Vec<ListItem> = picker
         .options
         .iter()
         .map(|o| match o.new {
-            true => ListItem::new(format!("+ new {} \"{}\"", crate::setup::kind_name(picker.kind), o.name)),
-            false => ListItem::new(Line::from(vec![Span::raw(format!("{:<width$}  ", o.name)), Span::raw(o.detail.clone()).dim()])),
+            true => ListItem::new(format!("{gutter}+ new {} \"{}\"", crate::setup::kind_name(picker.kind), o.name)),
+            false => {
+                let style = Style::new().fg(Color::Yellow).bold();
+                let name = Span::raw(format!("{:<width$}  ", o.name));
+                let (mark, name) = if default == Some(o.name.as_str()) {
+                    (Span::styled("★ ", style), name.style(style))
+                } else {
+                    (Span::raw(gutter), name)
+                };
+                ListItem::new(Line::from(vec![mark, name, Span::raw(o.detail.clone()).dim()]))
+            }
         })
         .collect();
     let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
     let hint = match (app.mode, picker.kind) {
         (Mode::Confirm, _) => " Press Ctrl+D again to delete · Esc cancel ",
-        (_, crate::setup::Kind::Llm | crate::setup::Kind::Storage) => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
+        (_, Kind::Llm | Kind::Storage) => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
         _ => " Enter edit/add · Ctrl+D delete · Esc back ",
     };
     let width = (lines + 2).max(hint.chars().count() as u16).min(main.width.saturating_sub(4));
@@ -1405,6 +1421,40 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn setup_pickers_draw_a_yellow_star_beside_the_default() {
+        let cfg = r#"default_llm = "primary"
+[providers.p]
+protocol = "chat-completions"
+base_url = "https://example.test"
+auth = "none"
+[llm.backup]
+provider = "p"
+model = "m"
+[llm.primary]
+provider = "p"
+model = "n"
+[fulltext]
+location = "local"
+[locations.local]
+kind = "local"
+path = "papers"
+"#;
+        let lib = yeda_core::library::Library::parse(Some(cfg), None, [], None).unwrap();
+        let mut app = crate::app::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        for (command, name) in [("setup llm", "primary"), ("setup storage", "local")] {
+            app.submit(crate::app::Prompt::Command, command);
+            terminal.draw(|f| super::draw(f, &mut app)).unwrap();
+            let cells = terminal.backend().buffer().content();
+            let stars: Vec<_> = cells.iter().filter(|c| c.symbol() == "★").collect();
+            assert_eq!(stars.len(), 1, "{command}");
+            assert_eq!(stars[0].fg, ratatui::style::Color::Yellow);
+            let text: String = cells.iter().map(|c| c.symbol()).collect();
+            assert!(text.contains(&format!("★ {name}")));
+        }
+    }
+
     #[test]
     fn draws_the_discover_form_with_what_it_uses() {
         let lib = yeda_core::library::Library::parse(Some("[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();

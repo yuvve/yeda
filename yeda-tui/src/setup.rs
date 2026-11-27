@@ -646,15 +646,13 @@ pub fn kind_name(kind: Kind) -> &'static str {
 
 /// The existing entries of a listed kind, as name and how it is set now.
 pub fn entries(kind: Kind, lib: &Library) -> Vec<(String, String)> {
-    let default_mark = |is_default: bool| if is_default { " · default" } else { "" };
     match kind {
         Kind::Provider => lib.providers.iter().map(|(n, p)| (n.clone(), format!("{} · {}", p.preset.as_deref().unwrap_or(p.protocol.name()), p.url()))).collect(),
-        Kind::Llm => lib.llm.iter().map(|(n, p)| (n.clone(), format!("{} · {}{}", p.provider, p.model, default_mark(lib.default_llm.as_deref() == Some(n))))).collect(),
+        Kind::Llm => lib.llm.iter().map(|(n, p)| (n.clone(), format!("{} · {}", p.provider, p.model))).collect(),
         Kind::Storage => {
             let local = lib.locations.iter().map(|(n, path)| (n.clone(), format!("local {}", path.display())));
             let remote = lib.remotes.iter().map(|(n, r)| (n.clone(), r.label()));
-            let all = local.chain(remote).collect::<BTreeMap<_, _>>();
-            all.into_iter().map(|(n, what)| { let mark = default_mark(lib.fulltext.location.as_deref() == Some(n.as_str())); (n, format!("{what}{mark}")) }).collect()
+            local.chain(remote).collect::<BTreeMap<_, _>>().into_iter().collect()
         }
         Kind::Table => lib.tables.iter().map(|(n, t)| (n.clone(), t.columns.join(", "))).collect(),
         _ => Vec::new(),
@@ -950,12 +948,12 @@ mod tests {
 
 
     #[test]
-    fn entries_mark_the_default() {
+    fn entries_list_the_settings() {
         let cfg = "default_llm = \"b\"\n[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.example\"\nauth = \"none\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n[llm.b]\nprovider = \"p\"\nmodel = \"n\"\n[fulltext]\nlocation = \"dav\"\n[locations.dav]\nkind = \"webdav\"\nurl = \"https://dav.example/\"\nuser = \"u\"\n";
         let lib = Library::parse(Some(cfg), None, [], None).unwrap();
         let llm = entries(Kind::Llm, &lib);
-        assert_eq!((llm[0].1.as_str(), llm[1].1.as_str()), ("p · m", "p · n · default"));
-        assert!(entries(Kind::Storage, &lib)[0].1.ends_with(" · default"));
+        assert_eq!((llm[0].1.as_str(), llm[1].1.as_str()), ("p · m", "p · n"));
+        assert_eq!(entries(Kind::Storage, &lib)[0].0, "dav");
         assert!(entries(Kind::Openalex, &lib).is_empty());
     }
 
