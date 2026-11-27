@@ -689,20 +689,36 @@ fn draw_setup_menu(f: &mut Frame, app: &App, main: Rect) {
 }
 
 fn draw_setup_pick(f: &mut Frame, app: &App, main: Rect) {
+    use crate::setup::Kind;
+
     let Some(picker) = &app.setup_picker else { return };
+    let (default, gutter) = match picker.kind {
+        Kind::Llm => (app.lib.default_llm.as_deref(), "  "),
+        Kind::Storage => (app.lib.fulltext.location.as_deref(), "  "),
+        _ => (None, ""),
+    };
     let width = picker.options.iter().map(|o| o.name.chars().count()).max().unwrap_or(0);
     let items: Vec<ListItem> = picker
         .options
         .iter()
         .map(|o| match o.new {
-            true => ListItem::new(format!("+ new {} \"{}\"", crate::setup::kind_name(picker.kind), o.name)),
-            false => ListItem::new(Line::from(vec![Span::raw(format!("{:<width$}  ", o.name)), Span::raw(o.detail.clone()).dim()])),
+            true => ListItem::new(format!("{gutter}+ new {} \"{}\"", crate::setup::kind_name(picker.kind), o.name)),
+            false => {
+                let style = Style::new().fg(Color::Yellow).bold();
+                let name = Span::raw(format!("{:<width$}  ", o.name));
+                let (mark, name) = if default == Some(o.name.as_str()) {
+                    (Span::styled("★ ", style), name.style(style))
+                } else {
+                    (Span::raw(gutter), name)
+                };
+                ListItem::new(Line::from(vec![mark, name, Span::raw(o.detail.clone()).dim()]))
+            }
         })
         .collect();
     let lines = items.iter().map(ListItem::width).max().unwrap_or(0) as u16;
     let hint = match (app.mode, picker.kind) {
         (Mode::Confirm, _) => " Press Ctrl+D again to delete · Esc cancel ",
-        (_, crate::setup::Kind::Llm | crate::setup::Kind::Storage) => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
+        (_, Kind::Llm | Kind::Storage) => " Enter edit/add · Ctrl+D delete · * set default · Esc back ",
         _ => " Enter edit/add · Ctrl+D delete · Esc back ",
     };
     let width = (lines + 2).max(hint.chars().count() as u16).min(main.width.saturating_sub(4));

@@ -5342,6 +5342,40 @@ mod tests {
     }
 
     #[test]
+    fn setup_pickers_draw_a_yellow_star_beside_the_default() {
+        let cfg = r#"default_llm = "primary"
+[providers.p]
+protocol = "chat-completions"
+base_url = "https://example.test"
+auth = "none"
+[llm.backup]
+provider = "p"
+model = "m"
+[llm.primary]
+provider = "p"
+model = "n"
+[fulltext]
+location = "local"
+[locations.local]
+kind = "local"
+path = "papers"
+"#;
+        let lib = yeda_core::library::Library::parse(Some(cfg), None, [], None).unwrap();
+        let mut app = super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        for (command, name) in [("setup llm", "primary"), ("setup storage", "local")] {
+            app.submit(super::Prompt::Command, command);
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            let cells = terminal.backend().buffer().content();
+            let stars: Vec<_> = cells.iter().filter(|c| c.symbol() == "★").collect();
+            assert_eq!(stars.len(), 1, "{command}");
+            assert_eq!(stars[0].fg, ratatui::style::Color::Yellow);
+            let text: String = cells.iter().map(|c| c.symbol()).collect();
+            assert!(text.contains(&format!("★ {name}")));
+        }
+    }
+
+    #[test]
     fn setup_picker_deletes_only_confirmed_unused_config_entries() {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use std::fs;

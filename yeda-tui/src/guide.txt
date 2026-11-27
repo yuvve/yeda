@@ -209,7 +209,8 @@ THE COMMAND LINE  ( : )
   used by a profile and locations used by a PDF cannot be deleted.
 
   In the llm and storage lists, * on an empty input makes the selected one the
-  default (default_llm, or [fulltext] location). Deleting it clears that default.
+  default (default_llm, or [fulltext] location). A yellow star marks the default.
+  Deleting the default entry clears that setting.
   Picking a preset in the provider form fills its base URL and auth.
 
   In an existing provider's form, leave the key blank to keep the stored key.
