@@ -30,17 +30,17 @@ A PDF reader based on Zotero's: highlights, underlines, notes, text, image areas
 
 One row per paper, one column per question, filled in by an LLM (`:summarize`). The LLM reuses values other papers already have, so a column like `group` sorts papers into shared topics. Tables export to CSV (`:export`) and import back (`yeda import-table`).
 
-## Ask in plain words
-![A :do plan](yeda-tui/screenshots/do.png)
-
-`:do` turns a request like "add arXiv 2006.11239 to phd/related-work and fetch its PDF" into yeda commands. You approve the plan before it runs, and one undo takes all of it back.
-
 ## Discover papers
 ![Describe what to look for](yeda-tui/screenshots/discover-query.png)
 
 ![Discovery results with relevance notes](yeda-tui/screenshots/discover-results.png)
 
 `:discover` searches the web and arXiv for papers matching a description or similar to the marked ones. Review the model's relevance notes and add the papers you want to keep.
+
+## Ask in plain words
+![A :do plan](yeda-tui/screenshots/do.png)
+
+`:do` turns a request like "add arXiv 2006.11239 to phd/related-work and fetch its PDF" into yeda commands. You approve the plan before it runs, and one undo takes all of it back.
 
 ## And more
 
