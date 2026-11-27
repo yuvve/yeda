@@ -3,7 +3,7 @@
 <!-- The yeda-tui and yeda-android parts are copied from their READMEs by scripts/readme.py; edit those instead. -->
 <!-- yeda-tui -->
 <p align="center"><b>A terminal reference manager whose library is plain TOML and Markdown in git.</b><br>
-Vim keys · Zotero-compatible PDF annotations · citation graphs · LLM literature tables · paper discovery · Android companion app</p>
+⌨️ Vim keys · 🖍️ Zotero-compatible PDF annotations · 🕸️ citation graphs · 📊 LLM literature tables · 🔎 paper discovery · 📱 Android companion app</p>
 
 ![yeda's main window](yeda-tui/screenshots/main.png)
 
