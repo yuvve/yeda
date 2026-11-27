@@ -31,7 +31,7 @@
 
 ## Workflow
 - Every change starts from a GitHub issue. Work on a branch `<issue number>-<short-name>` and open a PR that says `Closes #<n>`.
-- A PR that changes only Markdown files skips CI and is merged right away; any other PR is merged once CI passes.
+- Markdown-only PRs are eligible to merge without CI; other PRs require passing CI. Get explicit maintainer approval before merging either.
 - Merge with `gh pr merge --squash --delete-branch`. GitHub deletes the branch on merge too; git can't tell a squash-merged branch is merged, so kept ones only pile up.
 - Give every new issue one Eisenhower label, and work in that order, oldest first within a quadrant:
   - `Q1 do first`: urgent and important;
@@ -42,7 +42,7 @@
   Urgent means broken, blocking the user now, or risking data or secrets. Important means it serves reading and annotating, the library's integrity or security.
 - Keep no TODO or plan files in the repository; plans go in the issue.
 - README changes go in the PR whose change they describe, not in a later one.
-- Publishing to crates.io is done by the user, with `scripts/release.sh <version>`: it bumps the versions in the root `Cargo.toml` (every crate takes them) through an issue and PR, publishes the workspace and pushes the tag `v<version>`. The tag's workflow makes the GitHub release, with the APK and Linux binaries.
+- Maintainers publish to crates.io with `scripts/release.sh <version>`. It bumps the workspace versions in the root `Cargo.toml` through an issue and PR, squash-merges after CI passes, publishes the workspace, and pushes `v<version>`. The tag workflow creates the GitHub release with the APK and Linux binaries. Get explicit maintainer authorization before running the script.
 - Tag `android-vYYYY.MM.DD` (add `.2`, `.3` for later builds that day) only when the user asks for a beta; push it on main, or on a PR branch to test before merging. The tag builds the APK and publishes it as a pre-release. Releases build their own APK.
 
 ## Code comments
