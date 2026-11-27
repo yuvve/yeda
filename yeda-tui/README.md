@@ -32,7 +32,14 @@ One row per paper, one column per question, filled in by an LLM (`:summarize`). 
 ## Ask in plain words
 ![A :do plan](screenshots/do.png)
 
-`:do` turns a request like "add arXiv 2006.11239 to phd/related-work and fetch its PDF" into yeda commands. You approve the plan before it runs, and one undo takes all of it back. `:discover` has the LLM search the web and arXiv for papers like the marked ones, or matching a description.
+`:do` turns a request like "add arXiv 2006.11239 to phd/related-work and fetch its PDF" into yeda commands. You approve the plan before it runs, and one undo takes all of it back.
+
+## Discover papers
+![Describe what to look for](screenshots/discover-query.png)
+
+![Discovery results with relevance notes](screenshots/discover-results.png)
+
+`:discover` searches the web and arXiv for papers matching a description or similar to the marked ones. Review the model's relevance notes and add the papers you want to keep.
 
 ## And more
 
@@ -41,16 +48,11 @@ One row per paper, one column per question, filled in by an LLM (`:summarize`). 
 - **Fetch:** PDFs from open access or through your library's proxy (`:fetch`).
 - **Cite:** BibTeX or a citation style (`:cite`).
 - **Sync:** the library through git (`:sync`).
-- **Script:** most commands run without the TUI and pipe keys:
-  ```sh
-  yeda search coll:thesis | yeda cite - --format apa
-  yeda discover "swarm exploration under comms loss" --json
-  ```
+- **Script:** most commands run without the TUI and pipe keys: `yeda search coll:thesis | yeda cite - --format apa`.
 
 Every action is a command with a rebindable key: [keys and commands](KEYS.md), [the reader's keys](../yeda-reader/KEYS.md). Inside yeda, `?` lists them and `:help` is the guide. LLM providers, secrets, PDF locations and the library format are in [CONFIG.md](../CONFIG.md).
 
 ## Requirements
-
 yeda runs on Linux only; macOS and Windows have no secret store backend yet ([#292](https://github.com/yuvve/yeda/issues/292)).
 
 - To build: Rust and [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/).
