@@ -3,14 +3,14 @@
 <!-- embed -->
 The Android app is for reading and annotating your library on a phone or tablet. Adding references, citation graphs, literature tables, finding PDFs and citing stay in the terminal app. The interface is high-contrast and has no animations, so it suits e-ink screens.
 
-Install the APK from the [latest release](https://github.com/yuvve/yeda/releases/latest). Pre-releases are betas.
-
 <p>
-  <img src="screenshots/list.png" width="200" alt="Reference list">
-  <img src="screenshots/detail.png" width="200" alt="A paper">
-  <img src="screenshots/annotations.png" width="200" alt="Annotations">
-  <img src="screenshots/reader.png" width="200" alt="Reader">
+  <img src="screenshots/list.png" height="370" alt="Reference list">
+  <img src="screenshots/detail.png" height="370" alt="A paper">
+  <img src="screenshots/annotations.png" height="370" alt="Annotations">
+  <img src="screenshots/reader.png" height="370" alt="Reader">
 </p>
+
+Install the APK from the [latest release](https://github.com/yuvve/yeda/releases/latest). Pre-releases are betas.
 
 ## Getting started
 
