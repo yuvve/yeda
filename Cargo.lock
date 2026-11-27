@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.104"
+version = "1.0.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
 
 [[package]]
 name = "approx"
@@ -335,15 +335,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "atomic"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89cbf775b137e9b968e67227ef7f775587cde3fd31b0d8599dbd0f598a48340"
-dependencies = [
- "bytemuck",
 ]
 
 [[package]]
@@ -1160,7 +1151,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -2990,9 +2981,9 @@ dependencies = [
 
 [[package]]
 name = "keyring-core"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29fbf4b551298c67925f38cf341a1ada797a75f1837bdf8ae1fc8e2ebc6efb59"
+checksum = "281c851dbae0de36d405299dd463126df4826dc32665c1314e931696b8cdee77"
 dependencies = [
  "log",
 ]
@@ -5799,9 +5790,9 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tauri"
-version = "2.12.6"
+version = "2.12.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c2a5cad3827d1fa46c206a6bcaee8ca14203e9b0aaabe447dd4acef33ecd065"
+checksum = "30fbfbb9dc9a2697b0e96d909ddc295fb18d2d82a58ed542ab8d9eba2edbe6da"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6689,11 +6680,10 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "uuid"
-version = "1.29.2"
+version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
- "atomic",
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
@@ -8009,9 +7999,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.6.0"
+version = "9.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80cc68510ea7553c30a69c732de5278e94183f68765af6c642dbccefd6ec777e"
+checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
 dependencies = [
  "constant_time_eq",
  "crc32fast",
