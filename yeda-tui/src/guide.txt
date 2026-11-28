@@ -304,17 +304,27 @@ THE READER  ( o, yeda read )
 
   The PDF reader has vim keys:
 
-    j k                    scroll
+    j k                    scroll / move down or up a line in caret mode
     J K Space Shift-Space  next / previous page
     Ctrl-d Ctrl-u          half a page down / up
     gg G NG                first / last / Nth page
-    / n N                  search, next / previous result
+    / n N                  search, next / previous result (moves the caret)
     + - =                  zoom in / out / reset
     og ag                  search the table of contents / annotations and jump to one
-    1t-7t                  highlight, underline, note, text, image, ink, eraser
-    Esc                    back to selection
-    dd c y                 delete the selected annotation / edit its comment /
-                           copy the selected text
+    v                      enter caret mode; repeat to select text, then to stop
+    h l w b e 0 $          character, word, and line-end motions in caret mode
+    o y                    swap selection ends / copy selected text
+    1t 2t                  highlight or underline the selection
+    3t 4t                  place a note or text box at the caret
+    5t                     draw an image area, starting at the caret if active
+    hjkl HJKL o Enter      move the area corner (larger steps with capitals),
+                           swap corners, save
+    6t 7t                  ink and eraser tools (mouse or pen)
+    ]a [a                  next / previous annotation
+    dd c T                 delete / edit comment / edit tags
+    1c-8c                  yellow, red, green, blue, purple, magenta, orange,
+                           gray for the selected annotations or tools
+    Esc                    leave area, selection or caret mode
     C                      column mode (also a toolbar button)
     ?                      search every keybind and run one with Enter
     q                      close the reader

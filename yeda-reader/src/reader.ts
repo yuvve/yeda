@@ -2,12 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { Annotation, AnnotationStore } from './annotations';
 import { installColumns } from './columns';
 import { installPen, PenReader, settleEink } from './pen';
+import { showTagPrompt } from './tags';
 import { installVim, VimReader } from './vim';
 
-interface Reader extends Omit<VimReader, '_state'>, Omit<PenReader, '_state'> {
-	_state: VimReader['_state'] & PenReader['_state'];
+type Reader = VimReader & PenReader & {
 	setAnnotations(annotations: Annotation[]): void;
-}
+};
 
 declare global {
 	interface Window {
@@ -81,6 +81,7 @@ export async function openReader(onClose: () => void = noop): Promise<boolean> {
 		sidebarView: 'annotations',
 		authorName: '',
 		onConfirm: (title: string, text: string) => window.confirm(`${title}\n\n${text}`),
+		onOpenTagsPopup: (id: string) => showTagPrompt(reader!, id),
 		onSaveAnnotations: (changed: Annotation[]) => store.save(changed, showImage).catch(reportError('Saving annotations')),
 		onDeleteAnnotations: (ids: string[]) => store.delete(ids).catch(reportError('Deleting annotations')),
 	});

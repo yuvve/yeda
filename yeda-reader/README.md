@@ -10,6 +10,10 @@ yeda-reader <file.pdf> [--annotations <dir>] [--page N]
 
 Annotations are stored in `<dir>/annotations.toml`, merged by `id`. Image and ink annotations also get a PNG in `<dir>/img/`. Without `--annotations`, the folder is `<file.pdf>.annotations/`. yeda-tui passes the PDF's `annotations/<citekey>/<pdf id>` of the library.
 
+Use `v` for caret and visual selection, `1t`–`5t` to annotate, and `]a` or `[a` to move between annotations. See [reader keys](KEYS.md).
+
+![Selecting PDF text with the keyboard in visual mode](screenshots/visual-selection.png)
+
 ## Building
 
 ```sh

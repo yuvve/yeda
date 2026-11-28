@@ -16,7 +16,7 @@ export function showHelp(reader: VimReader & JumpReader, bindings: Binding[]) {
 			detail: keys,
 			indent: 0,
 			go: () => {
-				if (binding.run) binding.run(reader, false);
+				if (binding.run) binding.run(reader, false, 1);
 			},
 		};
 	});
