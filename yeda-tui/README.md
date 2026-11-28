@@ -19,6 +19,10 @@ yeda                  # open it
 
 A PDF reader based on Zotero's: highlights, underlines, notes, text, image areas and ink, saved in the library next to the paper, so the Android app shows them too. Column mode reads two-column papers one column at a time.
 
+`:critic` reviews the selected paper with an LLM, checks its references, and shows findings as a separate, read-only set of annotations. `z c` hides or shows them.
+
+![Example critic review: read-only findings and their highlights in the PDF](screenshots/critic.png)
+
 ## Follow the citations
 ![Citation graph](screenshots/graph.png)
 

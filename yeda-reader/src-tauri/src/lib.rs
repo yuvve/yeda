@@ -42,11 +42,16 @@ impl Current {
 }
 
 /// Every command `invoke_handler` registers.
-pub const COMMANDS: &[&str] =
-    &["launch", "read_pdf", "load_annotations", "save_annotations", "delete_annotations", "read_image", "save_image"];
+pub const COMMANDS: &[&str] = &[
+    "launch", "read_pdf", "load_annotations", "load_critic_annotations",
+    "save_annotations", "delete_annotations", "read_image", "save_image",
+];
 
 pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![launch, read_pdf, load_annotations, save_annotations, delete_annotations, read_image, save_image]
+    tauri::generate_handler![
+        launch, read_pdf, load_annotations, load_critic_annotations,
+        save_annotations, delete_annotations, read_image, save_image,
+    ]
 }
 
 #[derive(Serialize)]
@@ -77,6 +82,11 @@ fn annotations_file(doc: &Doc) -> PathBuf {
 #[tauri::command]
 fn load_annotations(current: State<Current>) -> Result<Vec<Json>, String> {
     current.with(|doc| annotations::to_json(yeda_fs::read_optional(&annotations_file(doc))?.as_deref()))
+}
+
+#[tauri::command]
+fn load_critic_annotations(current: State<Current>) -> Result<Vec<Json>, String> {
+    current.with(|doc| annotations::to_json(yeda_fs::read_optional(&doc.annotations.join(annotations::CRITIC_FILE))?.as_deref()))
 }
 
 /// Re-reads the file right before merging, since yeda-tui may have written it since.

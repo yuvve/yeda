@@ -8,6 +8,7 @@ pub mod webdav;
 pub mod remote;
 pub mod dropbox;
 pub mod openalex;
+pub mod doi;
 pub mod fulltext;
 pub mod credential;
 pub mod sign_in;

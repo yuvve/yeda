@@ -6,7 +6,6 @@ import { installVim, VimReader } from './vim';
 
 interface Reader extends Omit<VimReader, '_state'>, Omit<PenReader, '_state'> {
 	_state: VimReader['_state'] & PenReader['_state'];
-	setAnnotations(annotations: Annotation[]): void;
 }
 
 declare global {
@@ -54,10 +53,16 @@ export async function openReader(onClose: () => void = noop): Promise<boolean> {
 	const launch = await invoke<Launch | null>('launch');
 	if (!launch) return false;
 	const buf = new Uint8Array(await invoke<ArrayBuffer>('read_pdf'));
-	const annotations = await store.load().catch((e) => {
-		reportError('Loading annotations')(e);
-		return [];
-	});
+	const [annotations, critic] = await Promise.all([
+		store.load().catch((e) => {
+			reportError('Loading annotations')(e);
+			return [];
+		}),
+		store.loadCritic().catch((e) => {
+			reportError('Loading critic annotations')(e);
+			return [];
+		}),
+	]);
 	const showImage = (a: Annotation) => reader!.setAnnotations([a]);
 
 	document.title = launch.title;
@@ -72,7 +77,7 @@ export async function openReader(onClose: () => void = noop): Promise<boolean> {
 		type: 'pdf',
 		data: { buf },
 		title: launch.title,
-		annotations,
+		annotations: [...annotations, ...critic],
 		primaryViewState: launch.page ? { pageIndex: launch.page - 1 } : undefined,
 		readOnly: false,
 		showAnnotations: true,
@@ -85,7 +90,7 @@ export async function openReader(onClose: () => void = noop): Promise<boolean> {
 		onDeleteAnnotations: (ids: string[]) => store.delete(ids).catch(reportError('Deleting annotations')),
 	});
 
-	hookVimIntoView(reader);
+	hookVimIntoView(reader, critic);
 	installPen(reader);
 	toggleColumns = attachColumns(reader);
 

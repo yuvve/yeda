@@ -10,6 +10,7 @@ The library format and the logic on top of it. It reads no files, makes no netwo
 | `browse` | Sidebar entries (saved searches, collections, tags) and the references a filter and query select |
 | `search` | Query parsing (`field:value`, `\|` alternatives, `!` negation, `""` for an empty field), fuzzy matching, and composing a query from fields |
 | `annotations` | `annotations.toml`: typed parsing, merge and delete by `id`, and extraction of the annotations embedded in a PDF |
+| `critic` | Critical-review prompts and replies, anchored to PDF text as annotations |
 | `tables` | LLM prompts for literature tables, parsing the model's reply, and CSV import and export |
 | `ids` | Recognising DOIs, arXiv IDs and ISBNs |
 | `llm` | LLM profile configuration |

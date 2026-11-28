@@ -316,6 +316,7 @@ THE READER  ( o, yeda read )
     dd c y                 delete the selected annotation / edit its comment /
                            copy the selected text
     C                      column mode (also a toolbar button)
+    z c                    hide / show the critic's annotations
     ?                      search every keybind and run one with Enter
     q                      close the reader
 
@@ -427,6 +428,19 @@ TABLES  ( :table [name], T )
   column and + shows the hidden ones again. Esc closes the cell, then
   clears search and filters, then closes the table; q closes the cell,
   then the table.
+
+CRITICAL REVIEW  ( :critic [--llm <profile>] )
+
+  :critic sends the selected paper's extracted text to the LLM for a
+  critical review. Marked papers are context, not review targets.
+  The reader shows the findings and summary as read-only annotations
+  from critic_annotations.toml. z c hides or shows them. Running the
+  command again replaces that review; undo restores the previous one.
+
+  The bibliography is checked in OpenAlex and, as needed, by web search
+  for missing IDs and at doi.org. OpenAlex DOI lookups are free; title
+  searches cost $0.001 each against the $0.10/day keyless or $1/day
+  free-key budget.
 
 MAIN WINDOW
 

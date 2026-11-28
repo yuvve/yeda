@@ -22,6 +22,7 @@ Generated from `src/vim.ts`; do not edit.
 | `=` | Reset zoom |
 | `og` | Jump to a section |
 | `ag` | Jump to an annotation |
+| `zc` | Hide or show the critic's annotations (:critic in yeda) |
 | `Nt` | Select tool N: highlight, underline, note, text, image, ink, eraser |
 | `Escape` | Back to selection |
 | `dd` | Delete the selected annotation |

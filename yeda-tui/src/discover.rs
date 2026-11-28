@@ -146,7 +146,7 @@ fn joined(parts: Vec<String>) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("; "))
 }
 
-fn states() -> &'static States {
+pub(crate) fn states() -> &'static States {
     static STATES: OnceLock<States> = OnceLock::new();
     STATES.get_or_init(States::default)
 }
@@ -175,7 +175,7 @@ struct State {
 }
 
 #[derive(Default)]
-struct States(Mutex<HashMap<Provider, State>>);
+pub(crate) struct States(Mutex<HashMap<Provider, State>>);
 
 impl States {
     /// Why the provider gets no request now: its down reason, while `until` has not passed, or none.
@@ -240,15 +240,15 @@ impl States {
     }
 }
 
-struct Outcome {
-    provider: Provider,
+pub(crate) struct Outcome {
+    pub(crate) provider: Provider,
     expected: usize,
-    answered: usize,
+    pub(crate) answered: usize,
     /// How many of the answers came from the cache.
     cached: usize,
-    hits: Vec<Hit>,
+    pub(crate) hits: Vec<Hit>,
     /// The first failure's reason.
-    reason: Option<String>,
+    pub(crate) reason: Option<String>,
     down: bool,
     done: bool,
 }
@@ -262,7 +262,7 @@ fn cache_key(provider: Provider, keyed: bool, searxng: Option<&str>, query: &str
     format!("{}|{source}|{keyed}|{searxng}|{limit}|{extra}|{query}", provider.name())
 }
 
-fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: Instant, states: &States) -> Vec<Outcome> {
+pub(crate) fn phase(providers: &[Provider], queries: &[String], input: &Input, deadline: Instant, states: &States) -> Vec<Outcome> {
     let (tx, rx) = mpsc::channel::<(Provider, Result<yeda_net::web_search::Answer, yeda_net::web_search::Failure>)>();
     let mut outcomes: Vec<Outcome> = Vec::new();
     let mut pending: Vec<usize> = Vec::new();
@@ -452,7 +452,7 @@ fn match_hits(client: &yeda_net::openalex::Client, hits: &[Hit], input: &Input) 
     (found, dropped, error)
 }
 
-fn match_hit(client: &yeda_net::openalex::Client, hit: &Hit, cache: Option<&Path>, fresh: bool) -> Result<Option<Work>> {
+pub(crate) fn match_hit(client: &yeda_net::openalex::Client, hit: &Hit, cache: Option<&Path>, fresh: bool) -> Result<Option<Work>> {
     let read = (!fresh).then_some(cache).flatten();
     let doi = hit.doi.clone().or_else(|| hit.arxiv.as_ref().map(|a| format!("10.48550/arxiv.{a}")));
     if let Some(doi) = doi {
