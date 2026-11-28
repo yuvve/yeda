@@ -70,6 +70,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":do [--llm <profile>] <request>", "have the LLM turn a request into commands, such as add, fetch and summarize; you approve the plan before it runs, and undo takes it all back"),
     (":search <query>", "show only the references the query matches, in the library column; the same as typing it after the search key"),
     (":save <name>", "save the current search"),
+    (":tag <tag> …", "add these tags to the selected or marked references; quote a tag with spaces"),
     (":summarize[!] [table] [--llm <profile>]", "fill the reference's table row with an LLM; ! overwrites"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),

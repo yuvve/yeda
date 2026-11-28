@@ -5,6 +5,7 @@ use crate::keydoc;
 use crate::keys::{self, Keymap};
 use yeda_core::browse::SortField;
 use yeda_core::search::FILTER_FIELDS;
+use yeda_core::assist::{Action, Step};
 use yeda_core::annotations::Annotation;
 use yeda_core::browse::Filter;
 use yeda_core::library::{Library, Pdf, Ref};
@@ -935,6 +936,9 @@ fn draw_plan(f: &mut Frame, app: &App, main: Rect) {
     let mut lines = Vec::new();
     for (i, step) in plan.steps.iter().enumerate() {
         lines.push(Line::from(vec![Span::raw(format!("{}. ", i + 1)), Span::styled(format!(":{}", step.command()), Style::new().bold())]));
+        if matches!(step.action, Action::Tag { .. }) {
+            lines.push(Line::raw(format!("   on: {}", tag_target(app, &plan.steps, i))).dim());
+        }
         lines.push(Line::raw(format!("   {}", step.reason)).dim());
     }
     let width = main.width.saturating_sub(4).min(110);
@@ -942,6 +946,23 @@ fn draw_plan(f: &mut Frame, app: &App, main: Rect) {
     let area = popup(main, width, height);
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(" :do · Enter runs · Esc cancels ".into(), true)), area);
+}
+
+fn tag_target(app: &App, steps: &[Step], i: usize) -> String {
+    if let Some((n, ids)) = steps[..i].iter().enumerate().rev().find_map(|(n, step)| match &step.action {
+        Action::Add { ids, .. } => Some((n, ids)),
+        _ => None,
+    }) {
+        return format!("the references step {} adds or finds ({})", n + 1, ids.join(", "));
+    }
+    match app.targets().as_slice() {
+        [] => "nothing selected".into(),
+        [i] => {
+            let r = &app.lib.refs[*i];
+            format!("{} ({})", r.key, r.title)
+        }
+        list => format!("{} marked references", list.len()),
+    }
 }
 
 fn draw_diff(f: &mut Frame, app: &App, main: Rect) {
@@ -1421,6 +1442,26 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn draws_the_tag_command_and_its_target_in_the_plan() {
+        use yeda_core::assist::{Action, Plan, Step};
+        let lib = yeda_core::library::Library::parse(None, None, [], None).unwrap();
+        let mut app = crate::app::App::new(std::env::temp_dir(), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        app.plan = Some(Plan {
+            steps: vec![
+                Step { action: Action::Add { ids: vec!["2006.11239".into()], to: None }, reason: "Add the paper".into() },
+                Step { action: Action::Tag { tags: vec!["diffusion".into()] }, reason: "Tag it".into() },
+            ],
+            reply: String::new(),
+        });
+        app.mode = crate::app::Mode::Plan;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| super::draw(f, &mut app)).unwrap();
+        let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains(":tag diffusion"));
+        assert!(text.contains("on: the references step 1 adds or finds (2006.11239)"));
+    }
+
     #[test]
     fn draws_the_discover_form_with_what_it_uses() {
         let lib = yeda_core::library::Library::parse(Some("[providers.p]\nprotocol = \"chat-completions\"\nbase_url = \"https://x.test/v1\"\nauth = \"api-key\"\n[llm.a]\nprovider = \"p\"\nmodel = \"m\"\n"), None, [], None).unwrap();

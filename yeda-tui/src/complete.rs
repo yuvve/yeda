@@ -14,8 +14,12 @@ impl Completion {
     pub fn new(lib: &Library, line: &str) -> Option<Completion> {
         let start = line.rfind(' ').map_or(0, |i| i + 1);
         let (head, word) = line.split_at(start);
-        let lower = word.to_lowercase();
-        let candidates: Vec<String> = options(lib, head).into_iter().filter(|c| c.to_lowercase().starts_with(&lower)).collect();
+        let tag = head.starts_with("tag ");
+        let lower = if tag { word.trim_start_matches('"') } else { word }.to_lowercase();
+        let candidates: Vec<_> = options(lib, head).into_iter()
+            .filter(|c| c.to_lowercase().starts_with(&lower))
+            .map(|c| if tag && c.contains(char::is_whitespace) { format!("\"{c}\"") } else { c })
+            .collect();
         (!candidates.is_empty()).then(|| Completion { head: head.to_string(), candidates, at: 0 })
     }
 
@@ -45,6 +49,7 @@ fn options(lib: &Library, head: &str) -> Vec<String> {
         ("summarize", 0) | ("export", 0) => tables(),
         ("summarize", 1) => vec!["--llm".into()],
         ("discover", _) => ["--like", "--llm"].map(String::from).to_vec(),
+        ("tag", _) => lib.refs.iter().flat_map(|r| r.tags.iter().cloned()).collect(),
         ("table", 0) => [tables(), vec!["close".into(), "rename".into()]].concat(),
         ("table", 1) if args[0] == "rename" => tables(),
         ("graph", 0) => ["citations", "tags", "col", "close"].map(String::from).to_vec(),
@@ -77,7 +82,7 @@ mod tests {
     #[test]
     fn completes_commands_and_arguments() {
         let cfg = "[tables.lit]\ncolumns = []\n[tables.lab]\ncolumns = []\n[providers.claude]\nprotocol = \"chat-completions\"\nbase_url = \"https://api.anthropic.com/v1\"\nauth = \"api-key\"\n[llm.claude]\nprovider = \"claude\"\nmodel = \"m\"\n";
-        let lib = Library::parse(Some(cfg), None, [], None).unwrap();
+        let lib = Library::parse(Some(cfg), None, [("a".into(), "tags = [\"generative models\"]".into())], None).unwrap();
         let c = Completion::new(&lib, "summ").unwrap();
         assert_eq!(c.candidates, ["summarize"]);
         assert_eq!(Completion::new(&lib, "summarize! l").unwrap().candidates, ["lab", "lit"]);
@@ -95,5 +100,6 @@ mod tests {
         assert!(Completion::new(&lib, "setup w").unwrap().candidates.contains(&"web-search".to_string()));
         assert!(Completion::new(&lib, "zzz").is_none());
         assert!(Completion::new(&lib, "save x").is_none());
+        assert_eq!(Completion::new(&lib, "tag gen").unwrap().line(), "tag \"generative models\"");
     }
 }
