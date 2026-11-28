@@ -2924,6 +2924,25 @@ impl App {
         self.rebuild_sidebar();
     }
 
+    fn tag(&mut self, args: &str) {
+        let tags = words(args);
+        if tags.is_empty() {
+            self.status = "usage: :tag <tag> …".into();
+            return;
+        }
+        if self.targets().is_empty() {
+            self.status = "no reference selected".into();
+            return;
+        }
+        self.update_targets(|r| {
+            for t in &tags {
+                if !r.tags.iter().any(|x| x == t) {
+                    r.tags.push(t.to_string());
+                }
+            }
+        });
+    }
+
     fn submit(&mut self, p: Prompt, text: &str) {
         if p == Prompt::Command && self.step.label.is_empty() {
             self.step.label = text.to_string();
@@ -2933,6 +2952,7 @@ impl App {
                 ("q" | "q!" | "quit", _) => self.quit = true,
                 ("save", name) if !name.trim().is_empty() => self.save_search(name.trim()),
                 ("save", _) => self.status = "usage: :save <name>".into(),
+                ("tag", args) => self.tag(args),
                 ("search", query) if !query.trim().is_empty() => self.set_search(query.trim()),
                 (cmd @ ("summarize" | "summarize!"), args) => match options(args, &["llm"], &[]) {
                     Ok((_, rest)) if rest.is_empty() && self.lib.tables.len() > 1 => self.pick_table(cmd, args.trim()),
@@ -5160,6 +5180,62 @@ mod tests {
         app.finish_batch(batch);
         assert_eq!(app.marked.iter().collect::<Vec<_>>(), ["a"]);
         assert_eq!(app.plan_queue.len(), 1);
+    }
+
+    fn tag_test_library() -> super::App {
+        let dir = std::env::temp_dir().join(format!("yeda-tag-plan-{}", uuid::Uuid::new_v4()));
+        for (key, title) in [("a", "A"), ("b", "B")] {
+            let path = dir.join(yeda_core::library::ref_path(key));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("title = \"{title}\"\n")).unwrap();
+        }
+        let lib = yeda_fs::load_library(&dir, None, None).unwrap();
+        let mut app = super::App::new(dir, lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        app.marked.insert("b".into());
+        app
+    }
+
+    #[test]
+    fn tags_from_a_plan_only_change_marks_and_undo_together() {
+        let mut app = tag_test_library();
+        app.plan_queue = ["tag diffusion".into(), "tag diffusion \"generative models\"".into()].into();
+        app.plan_total = app.plan_queue.len();
+        app.plan_running = true;
+        let dir = app.dir.clone();
+        let tags = move |key: &str| {
+            let path = dir.join(yeda_core::library::ref_path(key));
+            yeda_core::library::parse_ref(key.into(), &std::fs::read_to_string(path).unwrap()).unwrap().tags
+        };
+        app.poll_plan();
+        app.poll_plan();
+        assert!(tags("a").is_empty());
+        assert_eq!(tags("b"), ["diffusion", "generative models"]);
+        app.undo_or_redo(false);
+        assert!(tags("b").is_empty());
+        assert!(app.status.starts_with("undid ") && app.status.ends_with("(1 file)"), "{}", app.status);
+        std::fs::remove_dir_all(app.dir).unwrap();
+    }
+
+    #[test]
+    fn cancelling_a_tag_plan_leaves_references_unchanged() {
+        use yeda_core::assist::{Action, Plan, Step};
+        let mut app = tag_test_library();
+        let paths = ["a", "b"].map(|key| app.dir.join(yeda_core::library::ref_path(key)));
+        let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
+        app.plan = Some(Plan {
+            steps: vec![
+                Step { action: Action::Add { ids: vec!["2006.11239".into()], to: None }, reason: "Add the paper".into() },
+                Step { action: Action::Tag { tags: vec!["diffusion".into()] }, reason: "Tag it".into() },
+            ],
+            reply: String::new(),
+        });
+        app.mode = super::Mode::Plan;
+        app.plan_key(KeyCode::Esc.into());
+        app.poll_plan();
+        assert!(app.plan.is_none() && app.plan_queue.is_empty() && app.job.is_none());
+        assert_eq!(paths.map(|path| std::fs::read(path).unwrap()), before);
+        assert_eq!(std::fs::read_dir(app.dir.join("refs")).unwrap().count(), 2);
+        std::fs::remove_dir_all(app.dir).unwrap();
     }
 
     #[test]
