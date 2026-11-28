@@ -4,6 +4,7 @@ mod citations;
 mod cli;
 mod cluster;
 mod complete;
+mod critic;
 mod discover;
 mod discoverform;
 mod fetch;
@@ -498,6 +499,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.poll_fetch();
         app.poll_setup();
         app.poll_discover();
+        app.poll_critic();
         app.poll_assist();
         app.poll_plan();
         app.poll_git();

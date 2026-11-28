@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use toml::{Table, Value};
 
 pub const FILE: &str = "annotations.toml";
+pub const CRITIC_FILE: &str = "critic_annotations.toml";
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -42,6 +43,10 @@ struct Sidecar {
 /// `annotations/<key>/<pdf id>/annotations.toml`.
 pub fn file_path(key: &str, pdf: &crate::library::Pdf) -> String {
     format!("{}/{FILE}", crate::library::pdf_annotations_dir(key, pdf))
+}
+
+pub fn critic_path(key: &str, pdf: &crate::library::Pdf) -> String {
+    format!("{}/{CRITIC_FILE}", crate::library::pdf_annotations_dir(key, pdf))
 }
 
 pub fn parse(text: &str) -> Result<Vec<Annotation>> {
@@ -180,7 +185,7 @@ fn extract(dir: &str, pdf: &[u8], pages: &[Page], render_png: &mut RenderPng) ->
     let doc = Document::load_mem(pdf).context("reading pdf")?;
     let (mut out, mut images) = (Vec::new(), Vec::new());
     for (num, page_id) in doc.get_pages() {
-        let no_words = Page { height: media_height(&doc, page_id), words: vec![] };
+        let no_words = Page { width: 0.0, height: media_height(&doc, page_id), words: vec![] };
         let page = pages.get(num as usize - 1).unwrap_or(&no_words);
         for annot in doc.get_page_annotations(page_id).unwrap_or_default() {
             let kind = match annot.get(b"Subtype").and_then(Object::as_name).unwrap_or(b"") {
@@ -249,7 +254,7 @@ fn media_height(doc: &Document, page: lopdf::ObjectId) -> f32 {
     }
 }
 
-fn position(page_index: u32, rects: &[[f32; 4]]) -> toml::Table {
+pub(crate) fn position(page_index: u32, rects: &[[f32; 4]]) -> toml::Table {
     let round = |v: f32| toml::Value::Float((v as f64 * 1000.0).round() / 1000.0);
     let rects = rects.iter().map(|r| toml::Value::Array(r.iter().copied().map(round).collect())).collect();
     toml::Table::from_iter([
@@ -300,6 +305,7 @@ struct Word {
 }
 
 struct Page {
+    width: f32,
     height: f32,
     words: Vec<Word>,
 }
@@ -314,7 +320,7 @@ fn parse_bbox(html: &str) -> Vec<Page> {
     let mut pages = Vec::new();
     for line in html.lines().map(str::trim) {
         if line.starts_with("<page ") {
-            pages.push(Page { height: attr(line, "height"), words: vec![] });
+            pages.push(Page { width: attr(line, "width"), height: attr(line, "height"), words: vec![] });
         } else if let (true, Some(page)) = (line.starts_with("<word "), pages.last_mut()) {
             let text = line.split_once('>').and_then(|(_, r)| r.strip_suffix("</word>")).unwrap_or("");
             page.words.push(Word {
@@ -327,6 +333,116 @@ fn parse_bbox(html: &str) -> Vec<Page> {
         }
     }
     pages
+}
+
+pub struct WordPages(Vec<Page>);
+
+pub struct Anchor {
+    pub page_index: u32,
+    pub text: String,
+    pub position: Table,
+    pub sort_index: String,
+}
+
+pub fn word_pages(bbox_html: &str) -> WordPages {
+    WordPages(parse_bbox(bbox_html))
+}
+
+impl WordPages {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn page_text(&self, i: usize) -> String {
+        word_text(&self.0[i].words)
+    }
+
+    pub fn size(&self, i: usize) -> (f32, f32) {
+        let page = &self.0[i];
+        (page.width, page.height)
+    }
+
+    pub fn locate(&self, quote: &str, page: Option<usize>) -> Option<Anchor> {
+        let mut needle = String::new();
+        fold(quote, &mut needle);
+        if needle.len() < 12 || self.is_empty() {
+            return None;
+        }
+        if let Some(p) = page {
+            let p = p.min(self.len() - 1);
+            std::iter::once(p)
+                .chain((1..=p.max(self.len() - 1 - p)).flat_map(|d| {
+                    [p.checked_add(d).filter(|&i| i < self.len()), p.checked_sub(d)]
+                        .into_iter()
+                        .flatten()
+                }))
+                .find_map(|i| self.anchor(i, &needle))
+        } else {
+            (0..self.len()).rev().find_map(|i| self.anchor(i, &needle))
+        }
+    }
+
+    fn anchor(&self, i: usize, needle: &str) -> Option<Anchor> {
+        let page = &self.0[i];
+        let mut folded = String::new();
+        let mut map = Vec::new();
+        for (j, w) in page.words.iter().enumerate() {
+            fold(&w.text, &mut folded);
+            map.resize(folded.len(), j);
+        }
+        let start = folded.find(needle)?;
+        let first = map[start];
+        let words = &page.words[first..=map[start + needle.len() - 1]];
+        let rect = |w: &Word| [w.x0, page.height - w.y1, w.x1, page.height - w.y0];
+        let mut line = rect(&words[0]);
+        let mut rects = Vec::new();
+        for pair in words.windows(2) {
+            let (prev, w) = (&pair[0], &pair[1]);
+            let r = rect(w);
+            if (w.y0 - prev.y0).abs() > 0.5 * (prev.y1 - prev.y0) {
+                rects.push(line);
+                line = r;
+            } else {
+                line = [line[0].min(r[0]), line[1].min(r[1]), line[2].max(r[2]), line[3].max(r[3])];
+            }
+        }
+        rects.push(line);
+        let page_index = i as u32;
+        Some(Anchor {
+            page_index,
+            text: word_text(words),
+            position: position(page_index, &rects),
+            sort_index: sort_index(page_index, first, words[0].y0),
+        })
+    }
+}
+
+fn fold(text: &str, out: &mut String) {
+    for c in text.chars() {
+        match c {
+            'ﬀ' => out.push_str("ff"),
+            'ﬁ' => out.push_str("fi"),
+            'ﬂ' => out.push_str("fl"),
+            'ﬃ' => out.push_str("ffi"),
+            'ﬄ' => out.push_str("ffl"),
+            _ => out.extend(c.to_lowercase().filter(|c| c.is_alphanumeric())),
+        }
+    }
+}
+
+fn word_text(words: &[Word]) -> String {
+    let mut text = String::new();
+    for (i, word) in words.iter().enumerate() {
+        if i != 0 {
+            text.push(' ');
+        }
+        text.push_str(&word.text);
+    }
+    text
 }
 
 // ponytail: assumes an unrotated page whose CropBox starts at the origin; rotated or offset pages pick the wrong words.
@@ -384,6 +500,27 @@ mod tests {
         // Line one spans y 70..82 from the top, i.e. 710..722 in PDF coordinates.
         let quad = bbox(&[70.0, 145.0], &[708.0, 724.0]);
         assert_eq!(words_in(&pages[0], &[quad]), ("Hello &world".to_string(), 0));
+    }
+
+    #[test]
+    fn locates_folded_quotes_across_lines() {
+        let pages = word_pages(
+            r#"<page width="612" height="792">
+    <word xMin="72" yMin="70" xMax="100" yMax="82">Other</word>
+</page>
+<page width="612" height="792">
+    <word xMin="72" yMin="70" xMax="100" yMax="82">“First</word>
+    <word xMin="104" yMin="70" xMax="140" yMax="82">exam-</word>
+    <word xMin="72" yMin="90" xMax="90" yMax="102">ple</word>
+    <word xMin="94" yMin="90" xMax="140" yMax="102">ﬁnding!”</word>
+</page>"#,
+        );
+        let a = pages.locate("FIRST example finding.", Some(0)).unwrap();
+        assert_eq!(a.page_index, 1);
+        assert_eq!(a.text, "“First exam- ple ﬁnding!”");
+        assert_eq!(a.position, position(1, &[[72., 710., 140., 722.], [72., 690., 140., 702.]]));
+        assert!(pages.locate("an absent quotation", None).is_none());
+        assert!(pages.locate("first", Some(1)).is_none());
     }
 
     #[test]

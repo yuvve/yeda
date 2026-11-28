@@ -71,6 +71,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (":search <query>", "show only the references the query matches, in the library column; the same as typing it after the search key"),
     (":save <name>", "save the current search"),
     (":summarize[!] [table] [--llm <profile>]", "fill the reference's table row with an LLM; ! overwrites"),
+    (":critic [--llm <profile>]", "have the LLM review the selected paper critically, with the marked ones as context: its claims, conclusions, filler, errors and references, checked in OpenAlex; the reader shows the result as annotations, z c hides them; again replaces them"),
     (":cancel", "stop summarizing after the current paper"),
     (":export <table> <file.csv>", "export a table"),
     (":attach <file.pdf> [location]", "add a PDF, copying or uploading it to a location"),

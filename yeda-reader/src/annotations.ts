@@ -63,8 +63,9 @@ function toEntry(a: Annotation): Entry {
 	return entry;
 }
 
-function fromEntry(e: Entry): Annotation {
+function fromEntry(e: Entry, criticFile = false): Annotation {
 	const { kind, page, sort_index, image, ...rest } = e;
+	const critic = criticFile || rest.source === 'critic';
 	return {
 		// The reader fills these in for annotations it creates but expects them on ones passed in.
 		text: '',
@@ -74,8 +75,9 @@ function fromEntry(e: Entry): Annotation {
 		type: kind,
 		pageLabel: page,
 		sortIndex: sort_index,
-		// yeda regenerates these from the PDF, so edits would be lost.
-		readOnly: rest.source === 'pdf',
+		// Generated annotations aren't editable; external annotations also can't be deleted.
+		readOnly: rest.source === 'pdf' || critic,
+		...(critic ? { source: 'critic', isExternal: true } : {}),
 	} as unknown as Annotation;
 }
 
@@ -87,7 +89,7 @@ export class AnnotationStore {
 	private rendered = new Map<string, string>();
 
 	async load(): Promise<Annotation[]> {
-		const annotations = (await invoke<Entry[]>('load_annotations')).map(fromEntry);
+		const annotations = (await invoke<Entry[]>('load_annotations')).map(e => fromEntry(e));
 		await Promise.all(annotations.filter(a => IMAGE_KINDS.has(a.type)).map(async (a) => {
 			try {
 				a.image = await dataUrl(await invoke<ArrayBuffer>('read_image', { id: a.id }));
@@ -100,9 +102,15 @@ export class AnnotationStore {
 		return annotations;
 	}
 
+	async loadCritic(): Promise<Annotation[]> {
+		return (await invoke<Entry[]>('load_critic_annotations')).map(e => fromEntry(e, true));
+	}
+
 	async save(annotations: Annotation[], showImage: (a: Annotation) => void) {
-		await invoke('save_annotations', { annotations: annotations.map(toEntry) });
-		for (const a of annotations.filter(a => IMAGE_KINDS.has(a.type))) {
+		const writable = annotations.filter(a => a.source !== 'critic');
+		if (!writable.length) return;
+		await invoke('save_annotations', { annotations: writable.map(toEntry) });
+		for (const a of writable.filter(a => IMAGE_KINDS.has(a.type))) {
 			if (this.rendered.get(a.id) !== imageKey(a)) {
 				showImage({ ...a, image: await this.renderImage(a) });
 			}

@@ -26,6 +26,7 @@ use crate::setup::{self, SetupForm};
 use crate::table::{self, TableView};
 use yeda_core::tables::{self, Row};
 use yeda_net::wand;
+use yeda_core::web_search::{Provider, Settings};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -399,6 +400,13 @@ struct FetchJob {
     failed: Vec<(String, String)>,
 }
 
+struct CriticJob {
+    rx: Receiver<crate::critic::Msg>,
+    step: undo::Step,
+    key: String,
+    pdf: Pdf,
+}
+
 struct GraphJob {
     rx: Receiver<citations::Msg>,
     command: String,
@@ -600,6 +608,7 @@ pub struct App {
     /// The next `action` call was confirmed already.
     confirmed: bool,
     discover_job: Option<Receiver<crate::discover::Msg>>,
+    critic_job: Option<CriticJob>,
     assist_job: Option<Receiver<Result<(String, yeda_core::llm::Usage), String>>>,
     /// The plan `:do` made, shown until approved or cancelled.
     pub plan: Option<yeda_core::assist::Plan>,
@@ -752,6 +761,7 @@ impl App {
             confirming: None,
             confirmed: false,
             discover_job: None,
+            critic_job: None,
             assist_job: None,
             plan: None,
             plan_queue: Default::default(),
@@ -2943,6 +2953,11 @@ impl App {
                     }
                     Err(e) => self.status = format!("{e:#}"),
                 },
+                ("critic", args) => {
+                    if let Err(e) = self.critic(args, text) {
+                        self.status = format!("{e:#}");
+                    }
+                }
                 ("help", args) if args.trim() == "providers" => self.open_help(HelpPage::Providers),
                 ("help", _) => self.open_help(HelpPage::Guide),
                 ("keys", _) => self.open_help(HelpPage::Keys),
@@ -3234,20 +3249,7 @@ impl App {
         }
         let (name, profile) = self.lib.llm_profile(llm)?;
         let Some(key) = self.llm_key(&profile, command) else { return Ok(()) };
-        let openalex = self.openalex_key();
-        let settings = self.lib.web_search.clone();
-        let mut keys = HashMap::new();
-        for (provider, account) in [
-            (yeda_core::web_search::Provider::Keenable, yeda_secrets::KEENABLE),
-            (yeda_core::web_search::Provider::Exa, yeda_secrets::EXA),
-            (yeda_core::web_search::Provider::Parallel, yeda_secrets::PARALLEL),
-            (yeda_core::web_search::Provider::Firecrawl, yeda_secrets::FIRECRAWL),
-        ] {
-            if let Ok(Some(k)) = yeda_secrets::get(account) {
-                keys.insert(provider, k);
-            }
-        }
-        keys.extend(crate::websearch::searxng_login(&settings));
+        let (openalex, settings, keys) = self.web_search_setup();
         // The server is named, since a shared yeda.toml decides where the text goes.
         let server = profile.url().to_string();
         let plural = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
@@ -3261,6 +3263,95 @@ impl App {
         self.status = format!("asking {name} at {server} with {}…", used.join(", "));
         self.discover_job = Some(crate::discover::spawn(crate::discover::Input { profile, key, prompt, from, openalex_key: openalex, settings, keys, cache: self.lib.cache.clone(), fresh }));
         Ok(())
+    }
+
+    fn web_search_setup(&mut self) -> (Option<String>, Settings, HashMap<Provider, String>) {
+        let openalex = self.openalex_key();
+        let settings = self.lib.web_search.clone();
+        let mut keys = HashMap::new();
+        for (provider, account) in [
+            (Provider::Keenable, yeda_secrets::KEENABLE),
+            (Provider::Exa, yeda_secrets::EXA),
+            (Provider::Parallel, yeda_secrets::PARALLEL),
+            (Provider::Firecrawl, yeda_secrets::FIRECRAWL),
+        ] {
+            if let Ok(Some(k)) = yeda_secrets::get(account) {
+                keys.insert(provider, k);
+            }
+        }
+        keys.extend(crate::websearch::searxng_login(&settings));
+        (openalex, settings, keys)
+    }
+
+    fn critic(&mut self, args: &str, command: &str) -> anyhow::Result<()> {
+        let (opts, rest) = options(args, &["llm"], &[])?;
+        anyhow::ensure!(rest.trim().is_empty(), "usage: :critic [--llm <profile>]");
+        anyhow::ensure!(self.critic_job.is_none(), "a critic review is already running");
+        let Some(i) = self.visible.get(self.sel).copied() else { anyhow::bail!("no reference selected") };
+        let Some(pdf) = self.pdf_for(i, Retry::Command(command.into())) else { return Ok(()) };
+        let target = &self.lib.refs[i];
+        let key = target.key.clone();
+        let Some(pdf) = pdf else { anyhow::bail!("{key} has no PDF: :fetch or :attach one") };
+        let path = self.lib.pdf_path(&pdf)?;
+        anyhow::ensure!(path.exists(), "{key}'s PDF is not on this device: :cache downloads it");
+        let target = target.clone();
+        let context: Vec<_> = self.lib.refs.iter().filter(|r| r.key != key && self.marked.contains(&r.key)).map(|r| {
+            let path = r.pdfs.first().and_then(|pdf| self.lib.pdf_path(pdf).ok()).filter(|p| p.exists());
+            (r.clone(), path)
+        }).collect();
+        let llm = opts.get("llm").and_then(|v| v.last()).copied();
+        let (name, profile) = self.lib.llm_profile(llm)?;
+        let Some(credential) = self.llm_key(&profile, command) else { return Ok(()) };
+        let (openalex_key, settings, keys) = self.web_search_setup();
+        let search = crate::discover::Input {
+            profile: profile.clone(), key: credential.clone(), prompt: String::new(), from: vec![],
+            openalex_key, settings, keys, cache: self.lib.cache.clone(), fresh: false,
+        };
+        let with = match context.len() {
+            0 => String::new(),
+            1 => " (with 1 context paper)".into(),
+            n => format!(" (with {n} context papers)"),
+        };
+        self.status = format!("critic: asking {name} at {} about {key}{with}…", profile.url());
+        let rx = crate::critic::spawn(crate::critic::Input { profile, key: credential, target, pdf: path, context, search });
+        self.critic_job = Some(CriticJob { rx, step: self.step.clone(), key, pdf });
+        Ok(())
+    }
+
+    pub fn poll_critic(&mut self) {
+        use crate::critic::Msg;
+        while let Some(job) = &self.critic_job {
+            match job.rx.try_recv() {
+                Ok(Msg::Progress(line)) => self.status = line,
+                Ok(Msg::Done(result)) => {
+                    let job = self.critic_job.take().unwrap();
+                    self.status = match result {
+                        Ok(o) => match self.write(&job.step, [Effect::write(annotations::critic_path(&job.key, &job.pdf), o.text)]) {
+                            Ok(()) => {
+                                let mut report = format!("critic: {} annotations on {} ({} findings, {} references not verified)", o.annotations, job.key, o.findings, o.unverified);
+                                for note in o.notes {
+                                    report.push_str("; ");
+                                    report.push_str(&note);
+                                }
+                                if let Some(usage) = o.usage.summary() {
+                                    report.push_str(" · ");
+                                    report.push_str(&usage);
+                                }
+                                report
+                            }
+                            Err(e) => format!("critic: {e:#}"),
+                        },
+                        Err(e) => format!("critic: {e}"),
+                    };
+                }
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.critic_job = None;
+                    self.status = "critic: the review stopped".into();
+                }
+            }
+            self.log.write(&self.status);
+        }
     }
 
     /// Runs `task` in the background, showing git's output in a modal as it comes.
@@ -3621,6 +3712,7 @@ impl App {
     pub fn busy(&self) -> Vec<&'static str> {
         [
             (self.discover_job.is_some(), "discover"),
+            (self.critic_job.is_some(), "critic"),
             (self.assist_job.is_some(), "plan"),
             (self.summarizer.is_some(), "summarize"),
             (self.fetch_job.is_some(), "fetch"),
@@ -5099,6 +5191,38 @@ mod tests {
     fn plain_app() -> super::App {
         let lib = yeda_core::library::Library::parse(None, None, [("a".to_string(), "title = \"A\"\n".to_string())], None).unwrap();
         super::App::new(std::path::PathBuf::from("/tmp"), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap())
+    }
+
+    #[test]
+    fn critic_writes_a_separate_annotation_set_and_undo_removes_it() {
+        use super::{App, CriticJob, annotations, fs, mpsc, undo};
+        let dir = std::env::temp_dir().join(format!("yeda-critic-{}", uuid::Uuid::new_v4()));
+        let reference = dir.join(yeda_core::library::ref_path("a"));
+        fs::create_dir_all(reference.parent().unwrap()).unwrap();
+        fs::write(&reference, "title = \"A\"\n[[pdf]]\nid = \"1\"\nlocation = \"local\"\npath = \"a/a.pdf\"\n").unwrap();
+        let lib = yeda_fs::load_library(&dir, None, None).unwrap();
+        let pdf = lib.refs[0].pdfs[0].clone();
+        let mut app = App::new(dir.clone(), lib, ratatui_image::picker::Picker::halfblocks(), crate::keys::Keymap::load(None).unwrap());
+        let text = annotations::render(vec![annotations::Annotation {
+            id: "TSTMODEL".into(),
+            kind: "highlight".into(),
+            source: "critic".into(),
+            ..Default::default()
+        }]).unwrap();
+        let (tx, rx) = mpsc::channel();
+        tx.send(crate::critic::Msg::Done(Ok(crate::critic::Outcome {
+            text: text.clone(), annotations: 1, findings: 1, unverified: 0, notes: vec![], usage: Default::default(),
+        }))).unwrap();
+        let ordinary = dir.join(annotations::file_path("a", &pdf));
+        let critic = dir.join("annotations/a/1/critic_annotations.toml");
+        app.critic_job = Some(CriticJob { rx, step: undo::Step { label: "critic".into(), ..app.step.clone() }, key: "a".into(), pdf });
+        app.poll_critic();
+        assert_eq!(fs::read_to_string(&critic).unwrap(), text);
+        assert!(!ordinary.exists());
+        app.undo_or_redo(false);
+        assert!(!critic.exists());
+        assert!(app.status.starts_with("undid :critic"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import type { Annotation } from './annotations';
 import { showHelp } from './help';
 import { JumpReader, showAnnotations, showToc } from './jump';
 
@@ -18,6 +19,8 @@ export interface VimReader extends JumpReader {
 	toggleSidebar(open?: boolean): void;
 	setSidebarView(view: string): void;
 	setTool(params: { type: string }): void;
+	setAnnotations(annotations: Annotation[]): void;
+	unsetAnnotations(ids: string[]): void;
 	deleteAnnotations(ids: string[]): void;
 	copy(): void;
 	focusView(): void;
@@ -50,6 +53,8 @@ function scrollContainer(): HTMLElement | undefined {
 export function installVim(getReader: () => VimReader | undefined, toggleColumns: () => void, close: () => void) {
 	let pending: string[] = [];
 	let count = '';
+	let critic: Annotation[] = [];
+	let criticShown = true;
 
 	const editComment = (reader: VimReader) => {
 		const [id] = reader._state.selectedAnnotationIDs;
@@ -76,6 +81,13 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 		container?.scrollBy({ top: direction * 0.5 * container.clientHeight });
 	};
 
+	const toggleCritic = (reader: VimReader) => {
+		if (!critic.length) return;
+		if (criticShown) reader.unsetAnnotations(critic.map(a => a.id));
+		else reader.setAnnotations(critic);
+		criticShown = !criticShown;
+	};
+
 	const table: Binding[] = [
 		{ keys: ['j'], help: 'Scroll down', run: () => scrollContainer()?.scrollBy({ top: LINE }) },
 		{ keys: ['k'], help: 'Scroll up', run: () => scrollContainer()?.scrollBy({ top: -LINE }) },
@@ -100,6 +112,7 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 		{ keys: ['='], help: 'Reset zoom', run: r => r.zoomReset() },
 		{ keys: ['o', 'g'], help: 'Jump to a section', run: r => showToc(r) },
 		{ keys: ['a', 'g'], help: 'Jump to an annotation', run: r => showAnnotations(r) },
+		{ keys: ['z', 'c'], help: 'Hide or show the critic\'s annotations (:critic in yeda)', run: toggleCritic },
 		{ label: 'Nt', help: 'Select tool N: highlight, underline, note, text, image, ink, eraser' },
 		{
 			keys: ['Escape'],
@@ -178,7 +191,8 @@ export function installVim(getReader: () => VimReader | undefined, toggleColumns
 	}, true);
 
 	// Keys pressed inside the PDF iframe reach the reader through this hook instead.
-	return (reader: VimReader) => {
+	return (reader: VimReader, annotations: Annotation[]) => {
+		critic = annotations;
 		const keyboard = reader._keyboardManager;
 		const original = keyboard.handleViewKeyDown.bind(keyboard);
 		keyboard.handleViewKeyDown = (event) => {

@@ -5,6 +5,7 @@ pub mod annotations;
 pub mod assist;
 pub mod browse;
 pub mod clusters;
+pub mod critic;
 pub mod discover;
 pub mod cite;
 pub mod fulltext;

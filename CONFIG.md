@@ -15,6 +15,7 @@
   notes/<citekey>.md                      # your notes
   notes/<citekey>.ai.toml                 # what an LLM wrote for the tables
   annotations/<citekey>/<pdf>/annotations.toml  # annotations on one PDF
+  annotations/<citekey>/<pdf>/critic_annotations.toml  # separate :critic review
   annotations/<citekey>/<pdf>/img/<id>.png      # image and ink annotations
 ```
 
